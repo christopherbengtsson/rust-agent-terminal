@@ -51,6 +51,16 @@ impl App {
     }
 
     pub fn observe_session(&mut self, mut observation: Observation) {
+        if observation.connection_lost {
+            let error = observation.error.take();
+            observation = self.session.clone();
+            observation.connection_lost = true;
+            observation.error = error;
+            observation.status = crate::native_status::Status::default();
+            observation.status.reason =
+                "dashboard disconnected; current agent state unknown".into();
+            self.attached = false;
+        }
         if !observation.launch_request.is_empty() {
             self.launch_request = observation.launch_request.clone();
         }
@@ -467,6 +477,34 @@ mod tests {
         assert_eq!(app.worktrees.len(), 2);
         assert!(app.session.control_denied);
         assert!(!app.attached);
+    }
+
+    #[test]
+    fn disconnected_transport_preserves_attribution_and_allows_local_detach() {
+        let mut app = App::new(PathBuf::from("repo"));
+        app.observe_session(Observation {
+            identity: Some("known-session".into()),
+            lifecycle: crate::session::Lifecycle::Running,
+            ..Observation::default()
+        });
+        app.observe_session(Observation {
+            connection_lost: true,
+            error: Some("press d to detach locally, then reopen".into()),
+            ..Observation::default()
+        });
+        assert_eq!(app.session.identity.as_deref(), Some("known-session"));
+        assert_eq!(app.session.lifecycle, crate::session::Lifecycle::Running);
+        assert!(app.session.connection_lost);
+        assert!(!app.attached);
+        assert_eq!(
+            app.session.status.state,
+            crate::native_status::State::Unknown
+        );
+        assert!(matches!(
+            app.input(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE)),
+            Some(Effect::Detach)
+        ));
+        assert!(app.should_exit());
     }
 
     #[test]
