@@ -25,6 +25,7 @@ pub struct App {
     pub worktrees: Vec<Worktree>,
     pub selected: Option<usize>,
     pub loading: bool,
+    pub discovery_request: u64,
     pub error: Option<String>,
     sent_viewport: Option<(u16, u16)>,
     pending_viewport: Option<(u16, u16)>,
@@ -51,6 +52,7 @@ impl App {
             worktrees: Vec::new(),
             selected: None,
             loading: false,
+            discovery_request: uuid::Uuid::new_v4().as_u128() as u64,
             error: None,
         }
     }
@@ -88,6 +90,14 @@ impl App {
     }
 
     pub fn observe_session(&mut self, mut observation: Observation) {
+        if let Some(discovery) = observation.discovery.take() {
+            use std::os::unix::ffi::OsStringExt;
+            self.apply(Event::DiscoveryCompleted {
+                request: discovery.request,
+                repository: PathBuf::from(std::ffi::OsString::from_vec(discovery.repository)),
+                result: discovery.result,
+            });
+        }
         if observation.connection_lost {
             let error = observation.error.take();
             observation = self.session.clone();
@@ -350,26 +360,39 @@ impl App {
             return false;
         }
         self.loading = true;
+        self.discovery_request = self.discovery_request.wrapping_add(1);
         self.error = None;
         true
     }
 
     pub fn apply(&mut self, event: Event) {
-        match event {
-            Event::WorktreesLoaded(result) => {
-                self.loading = false;
-                match result {
-                    Ok(worktrees) => {
-                        let selected_path = self.current().map(|w| w.path.clone());
-                        self.selected = selected_path
-                            .and_then(|path| worktrees.iter().position(|w| w.path == path))
-                            .or_else(|| (!worktrees.is_empty()).then_some(0));
-                        self.worktrees = worktrees;
-                        self.error = None;
-                    }
-                    Err(error) => self.error = Some(error),
+        let result = match event {
+            Event::DiscoveryCompleted {
+                request,
+                repository,
+                result,
+            } => {
+                if request != self.discovery_request
+                    || repository != self.repository
+                    || !self.loading
+                {
+                    return;
                 }
+                result
             }
+            Event::WorktreesLoaded(result) => result,
+        };
+        self.loading = false;
+        match result {
+            Ok(worktrees) => {
+                let selected_path = self.current().map(|w| w.path.clone());
+                self.selected = selected_path
+                    .and_then(|path| worktrees.iter().position(|w| w.path == path))
+                    .or_else(|| (!worktrees.is_empty()).then_some(0));
+                self.worktrees = worktrees;
+                self.error = None;
+            }
+            Err(error) => self.error = Some(error),
         }
     }
 
@@ -629,6 +652,41 @@ mod tests {
             assert!(app.attached);
             assert_eq!(app.session.identity.as_deref(), Some("same session"));
         }
+    }
+
+    #[test]
+    fn attributed_discovery_rejects_other_projects_and_late_requests() {
+        let mut app = App::new(PathBuf::from("project-a"));
+        app.apply(Event::WorktreesLoaded(Ok(vec![worktree("retained")])));
+        app.begin_refresh();
+        let request = app.discovery_request;
+        app.apply(Event::DiscoveryCompleted {
+            request,
+            repository: PathBuf::from("project-b"),
+            result: Ok(vec![worktree("other")]),
+        });
+        assert_eq!(app.current().unwrap().path, PathBuf::from("retained"));
+        assert!(app.loading);
+        app.apply(Event::DiscoveryCompleted {
+            request: request.wrapping_sub(1),
+            repository: app.repository.clone(),
+            result: Ok(vec![worktree("old")]),
+        });
+        assert!(app.loading);
+        app.apply(Event::DiscoveryCompleted {
+            request,
+            repository: app.repository.clone(),
+            result: Err("timed out".into()),
+        });
+        assert!(!app.loading);
+        assert_eq!(app.current().unwrap().path, PathBuf::from("retained"));
+        assert_eq!(app.error.as_deref(), Some("timed out"));
+        app.apply(Event::DiscoveryCompleted {
+            request,
+            repository: app.repository.clone(),
+            result: Ok(vec![worktree("late")]),
+        });
+        assert_eq!(app.current().unwrap().path, PathBuf::from("retained"));
     }
 
     #[test]

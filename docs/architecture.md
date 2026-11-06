@@ -37,16 +37,28 @@ Supported native-tool versions must demonstrate dependable lifecycle and
 attention signals in macOS scenarios; see
 [the status decision](adr/0003-evidence-based-agent-status.md).
 
-**Git/worktrees (`git`).** A dedicated worker runs `git -C <path> worktree list
+**Git/worktrees (`git`).** The supervisor accepts attributed `Discover` requests
+and owns a dedicated worker that runs `git -C <path> worktree list
 --porcelain -z`, parses NUL-delimited fields, and sends a completion event.
 Arguments are passed directly to Git, without shell interpolation. Discovery is
 read-only, handles linked/detached/bare/locked/prunable worktrees, and preserves
 non-UTF-8 Unix paths internally. The bounded request queue and one in-flight
 refresh prevent repeated keystrokes spawning processes. Errors remain visible
-and retryable. Future mutating operations need explicit commands, dirty/unpushed
-checks, bounded execution/cancellation, and serialized operations per repository.
-The current discovery worker can wait on a stuck Git process, but does not block
-the UI or dashboard exit; process deadlines belong in the next worker hardening.
+and retryable. Each Git child has a two-second deadline, nonblocking bounded output
+(256 KiB per pipe), and an owned process group that is killed/reaped on completion,
+error or cancellation. A full result channel cannot strand cancellation. Stop and
+shutdown cancel pending discovery/adoption without waiting on Git; stale replies
+cannot change App's project/selection or complete a cancelled adoption. Adoption
+resolves canonical root, worktree Git directory and shared common directory in a
+worker, returning byte-preserving identity separately from display labels.
+
+`git::RepositoryMutation::acquire` provides concrete per-common-directory mutation
+exclusion for creation/archive workers. Acquire only inside execution workers,
+recheck identity and safety before invoking Git, and release immediately after the
+actual mutation/rechecks. It is process-local under the sole supervisor, has a
+bounded cancellable wait, and is never retained for an agent lifetime. Git's own
+ref/checkout refusals remain authoritative against external actors. Mutation
+commands and durable recovery remain later work; discovery/adoption are read-only.
 
 **Agent sessions (target; scripted prototype below).** A local supervisor process, implemented as another
 mode of the same executable, must own child processes, PTYs, and history. The
@@ -154,11 +166,17 @@ recovery does not provide a general outcome protocol for all commands.
 
 The implementation still assumes a shared local host in these places:
 
-- `main` starts `GitWorker` beside the dashboard using the CLI repository path;
-  App retains refresh selection by `Worktree.path`. `Request::Adopt` sends path
-  bytes for supervisor-side Git-root resolution/canonicalization. Stable
-  registered-project/worktree identity and execution-side discovery remain future
-  work; moving discovery behind the supervisor is not implemented here.
+- `main` passes the CLI repository path as bytes through `Request::Discover`;
+  the supervisor owns discovery and canonical adoption workers. App matches the
+  request and repository before accepting a discovery result and retains selection
+  by `Worktree.path`. Registered durable project/workspace identity remains future
+  work. The dashboard checks `git_jobs_protocol` in the owner's greeting before
+  sending requests, and refuses incompatible live owners without migrating their
+  state or sending unsupported commands. A second dashboard refused control by a
+  compatible owner can still discover/refresh through the restricted
+  `--discover-worktrees` execution helper. That bounded helper has no state
+  directory or session/mutation commands; every session action remains refused,
+  and quitting that dashboard exits locally without stopping the active owner.
 - `session::transport` validates a local private state directory, starts the same
   executable with `setsid`, and connects to its Unix socket. Election and the
   single-controller policy are local-user policies under

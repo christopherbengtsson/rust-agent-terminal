@@ -408,6 +408,9 @@ fn second_dashboard_is_refused_and_dead_controller_releases_same_child() {
         .to_owned();
     let mut second = fixture.open();
     second.wait("Another dashboard controls this supervisor");
+    second.wait("Project / worktrees (1)");
+    second.send(b"r");
+    second.wait("Project / worktrees (1)");
     second.send(b"alq");
     first.send(b"still-owned\r");
     first.wait("received: still-owned");
@@ -528,16 +531,16 @@ fn checkout_aliases_and_repeated_launch_keep_the_existing_child() {
 }
 
 #[test]
-fn unsafe_state_directory_is_explained_without_changing_discovery() {
+fn unsafe_state_directory_is_explained_before_execution_owned_discovery() {
     let fixture = Fixture::new();
     let target = fixture.temp.path().join("target");
     std::fs::create_dir(&target).unwrap();
     std::os::unix::fs::symlink(&target, fixture.state()).unwrap();
     let mut dashboard = fixture.open();
-    dashboard.wait("Project / worktrees (1)");
+    dashboard.wait("Project / worktrees (0)");
     dashboard.wait("Supervisor state must be a user-owned private directory");
     dashboard.send(b"r");
-    dashboard.wait("Project / worktrees (1)");
+    dashboard.wait("Project / worktrees (0)");
     assert!(!target.join("supervisor.sock").exists());
 }
 
@@ -3460,7 +3463,9 @@ fn explicit_cleanup_warns_previews_cancels_and_deletes_only_selected_history() {
     dashboard.wait("Discovery complete");
     std::fs::write(fixture.state().join("proof-storage-available"), b"0").unwrap();
     dashboard.wait("Low storage");
-    dashboard.send(b"al");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted");
+    dashboard.send(b"l");
     dashboard.wait("fixture>");
     dashboard.send(b"\x1ds");
     dashboard.wait("Process: Stopped");
@@ -5509,4 +5514,103 @@ fn failed_capture_installation_never_borrows_previous_sessions_eof_proof() {
         "no reader observed this session's EOF: {page}"
     );
     control.request(serde_json::json!("Shutdown"));
+}
+
+#[test]
+fn slow_adoption_and_saturated_discovery_leave_polling_stop_and_exit_usable() {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = Fixture::new();
+    let bin = fixture.temp.path().join("bin04");
+    std::fs::create_dir(&bin).unwrap();
+    let marker = fixture.temp.path().join("slow-git04");
+    let git = bin.join("git");
+    std::fs::write(
+        &git,
+        format!(
+            "#!/bin/sh\nif [ -f '{}' ]; then /bin/sleep 10; fi\nexec /usr/bin/git \"$@\"\n",
+            marker.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&git, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let mut paths = vec![bin];
+    paths.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap()));
+    let mut dashboard = Dashboard::open_with_path(
+        &fixture.repository,
+        &fixture.state(),
+        Some(&std::env::join_paths(paths).unwrap()),
+    );
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted");
+    dashboard.send(b"l");
+    dashboard.wait("fixture>");
+    dashboard.kill();
+    let mut control = Controller::connect(&fixture);
+    std::fs::write(&marker, b"hold git only").unwrap();
+    let adopted = control.request_now(
+        serde_json::json!({"Adopt":fixture.repository.as_os_str().as_encoded_bytes()}),
+    );
+    assert_eq!(adopted["adoption_pending"], true);
+    let previous = adopted["adopted"].clone();
+    for request in 1..8 {
+        let start = Instant::now();
+        let result = control.request_now(serde_json::json!({"Discover":{"request":request,"repository":fixture.repository.as_os_str().as_encoded_bytes()}}));
+        assert_eq!(result["lifecycle"], "Running");
+        assert!(
+            start.elapsed() < Duration::from_millis(500),
+            "Git dispatch blocked controls"
+        );
+    }
+    let start = Instant::now();
+    control.request_now(serde_json::json!("Stop"));
+    let stopped = cleanup_wait15(&mut control, |state| state["lifecycle"] == "Stopped");
+    assert!(
+        start.elapsed() < Duration::from_secs(2),
+        "Stop waited for slow Git"
+    );
+    assert_eq!(stopped["adoption_pending"], false);
+    assert_eq!(
+        stopped["adopted"], previous,
+        "cancelled adoption cannot change checkout"
+    );
+    let start = Instant::now();
+    control.request_now(serde_json::json!("Shutdown"));
+    cleanup_wait15(&mut control, |state| state["stopped"] == true);
+    assert!(
+        start.elapsed() < Duration::from_secs(2),
+        "Shutdown waited for slow Git"
+    );
+}
+
+#[test]
+fn dashboard_refuses_legacy_live_owner_before_sending_new_git_requests() {
+    use std::os::unix::{fs::PermissionsExt, net::UnixListener};
+    let fixture = Fixture::new();
+    std::fs::create_dir(fixture.state()).unwrap();
+    std::fs::set_permissions(fixture.state(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let lock_path = fixture.state().join("supervisor.lock");
+    let lock = std::fs::File::create(&lock_path).unwrap();
+    std::fs::set_permissions(&lock_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    lock.try_lock().unwrap();
+    let listener = UnixListener::bind(fixture.state().join("supervisor.sock")).unwrap();
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        let old = serde_json::json!({"adopted":null,"identity":null,"screen":"","formatted":"","rows":24,"cols":100,"output_bytes":0,"error":null,"stopped":false,"lifecycle":"Idle","control_denied":false});
+        serde_json::to_writer(&mut stream, &old).unwrap();
+        stream.write_all(b"\n").unwrap();
+        let mut unexpected = [0; 1];
+        assert_eq!(
+            stream.read(&mut unexpected).unwrap(),
+            0,
+            "dashboard sent unsupported worktree request to live legacy owner"
+        );
+    });
+    let mut dashboard = fixture.open();
+    dashboard.wait("does not support this dashboard");
+    dashboard.send(b"d");
+    server.join().unwrap();
 }
