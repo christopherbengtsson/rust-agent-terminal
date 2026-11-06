@@ -1061,3 +1061,38 @@ file/context across refresh when possible and labels snapshots as not live.
 Status changes during capture get an additional warning; matching status does not
 claim atomic file contents. Each new inspection starts Working. See the
 [ticket evidence](proofs/m2-13-working-diff.md).
+
+### Whole workspace inspection (Milestone 2 ticket 14)
+
+Working remains the default for each new inspection. Within that view, an explicit
+switch requests Whole workspace through the same workspace-owned bounded worker.
+The supervisor resolves the retained checkout and selected local base; an adopted
+workspace without a base requires explicit selection of a full local branch or
+remote-tracking ref. Inspection never fetches. Multiple merge bases, unrelated
+histories and unavailable refs produce explanations rather than guessed bases.
+
+The selected base's raw ref bytes and selection-time commit live in the additive
+`workspace_comparison_bases` table, separately from current branch and immutable
+workspace-creation facts. Explicit selection resolves the ref in the Git worker,
+then the sole persistence worker commits the choice under an attributed operation.
+Only that completion publishes the successful snapshot. Failed saving preserves
+the previous durable choice and returns an attributed inspection error. Creation
+may seed the comparison choice from its original base with INSERT OR IGNORE;
+subsequent comparison choices never overwrite original creation facts.
+
+Each Whole snapshot names the captured branch, HEAD, actual current local base tip
+and unique common ancestor. Base movement is labelled against the selected commit.
+The file list combines committed changes since that ancestor with current status,
+including untracked files. Selected content compares the ancestor with current
+working files and retains separate staged/unstaged sections where present, so
+staged content remains inspectable even if later edits undo it. Conflicts remain
+explicitly unresolved; submodule nested files are outside the comparison. Raw
+Unix paths, cancellation, Git/process/output caps and external-program exclusions
+reuse Working's boundaries. Ref/branch/status changes observed during capture add
+a warning; snapshots do not claim filesystem atomicity.
+
+Comparison protocol 2 is required before sending Whole fields: protocol 1 would
+ignore them and incorrectly return Working. An incompatible live owner remains
+untouched and requires its compatible dashboard for stop/upgrade. These are local
+coding comparisons. They neither pin future Review revisions nor substitute an
+archive recovery ref for a review base. External-editor handoff is ticket 15.
