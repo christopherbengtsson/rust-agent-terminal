@@ -377,6 +377,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let mut process_group = 0;
     let mut stopping: Option<Receiver<crate::lifecycle::Outcome>> = None;
     let mut monitor: Option<crate::native_status::Monitor> = None;
+    let mut codex_monitor: Option<crate::codex_status::Monitor> = None;
     let mut shutdown = false;
     let mut native_exit = false;
     let screen = Arc::new(Mutex::new(ScreenState {
@@ -510,7 +511,20 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             fs::remove_file(&socket)?;
             return Ok(());
         }
+        if monitor.is_some() || codex_monitor.is_some() {
+            let current = screen.lock().unwrap();
+            if current.output_bytes != state.output_bytes {
+                current.snapshot(&mut state);
+            }
+        }
         if let Some(monitor) = monitor.as_mut() {
+            state.status = monitor.poll(
+                state.lifecycle == Lifecycle::Running,
+                &state.screen,
+                state.output_bytes,
+            );
+        }
+        if let Some(monitor) = codex_monitor.as_mut() {
             state.status = monitor.poll(
                 state.lifecycle == Lifecycle::Running,
                 &state.screen,
@@ -681,8 +695,13 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                         fixture
                     };
                     monitor = None;
+                    codex_monitor = None;
                     state.status = crate::native_status::Status::default();
-                    if !codex {
+                    if codex {
+                        let status_monitor = crate::codex_status::Monitor::start(directory)?;
+                        status_monitor.configure(&mut command)?;
+                        codex_monitor = Some(status_monitor);
+                    } else {
                         let status_monitor = crate::native_status::Monitor::start(directory, !claude)?;
                         status_monitor.configure(&mut command);
                         monitor = Some(status_monitor);
@@ -757,6 +776,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                 }
                 Request::Input(bytes) => {
                     if let Some(monitor) = monitor.as_mut() { monitor.input(screen.lock().unwrap().output_bytes); }
+                    if let Some(monitor) = codex_monitor.as_mut() { monitor.input(screen.lock().unwrap().output_bytes); }
                     if bytes.len() > 4096 {
                         return Err("Input exceeds prototype 4096-byte limit".into());
                     }
@@ -768,6 +788,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                 }
                 Request::Key(key) => {
                     if let Some(monitor) = monitor.as_mut() { monitor.input(screen.lock().unwrap().output_bytes); }
+                    if let Some(monitor) = codex_monitor.as_mut() { monitor.input(screen.lock().unwrap().output_bytes); }
                     let application_cursor =
                         screen.lock().unwrap().parser.screen().application_cursor();
                     let bytes = crate::native_input::encode(key, application_cursor)?;
@@ -779,6 +800,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                 }
                 Request::Paste(text) => {
                     if let Some(monitor) = monitor.as_mut() { monitor.input(screen.lock().unwrap().output_bytes); }
+                    if let Some(monitor) = codex_monitor.as_mut() { monitor.input(screen.lock().unwrap().output_bytes); }
                     if text.len() > 4084 {
                         return Err("Paste exceeds 4084-byte limit".into());
                     }

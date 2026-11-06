@@ -1112,3 +1112,55 @@ fn bounded_history_pages_recover_every_record_across_multiple_chunks() {
     }
     control.request(serde_json::json!("Shutdown"));
 }
+
+#[test]
+fn codex_status_requires_current_attributed_evidence_despite_liveness_and_prose() {
+    use std::os::unix::{fs::PermissionsExt, net::UnixDatagram};
+    let fixture = Fixture::new();
+    let tools = fixture.temp.path().join("tools");
+    std::fs::create_dir(&tools).unwrap();
+    for (name, target) in [("git", "/usr/bin/git"), ("ps", "/bin/ps")] {
+        std::os::unix::fs::symlink(target, tools.join(name)).unwrap();
+    }
+    // Reuse the shared scripted child through the normal Codex launch boundary.
+    let executable = env!("CARGO_BIN_EXE_agent-terminal").replace('\'', "'\\''");
+    let wrapper = tools.join("codex");
+    std::fs::write(
+        &wrapper,
+        format!("#!/bin/sh\nexec '{executable}' --scripted-child\n"),
+    )
+    .unwrap();
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let mut dashboard = Dashboard::open_with_path(
+        &fixture.repository,
+        &fixture.state(),
+        Some(tools.as_os_str()),
+    );
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted");
+    dashboard.send(b"x");
+    dashboard.wait("fixture>");
+    dashboard.wait("Codex evidence unavailable");
+    dashboard.send(b"Conversation interrupted; Worked for 3s; approval needed\r");
+    dashboard.wait("received: Conversation interrupted");
+    assert!(
+        dashboard
+            .wait("semantic status: unknown")
+            .contains("Process: Running")
+    );
+    let channel = UnixDatagram::unbound().unwrap();
+    channel
+        .send_to(b"{", fixture.state().join("codex-status.sock"))
+        .unwrap();
+    dashboard.wait("invalid or unattributed Codex evidence");
+    dashboard.send(b"fixture-failed-test\r");
+    dashboard.wait("test result: FAILED; agent continues");
+    assert!(
+        dashboard
+            .wait("semantic status: unknown")
+            .contains("Process: Running")
+    );
+    dashboard.send(&[0x1d]);
+    dashboard.send(b"q");
+}
