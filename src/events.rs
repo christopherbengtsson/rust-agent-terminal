@@ -48,6 +48,12 @@ pub enum Effect {
     Session(Request),
 }
 
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+pub enum NativeAgent {
+    Claude,
+    Codex,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Request {
     /// Freeze a runtime target when an action is queued. Never resolve it from later selection.
@@ -67,6 +73,15 @@ pub enum Request {
     Launch(String),
     LaunchClaude(String),
     LaunchCodex(String),
+    LaunchNative {
+        request: String,
+        agent: NativeAgent,
+        prompt: Option<String>,
+    },
+    RenameWorkspace {
+        workspace: String,
+        name: String,
+    },
     Resume(String),
     QueryLaunch(String),
     Reconcile,
@@ -124,6 +139,8 @@ pub struct Observation {
     pub sessions: Vec<SessionSummary>,
     #[serde(default)]
     pub registry_protocol: u32,
+    #[serde(default)]
+    pub prompt_naming_protocol: u32,
     #[serde(default)]
     pub registry_pending: bool,
     #[serde(default)]

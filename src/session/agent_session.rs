@@ -718,6 +718,7 @@ impl AgentSession {
                 request,
                 Request::Adopt(_)
                     | Request::Launch(_)
+                    | Request::LaunchNative { .. }
                     | Request::LaunchClaude(_)
                     | Request::Reconcile
                     | Request::LaunchCodex(_)
@@ -725,20 +726,28 @@ impl AgentSession {
                     | Request::Stop
                     | Request::Shutdown
             );
+        let initial = match &request {
+            Request::LaunchNative { agent, prompt, .. } => Some((*agent, prompt.clone())),
+            _ => None,
+        };
         let resume = matches!(&request, Request::Resume(_));
-        let claude = matches!(&request, Request::LaunchClaude(_))
+        let claude = (matches!(&request, Request::LaunchClaude(_))
+            || matches!(initial, Some((crate::events::NativeAgent::Claude, _))))
             || (resume && self.state.agent.as_deref() == Some("Claude Code"));
-        let codex = matches!(&request, Request::LaunchCodex(_))
+        let codex = (matches!(&request, Request::LaunchCodex(_))
+            || matches!(initial, Some((crate::events::NativeAgent::Codex, _))))
             || (resume && self.state.agent.as_deref() == Some("Codex CLI"));
         let launch_request = match &request {
-            Request::Launch(id)
+            Request::LaunchNative { request: id, .. }
+            | Request::Launch(id)
             | Request::LaunchClaude(id)
             | Request::LaunchCodex(id)
             | Request::Resume(id) => Some(id.clone()),
             _ => None,
         };
         let recorded = match &request {
-            Request::Launch(id)
+            Request::LaunchNative { request: id, .. }
+            | Request::Launch(id)
             | Request::LaunchClaude(id)
             | Request::LaunchCodex(id)
             | Request::Resume(id)
@@ -780,6 +789,7 @@ impl AgentSession {
                     Request::Adopt(_)
                         | Request::Reconcile
                         | Request::Launch(_)
+                        | Request::LaunchNative { .. }
                         | Request::LaunchClaude(_)
                         | Request::LaunchCodex(_)
                         | Request::Resume(_)
@@ -798,6 +808,7 @@ impl AgentSession {
                     request,
                     Request::Adopt(_)
                         | Request::Launch(_)
+                        | Request::LaunchNative { .. }
                         | Request::LaunchClaude(_)
                         | Request::LaunchCodex(_)
                         | Request::Resume(_)
@@ -806,7 +817,7 @@ impl AgentSession {
                 return Err("Launch reconciliation pending; wait for durable outcome".into());
             }
             match request {
-                Request::Session { .. } | Request::SelectSession(_) | Request::Discover { .. } | Request::Adopt(_) | Request::Register(_) => unreachable!("workspace requests are supervisor-owned"),
+                Request::RenameWorkspace { .. } | Request::Session { .. } | Request::SelectSession(_) | Request::Discover { .. } | Request::Adopt(_) | Request::Register(_) => unreachable!("workspace requests are supervisor-owned"),
                 Request::Reconcile => {
                     if self.execution.child.is_some() || self.execution.stopping.is_some() { return Err("Session owned by current supervisor; stop it normally".into()); }
                     if let Some(evidence) = &self.state.execution { evidence.reconcile()?; }
@@ -815,7 +826,7 @@ impl AgentSession {
                     self.state.error = Some("Reconciled: no released coding execution survives; history retained. Explicitly resume with v or launch a new conversation with c/x when ready.".into());
                 }
                 Request::QueryLaunch(_) => return Err("Launch request unknown to this supervisor; do not replay uncertain activity after supervisor loss".into()),
-                Request::Launch(request) | Request::LaunchClaude(request) | Request::LaunchCodex(request) | Request::Resume(request) => {
+                Request::LaunchNative { request, .. } | Request::Launch(request) | Request::LaunchClaude(request) | Request::LaunchCodex(request) | Request::Resume(request) => {
                     if !continuing && self.execution.child.is_none() && self.execution.stopping.is_none() && (!self.history.eof || self.history.capture_done.is_some() || self.history.flush_pending || storage.progress_for(self.state.session_identity.as_ref().map(|identity| identity.session.as_str())).pending_bytes > 0 || self.metadata_failed || (matches!(self.state.lifecycle, Lifecycle::Stopped | Lifecycle::Exited | Lifecycle::Failed) && !self.history.final_flush)) {
                         return Err("Previous session history is still pending; repair storage and press y to retry before starting another session".into());
                     }
@@ -835,6 +846,7 @@ impl AgentSession {
                     if resume && (!claude && !codex || self.state.native_conversation.as_deref().and_then(|id| uuid::Uuid::parse_str(id).ok()).is_none()) {
                         return Err("Native resume unavailable: no supported saved conversation identity. h opens retained history; c Claude / x Codex explicitly starts a new conversation.".into());
                     }
+                    if initial.as_ref().and_then(|(_, prompt)| prompt.as_ref()).is_some_and(|prompt| prompt.len() > 4084 || prompt.contains('\0')) { return Err("First prompt exceeds 4084-byte limit or contains NUL".into()); }
                     if !continuing {
                         self.history.capture_started_here = false;
                         self.history.history_sealed = false;
@@ -862,8 +874,10 @@ impl AgentSession {
                         self.state.process_exit = None;
                         self.state.launch_result = None;
                         self.state.lifecycle = Lifecycle::Interrupted;
-                        self.writes.send(&storage.commands, crate::persistence::Command::Prepare(crate::persistence::Snapshot::new(&self.state, Some(path), &self.task_identity)))?;
-                        self.launch.pending_launch = Some(if resume { Request::Resume(request) } else if claude { Request::LaunchClaude(request) } else if codex { Request::LaunchCodex(request) } else { Request::Launch(request) });
+                        let mut snapshot = crate::persistence::Snapshot::new(&self.state, Some(path), &self.task_identity);
+                        snapshot.workspace_name = initial.as_ref().and_then(|(_, prompt)| prompt.as_deref()).and_then(crate::registry::prompt_name);
+                        self.writes.send(&storage.commands, crate::persistence::Command::Prepare(snapshot))?;
+                        self.launch.pending_launch = Some(if let Some((agent, prompt)) = initial.clone() { Request::LaunchNative { request, agent, prompt } } else if resume { Request::Resume(request) } else if claude { Request::LaunchClaude(request) } else if codex { Request::LaunchCodex(request) } else { Request::Launch(request) });
                         deferred = true;
                         return Ok(());
                     }
@@ -945,6 +959,7 @@ impl AgentSession {
                         }
 
                     }
+                    if let Some(prompt) = initial.as_ref().and_then(|(_, prompt)| prompt.as_ref()) && !prompt.is_empty() { command.arg("--"); command.arg(prompt); }
                     #[cfg(debug_assertions)]
                     if !claude && !codex { command.env("RAT_PROOF_STORAGE_DIR", directory); }
                     command.env("TERM", "xterm-256color");
@@ -975,7 +990,7 @@ impl AgentSession {
                         });
                         let _ = finished.send(result);
                     })?;
-                    self.launch.creating = Some(CreatingExecution { request: if resume { Request::Resume(request) } else if claude { Request::LaunchClaude(request) } else if codex { Request::LaunchCodex(request) } else { Request::Launch(request) }, result });
+                    self.launch.creating = Some(CreatingExecution { request: if let Some((agent, prompt)) = initial.clone() { Request::LaunchNative { request, agent, prompt } } else if resume { Request::Resume(request) } else if claude { Request::LaunchClaude(request) } else if codex { Request::LaunchCodex(request) } else { Request::Launch(request) }, result });
                     deferred = true;
                     return Ok(());
                     };

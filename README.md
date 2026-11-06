@@ -59,6 +59,8 @@ terminals; normal navigation retains Reviews above the worktree sidebar.
 | Enter / `a` / `h` in workspace picker | Discover selected project's worktrees / explicitly adopt selected checkout / read its latest retained session |
 | `w` / Esc in workspace picker | Return to the native session pane without changing execution |
 | `a` | Explicitly adopt the selected usable checkout |
+| `C` / `X` | Enter an optional first prompt, then Enter explicitly starts Claude / Codex; Esc cancels |
+| `R` | Edit the selected workspace name; Enter saves, Ctrl-U clears, Esc cancels |
 | `c` | Start a new Claude Code conversation in the adopted checkout (experimental) |
 | `x` | Start a new Codex CLI conversation with `--no-daemon` (experimental) |
 | `v` | Explicitly resume the latest managed native conversation using its saved native ID |
@@ -327,3 +329,19 @@ preflight; it cannot replace the sustained resource/latency proof. Terminal-pars
 visible timings are not physical monitor timestamps. Full storage can block
 native ACK output until repair even when input receipt and dashboard navigation
 remain responsive.
+
+Workspace labels are local metadata. A new adoption receives a stable generated
+`Workspace <id>` fallback. Its first supplied prompt can replace that fallback
+with a readable local label (collapsed whitespace, at most 72 characters).
+Manual names and labels from an earlier prompt survive later launches. Renaming
+never moves the folder, changes the branch or changes a native conversation ID.
+The dashboard does not infer native titles from terminal output or submit a
+hidden naming turn. Names saved by an older version are retained.
+
+`C` / `X` opens an optional first-prompt editor; Enter is the explicit launch
+step. Native interactive invocation receives that prompt as one positional
+argument after `--`, alongside the normal passive status hooks. `c` / `x`
+continues to start without a supplied prompt. Resume never supplies an initial
+prompt. Startup, restoration, cancellation and reconciliation do not execute a
+prompt. This slice starts an already adopted workspace; new worktree creation
+and Create without starting belong to the subsequent creation flow.

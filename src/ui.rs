@@ -3,7 +3,7 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::Line,
-    widgets::{Block, List, ListItem, ListState, Paragraph, Wrap},
+    widgets::{Block, Clear, List, ListItem, ListState, Paragraph, Wrap},
 };
 
 use crate::app::App;
@@ -166,7 +166,7 @@ impl Ui {
             } else if app.session.registry_pending {
                 " Registering project… ".into()
             } else {
-                " Projects / retained workspaces · A add · j/k select · Enter open · a adopt "
+                " Projects / retained workspaces · A add · j/k select · Enter open · a adopt · R rename "
                     .into()
             };
             frame.render_stateful_widget(
@@ -253,7 +253,7 @@ impl Ui {
             draw_screen(frame, viewport, screen, app.attached);
         } else {
             frame.render_widget(
-                Paragraph::new("Adopt (a), then c Claude Code / x Codex CLI / l scripted fixture."),
+                Paragraph::new("Adopt (a), then c Claude / x Codex; C/X supplies an optional first prompt. R renames the workspace."),
                 viewport,
             );
         }
@@ -293,7 +293,7 @@ impl Ui {
                     lines.push(Line::from(if app.session.identity.is_some() {
                         format!("  └ managed session · {}", app.session.status.state.label())
                     } else {
-                        "  └ adopted · c Claude / x Codex / l fixture".into()
+                        "  └ adopted · c/x start · C/X prompt · R rename".into()
                     }));
                 }
                 ListItem::new(lines)
@@ -501,8 +501,32 @@ impl Ui {
             .wrap(Wrap { trim: false }),
             status,
         );
+        if let Some((_, text)) = &app.first_prompt {
+            frame.render_widget(Clear, session);
+            frame.render_widget(
+                Paragraph::new(visible(text))
+                    .block(
+                        Block::bordered()
+                            .title(" First prompt · Enter starts · Esc cancels · optional "),
+                    )
+                    .wrap(Wrap { trim: false }),
+                session,
+            );
+        } else if let Some((_, text)) = &app.rename_workspace {
+            frame.render_widget(Clear, session);
+            frame.render_widget(
+                Paragraph::new(visible(text))
+                    .block(Block::bordered().title(
+                        " Workspace name (local) · Enter saves · Ctrl-U clears · Esc cancels ",
+                    ))
+                    .wrap(Wrap { trim: false }),
+                session,
+            );
+        }
         let compact_help;
-        let help_text = if !app.attached
+        let help_text = if app.first_prompt.is_some() || app.rename_workspace.is_some() {
+            app.keyboard_help()
+        } else if !app.attached
             && app.project_input.is_some()
             && (frame.area().width < 80 || frame.area().height < 22)
         {
@@ -538,7 +562,7 @@ A add · h history · w/Esc back · d detach · q quit"
                 &compact_help
             } else {
                 compact_help = format!(
-                    "w workspaces · A add · a adopt · c/x new · Enter attach\nv resume · g cleanup · q quit/stop · d detach · {} {}",
+                    "w workspaces · A add · a adopt · c/x new · C/X prompt · R rename · Enter attach\nv resume · g cleanup · q quit/stop · d detach · {} {}",
                     if app.session.connection_lost {
                         format!("unknown (last seen {:?})", app.session.lifecycle)
                     } else {

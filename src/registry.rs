@@ -38,6 +38,50 @@ impl Registry {
     }
 }
 
+/// Local label from supplied work. This is never a native conversation title.
+pub fn prompt_name(prompt: &str) -> Option<String> {
+    let clean = prompt
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect::<String>();
+    let clean = clean.split_whitespace().collect::<Vec<_>>().join(" ");
+    if clean.is_empty() {
+        return None;
+    }
+    let mut label = clean.chars().take(72).collect::<String>();
+    if clean.chars().count() > 72 {
+        label.push('…');
+    }
+    Some(label)
+}
+
+pub(crate) fn rename(db: &Connection, workspace: &str, name: &str) -> Result<()> {
+    let name = name.trim();
+    if name.is_empty() || name.len() > 240 || name.chars().any(char::is_control) {
+        return Err("Workspace name must contain 1–240 bytes without control characters".into());
+    }
+    if db.execute(
+        "UPDATE workspaces SET name=?1 WHERE id=?2",
+        params![name, workspace],
+    )? != 1
+    {
+        return Err("Workspace unavailable; refresh before renaming".into());
+    }
+    db.execute(
+        "UPDATE workspace_names SET source='manual' WHERE workspace=?1",
+        [workspace],
+    )?;
+    Ok(())
+}
+
+pub(crate) fn name_from_prompt(db: &Connection, task: &str, name: &str) -> Result<()> {
+    // A first-prompt default may replace only the original generated fallback.
+    // Manual edits and names from a previous conversation always win.
+    db.execute("UPDATE workspaces SET name=?1 WHERE id=(SELECT workspace FROM workspace_tasks WHERE task=?2) AND id IN (SELECT workspace FROM workspace_names WHERE source='fallback')", params![name,task])?;
+    db.execute("UPDATE workspace_names SET source='prompt' WHERE workspace=(SELECT workspace FROM workspace_tasks WHERE task=?1) AND source='fallback'", [task])?;
+    Ok(())
+}
+
 pub(crate) fn create(db: &Connection) -> Result<()> {
     db.execute_batch("CREATE TABLE projects(id TEXT PRIMARY KEY, common_dir BLOB NOT NULL UNIQUE, name TEXT NOT NULL);
         CREATE TABLE workspaces(id TEXT PRIMARY KEY, task TEXT NOT NULL UNIQUE, name TEXT NOT NULL, project TEXT, path BLOB, checkout TEXT, common_dir BLOB, git_dir BLOB, UNIQUE(common_dir,git_dir));
@@ -126,18 +170,13 @@ pub(crate) fn record(
     let id = existing
         .or(canonical)
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-    let name = known
-        .map(|checkout| {
-            checkout
-                .root
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .into_owned()
-        })
-        .unwrap_or_else(|| format!("Retained workspace {task}"));
+    let name = format!("Workspace {}", &id[..8]);
     let checkout = known.map(serde_json::to_string).transpose()?;
     db.execute("INSERT INTO workspaces VALUES(?1,?2,?3,?4,?5,?6,?7,?8) ON CONFLICT(id) DO UPDATE SET project=coalesce(excluded.project,workspaces.project),path=coalesce(excluded.path,workspaces.path),checkout=coalesce(excluded.checkout,workspaces.checkout),common_dir=coalesce(excluded.common_dir,workspaces.common_dir),git_dir=coalesce(excluded.git_dir,workspaces.git_dir)", params![id,task,name,project,path,checkout,common,git_dir])?;
+    db.execute(
+        "INSERT INTO workspace_names VALUES(?1,'fallback') ON CONFLICT(workspace) DO NOTHING",
+        [&id],
+    )?;
     db.execute(
         "INSERT INTO workspace_tasks VALUES(?1,?2) ON CONFLICT(task) DO NOTHING",
         params![task, id],
