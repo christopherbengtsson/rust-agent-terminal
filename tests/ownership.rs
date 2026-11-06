@@ -586,6 +586,32 @@ fn missing_claude_keeps_adopted_checkout_and_allows_fixture_launch() {
     dashboard.send(b"q");
 }
 
+#[test]
+fn missing_codex_keeps_adopted_checkout_and_allows_fixture_launch() {
+    let fixture = Fixture::new();
+    let tools = fixture.temp.path().join("tools");
+    std::fs::create_dir(&tools).unwrap();
+    for (name, target) in [("git", "/usr/bin/git"), ("ps", "/bin/ps")] {
+        std::os::unix::fs::symlink(target, tools.join(name)).unwrap();
+    }
+    let mut dashboard = Dashboard::open_with_path(
+        &fixture.repository,
+        &fixture.state(),
+        Some(tools.as_os_str()),
+    );
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted");
+    dashboard.send(b"x");
+    dashboard.wait("Codex CLI launch failed:");
+    dashboard.wait("adopted checkout retained");
+    dashboard.send(b"l");
+    dashboard.wait("fixture>");
+    fixture.assert_one_owner_and_child();
+    dashboard.send(&[0x1d]);
+    dashboard.send(b"q");
+}
+
 struct Controller {
     stream: std::os::unix::net::UnixStream,
     reader: std::io::BufReader<std::os::unix::net::UnixStream>,
@@ -672,7 +698,7 @@ fn lost_launch_acknowledgement_recovers_original_request_and_child() {
 
 #[test]
 fn lost_failed_launch_result_is_recovered_without_executing_after_adoption() {
-    for launch in ["Launch", "LaunchClaude"] {
+    for launch in ["Launch", "LaunchClaude", "LaunchCodex"] {
         let fixture = Fixture::new();
         let mut dashboard = fixture.open();
         dashboard.wait("Discovery complete");
@@ -1111,6 +1137,21 @@ fn bounded_history_pages_recover_every_record_across_multiple_chunks() {
     control.request(serde_json::json!("Shutdown"));
 }
 
+fn assert_no_owned_coding(fixture: &Fixture) {
+    let owner = owner_pid(fixture);
+    let output = Command::new("ps")
+        .args(["-Ao", "pid,ppid,command"])
+        .output()
+        .unwrap();
+    let processes = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        !processes.lines().any(
+            |line| line.split_whitespace().nth(1) == Some(owner.as_str())
+                && (line.contains("--scripted-child") || line.contains("--launch-gate"))
+        ),
+        "unexpected automatic coding: {processes}"
+    );
+}
 fn owner_pid(fixture: &Fixture) -> String {
     let output = Command::new("ps")
         .args(["-Ao", "pid,command"])
@@ -1186,6 +1227,15 @@ fn launch_crash_windows_retain_request_and_require_explicit_reconciliation() {
         let original =
             control.request(serde_json::json!({"QueryLaunch":request}))["launch_result"].clone();
         assert_eq!(original["request"], request, "{window}");
+        assert_eq!(
+            original["error"].is_null(),
+            window == "after-result",
+            "only committed successful exec outcome is known: {window}"
+        );
+        assert_no_owned_coding(&fixture);
+        eprintln!(
+            "launch crash {window}: restored Interrupted, owned coding children=0, request={request}"
+        );
         let replay = control.request(serde_json::json!({"Launch":request}));
         assert_eq!(
             replay["launch_result"], original,
@@ -1296,6 +1346,7 @@ fn surviving_native_execution_blocks_replacement_then_different_boot_reconciles(
     dashboard.kill();
     let mut control = Controller::connect(&fixture);
     wait_reconciled(&mut control);
+    assert_no_owned_coding(&fixture);
     assert_eq!(
         control.request(serde_json::json!({"QueryLaunch":request}))["launch_result"],
         result
@@ -1321,5 +1372,48 @@ fn surviving_native_execution_blocks_replacement_then_different_boot_reconciles(
         std::fs::read_to_string(sentinel).unwrap(),
         "original uncommitted work"
     );
+    control.request(serde_json::json!("Shutdown"));
+}
+
+#[test]
+fn failed_gate_exec_result_survives_supervisor_restart_without_retrying_native_code() {
+    let fixture = Fixture::new();
+    let tools = fixture.temp.path().join("empty-native-path");
+    std::fs::create_dir(&tools).unwrap();
+    for (name, target) in [("git", "/usr/bin/git"), ("ps", "/bin/ps")] {
+        std::os::unix::fs::symlink(target, tools.join(name)).unwrap();
+    }
+    let mut dashboard = Dashboard::open_with_path(
+        &fixture.repository,
+        &fixture.state(),
+        Some(tools.as_os_str()),
+    );
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted");
+    dashboard.send(b"c");
+    dashboard.wait("Claude Code launch failed:");
+    dashboard.wait("Process: Exited");
+    dashboard.kill();
+    let control = Controller::connect(&fixture);
+    let failed = control.greeting["launch_result"].clone();
+    let request = failed["request"].clone();
+    assert!(
+        failed["error"]
+            .as_str()
+            .unwrap()
+            .contains("Claude Code launch failed")
+    );
+    kill_owner(&fixture);
+    drop(control);
+    let mut dashboard = fixture.open();
+    dashboard.wait("Process: Exited");
+    dashboard.kill();
+    let mut control = Controller::connect(&fixture);
+    assert_eq!(
+        control.request(serde_json::json!({"LaunchClaude":request}))["launch_result"],
+        failed
+    );
+    assert_no_owned_coding(&fixture);
     control.request(serde_json::json!("Shutdown"));
 }

@@ -1,0 +1,32 @@
+     /private/tmp/rat-codex-proof-checkout
+ 
+ 
+› Reply exactly: native-proof λ 界. Do not use tools or write files.
+ 
+ 
+• native-proof λ 界
+ 
+  Worked for 3s • 13:57                                                                                 
+ 
+ 
+› Reply exactly: codex-proof λ 界. Do not use tools or write files.
+ 
+ 
+• codex-proof λ 界
+ 
+  Worked for 1s • 13:58                                                                                 
+ 
+ 
+› Ask me to choose alpha or beta and wait for my answer. Do not use tools or write files.
+ 
+ 
+• Choose alpha or beta.
+  └ Tip: Use ⌃x p, then 0–9 to run a preset; Enter browses, s saves, and d deletes.
+ 
+  Worked for 2s • 13:58                                                                                 
+ 
+ 
+› Ask Codex to do anything
+ 
+  GPT-6.1-Sol medium · /private/tmp/rat-codex-proof-checkout · Reply with exact text
+  ← for agents · ? for shortcuts

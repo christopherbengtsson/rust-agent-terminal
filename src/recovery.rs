@@ -87,14 +87,13 @@ fn boot() -> io::Result<String> {
     if let Ok(value) = std::env::var("RAT_PROOF_BOOT_ID") {
         return Ok(format!("proof:{value}"));
     }
-    let mut value = unsafe { std::mem::zeroed::<libc::timeval>() };
-    let mut size = std::mem::size_of_val(&value);
-    let mut mib = [libc::CTL_KERN, libc::KERN_BOOTTIME];
+    let mut bytes = [0u8; 128];
+    let mut size = bytes.len();
+    // SAFETY: a NUL-terminated constant and a writable buffer with its actual size.
     if unsafe {
-        libc::sysctl(
-            mib.as_mut_ptr(),
-            2,
-            (&mut value as *mut libc::timeval).cast(),
+        libc::sysctlbyname(
+            c"kern.bootsessionuuid".as_ptr(),
+            bytes.as_mut_ptr().cast(),
             &mut size,
             std::ptr::null_mut(),
             0,
@@ -103,7 +102,14 @@ fn boot() -> io::Result<String> {
     {
         return Err(io::Error::last_os_error());
     }
-    Ok(format!("{}:{}", value.tv_sec, value.tv_usec))
+    if size == 0 || size > bytes.len() || bytes[size - 1] != 0 {
+        return Err(io::Error::other("Invalid boot-session UUID"));
+    }
+    let value = std::str::from_utf8(&bytes[..size - 1]).map_err(io::Error::other)?;
+    if value.len() != 36 {
+        return Err(io::Error::other("Missing boot-session UUID"));
+    }
+    Ok(value.to_owned())
 }
 #[cfg(target_os = "macos")]
 fn start(pid: i32) -> io::Result<(u64, u64)> {
@@ -170,7 +176,11 @@ pub fn gate(socket: &Path, nonce: &str, agent: &str) -> io::Result<()> {
         command.arg("--scripted-child");
         command
     } else {
-        Command::new(agent)
+        let mut command = Command::new(agent);
+        if agent == "codex" {
+            command.arg("--no-daemon");
+        }
+        command
     };
     let error = command.exec(); // UnixStream is close-on-exec: EOF is the successful exec receipt.
     stream.write_all(error.to_string().as_bytes())?;

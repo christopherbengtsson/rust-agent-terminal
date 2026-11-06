@@ -31,6 +31,7 @@ pub enum Request {
     Adopt(Vec<u8>),
     Launch(String),
     LaunchClaude(String),
+    LaunchCodex(String),
     QueryLaunch(String),
     Reconcile,
     History { index: usize, offset: u64 },
@@ -467,6 +468,10 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                         format!(
                             "Claude Code launch failed: {error}; adopted checkout retained. Install claude on PATH and run claude auth login in your usual terminal"
                         )
+                    } else if state.agent.as_deref() == Some("Codex CLI") {
+                        format!(
+                            "Codex CLI launch failed: {error}; adopted checkout retained. Install codex on PATH and run codex login in your usual terminal"
+                        )
                     } else {
                         format!(
                             "Native executable launch failed: {error}; adopted checkout retained"
@@ -691,18 +696,23 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     | Request::Launch(_)
                     | Request::LaunchClaude(_)
                     | Request::Reconcile
+                    | Request::LaunchCodex(_)
                     | Request::Stop
                     | Request::Shutdown
             );
         let claude = matches!(&request, Request::LaunchClaude(_));
+        let codex = matches!(&request, Request::LaunchCodex(_));
         let launch_request = match &request {
-            Request::Launch(id) | Request::LaunchClaude(id) => Some(id.clone()),
+            Request::Launch(id) | Request::LaunchClaude(id) | Request::LaunchCodex(id) => {
+                Some(id.clone())
+            }
             _ => None,
         };
         let recorded = match &request {
-            Request::Launch(id) | Request::LaunchClaude(id) | Request::QueryLaunch(id) => {
-                launches.get(id).cloned()
-            }
+            Request::Launch(id)
+            | Request::LaunchClaude(id)
+            | Request::LaunchCodex(id)
+            | Request::QueryLaunch(id) => launches.get(id).cloned(),
             _ => None,
         };
         let result = (|| -> Result<(), Box<dyn std::error::Error>> {
@@ -714,7 +724,10 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             if pending_launch.is_some() || gate_receipt.is_some() {
                 if matches!(
                     request,
-                    Request::Adopt(_) | Request::Launch(_) | Request::LaunchClaude(_)
+                    Request::Adopt(_)
+                        | Request::Launch(_)
+                        | Request::LaunchClaude(_)
+                        | Request::LaunchCodex(_)
                 ) {
                     return Err("Launch reconciliation pending; wait for durable outcome".into());
                 }
@@ -759,7 +772,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     state.error = Some("Reconciled: no released coding execution survives; history retained. Explicitly launch a new conversation when ready.".into());
                 }
                 Request::QueryLaunch(_) => return Err("Launch request unknown to this supervisor; do not replay uncertain activity after supervisor loss".into()),
-                Request::Launch(request) | Request::LaunchClaude(request) => {
+                Request::Launch(request) | Request::LaunchClaude(request) | Request::LaunchCodex(request) => {
                     if state.execution.is_some() && !continuing && child.is_none() { return Err("Interrupted execution is uncertain; u reconciles process evidence. Verified reboot resolves unknown descendants; no automatic coding restart.".into()); }
                     if request.is_empty() || request.len() > 128 {
                         return Err("Launch request must contain 1–128 bytes".into());
@@ -780,7 +793,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                         state.lifecycle = Lifecycle::Interrupted;
                         storage.commands.try_send(crate::persistence::Command::Prepare(crate::persistence::metadata(&state), Some(path_bytes(path)), task_identity.clone()))?;
                         save_pending += 1;
-                        pending_launch = Some(if claude { Request::LaunchClaude(request) } else { Request::Launch(request) });
+                        pending_launch = Some(if claude { Request::LaunchClaude(request) } else if codex { Request::LaunchCodex(request) } else { Request::Launch(request) });
                         deferred = true;
                         return Ok(());
                     }
@@ -801,12 +814,14 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     command.arg("--launch-gate");
                     command.arg(&gate_path);
                     command.arg(&nonce);
-                    command.arg(if claude { "claude" } else { "fixture" });
+                    command.arg(if claude { "claude" } else if codex { "codex" } else { "fixture" });
                     command.env("TERM", "xterm-256color");
                     command.cwd(path);
                     let launched = pty.slave.spawn_command(command).map_err(|error| {
                         if claude {
                             format!("Claude Code launch failed: {error}. Install claude on PATH, run claude auth login in your usual terminal, then explicitly retry c; adopted checkout retained")
+                        } else if codex {
+                            format!("Codex CLI launch failed: {error}. Install codex on PATH, run codex login in your usual terminal, then explicitly retry x; adopted checkout retained")
                         } else {
                             format!("Fixture launch failed: {error}; retry l")
                         }
@@ -815,6 +830,8 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     state.agent = Some(
                         if claude {
                             "Claude Code"
+                        } else if codex {
+                            "Codex CLI"
                         } else {
                             "Scripted PTY"
                         }

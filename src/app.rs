@@ -167,6 +167,14 @@ impl App {
                     self.launch_request.clone(),
                 )));
             }
+            KeyCode::Char('x') if key.modifiers.is_empty() => {
+                if self.session.launch_result.is_some() {
+                    self.launch_request = uuid::Uuid::new_v4().to_string();
+                }
+                return Some(Effect::Session(Request::LaunchCodex(
+                    self.launch_request.clone(),
+                )));
+            }
             KeyCode::Char('l') if key.modifiers.is_empty() => {
                 if self.session.launch_result.is_some() {
                     // An explicit new launch after a known result is a new intent.
@@ -204,7 +212,7 @@ impl App {
         } else if self.history_open {
             "q quit/stop/retry · s stop · h live · n/p session · [/] page · j/k scroll · d detach"
         } else {
-            "q quit/stop/retry · s stop · h history · j/k select · r refresh · a adopt · c Claude · l fixture · Enter attach · d detach"
+            "q quit/stop · s stop · h history · j/k select · r refresh · a adopt · c Claude · x Codex · l fixture · Enter attach · d detach"
         }
     }
 
@@ -289,6 +297,15 @@ mod tests {
             matches!(app.input(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE)),
             Some(Effect::Session(Request::Launch(id))) if id == app.launch_request)
         );
+    }
+
+    #[test]
+    fn codex_is_an_explicit_launch_choice() {
+        let mut app = App::new("repo".into());
+        assert!(matches!(
+            app.input(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE)),
+            Some(Effect::Session(Request::LaunchCodex(id))) if id == app.launch_request
+        ));
     }
 
     #[test]
