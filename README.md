@@ -274,13 +274,40 @@ See [the versioned status proof](docs/proofs/12-codex-status.md) for the native
 scenarios and conservative limits.
 
 Readable history is independent of a live child, native resume, and the checkout.
-In dashboard focus press `h` to open/close retained history, `n`/`p` for older/newer
-sessions, `[`/`]` for raw byte ranges, and `j`/`k` to scroll the current page.
+In dashboard focus press `h` to open/close the current session’s retained history.
+Press `B` to browse conversations by stable session identity; `n`/`p` from a
+UUID-selected history page return to this list. `[`/`]` select raw byte ranges,
+and `j`/`k` scroll the current page.
 The default readable view decodes UTF-8 across pages, removes terminal styles and
 hidden control strings, and follows bounded line edits and horizontal cursor
 movement. Replay runs in background batches; a cold distant page can show
 Preparing readable history while capture and controls continue. Press `v` inside
 history to toggle the escaped raw view. Outside history, `v` remains native Resume.
+
+Press `/` for Find workspace (project/title/last observed branch/path), `S` for
+Search history across all projects, or `B` for retained sessions. Enter submits
+an edited query; arrow keys select results; Enter opens the selected workspace’s
+conversations, exact session, or matching passage. Tab changes search mode,
+`n` requests the next bounded result page, Ctrl-R refreshes, and Esc returns.
+Reading does not select another coding runtime, launch an agent, or change native
+Resume’s target. Native conversation selection is a separate later feature.
+
+History search matches all case-insensitive words (Unicode letters/digits; punctuation
+separates words), up to eight words/256 query bytes. Metadata Find matches a
+case-insensitive substring. Results contain bounded snippets and stable passage
+IDs/ranges; opening a hit retrieves its persisted readable passage directly,
+including when controls span many raw pages. The index catches up incrementally
+to committed output; results are labelled partial and Ctrl-R refreshes. Completed
+lines are indexed; an unfinished tail becomes searchable after final capture is
+sealed. Raw bytes remain available through the session’s history view.
+
+Archived metadata and confirmed missing/inaccessible folders are labelled without
+requiring the checkout for reading. The archive action itself arrives separately.
+Branches are labelled **last observed** from Git discovery, never inferred from
+the original creation branch. Refresh discovery to observe ordinary Git branch
+changes. Legacy facts that were not recorded remain unknown. Explicit transcript
+deletion invalidates prior results/passages and prevents their return after restart.
+See the [search proof](docs/proofs/m2-11-retained-search.md) for bounds and evidence.
 
 This is captured terminal output, not reconstructed chat messages. Full-screen
 redraws can repeat text, leave fragments or spacing artifacts, and the last line
@@ -377,8 +404,8 @@ History (`h`) remains available when no native ID was captured or the checkout
 is missing. A missing checkout prevents continuing in place; restore its path
 before resuming. Native records remain owned by the original tool, which can
 reject an unavailable ID through its captured native UI. This proof-level path
-covers the most recent managed conversation, without history search or arbitrary
-resume selection. See [both original-conversation proofs](docs/proofs/16-native-recovery.md)
+covers the most recent managed conversation. Retained-history search is independent
+of native resume; arbitrary native resume selection remains a separate feature. See [both original-conversation proofs](docs/proofs/16-native-recovery.md)
 for exact versions, marker recall, supervisor restart and separate injected
 reboot-style checks; no physical reboot is claimed.
 

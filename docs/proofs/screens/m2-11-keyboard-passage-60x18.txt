@@ -1,0 +1,18 @@
+┌ History · retained work · reading only ──────────────────┐
+│Committed passage v1 · raw 91–128 / 186                   │
+│fixture> received: keyboardneedle11                       │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+└──────────────────────────────────────────────────────────┘
+┌ Status · semantic status: unknown · execution not running┐
+│Adopted: /private/tmp/.tmpScCwip/checkout with spaces ·   │
+└──────────────────────────────────────────────────────────┘
+Enter search/open · ↑/↓ select · Esc back                   
+Tab mode · n next · Ctrl-R refresh · / edit                 
