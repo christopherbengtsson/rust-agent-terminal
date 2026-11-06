@@ -40,7 +40,7 @@ use std::{
         net::UnixDatagram,
     },
     path::{Path, PathBuf},
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 const MAX_RECEIPT: usize = 2048;
@@ -58,6 +58,8 @@ struct Receipt {
     tool_id: String,
     #[serde(default)]
     prompt_id: String,
+    #[serde(default)]
+    at: u64,
 }
 
 struct PendingTool {
@@ -82,6 +84,18 @@ pub struct Monitor {
     supported_executable: bool,
     started: bool,
     input_boundary: Option<u64>,
+    barrier: u64,
+    turn: Option<Instant>,
+    turn_at: u64,
+    prompt: String,
+    baseline_marker: Option<String>,
+    stopped_boundary: Option<u64>,
+    baseline_response: Option<String>,
+    screen_boundary: u64,
+    output_observed: Instant,
+    active_screen: bool,
+    interrupt_request: Option<(u64, Instant)>,
+    acknowledged: Option<Instant>,
 }
 impl Monitor {
     pub fn start(directory: &Path, fixture: bool) -> io::Result<Self> {
@@ -152,6 +166,18 @@ impl Monitor {
             supported_executable: false,
             started: fixture,
             input_boundary: None,
+            barrier: millis(),
+            turn: None,
+            turn_at: 0,
+            prompt: String::new(),
+            baseline_marker: None,
+            stopped_boundary: None,
+            baseline_response: None,
+            screen_boundary: 0,
+            output_observed: Instant::now(),
+            active_screen: false,
+            interrupt_request: None,
+            acknowledged: None,
         })
     }
     pub fn native_executable(&mut self, executable: Option<&Path>) {
@@ -170,9 +196,14 @@ impl Monitor {
             command.arg(&self.settings);
         }
     }
-    pub fn input(&mut self, boundary: u64) {
-        if !self.fixture {
+    pub fn input(&mut self, boundary: u64, interrupt: bool) {
+        self.interrupt_request = (interrupt && self.active_screen && self.turn.is_some())
+            .then(|| (boundary, Instant::now()));
+        self.acknowledged = None;
+        if !self.fixture || interrupt {
             self.input_boundary = Some(boundary);
+            self.barrier = millis();
+            self.stopped_boundary = None;
             self.status.state = State::Unknown;
         }
     }
@@ -188,6 +219,10 @@ impl Monitor {
                                 && receipt.token == self.token
                                 && receipt.session == self.session
                                 && receipt.main_agent
+                                && receipt.at <= millis()
+                                && millis().saturating_sub(receipt.at) <= 30_000
+                                && (receipt.event == "SessionStart"
+                                    || receipt.at >= self.barrier)
                                 && matches!(
                                     receipt.event.as_str(),
                                     "SessionStart"
@@ -210,12 +245,44 @@ impl Monitor {
                                 ) =>
                         {
                             self.received = Some(Instant::now());
+                            if matches!(
+                                receipt.event.as_str(),
+                                "PreToolUse"
+                                    | "PostToolUse"
+                                    | "PostToolUseFailure"
+                                    | "PostToolBatch"
+                            ) {
+                                self.baseline_response =
+                                    response_header(content).map(str::to_owned);
+                                self.stopped_boundary = None;
+                            }
                             match receipt.event.as_str() {
                                 "SessionStart" => {
                                     self.started = true;
                                 }
-                                "UserPromptSubmit" | "SessionEnd" | "ConfigChange" => {
-                                    self.pending.clear()
+                                "UserPromptSubmit" => {
+                                    self.pending.clear();
+                                    self.turn = Some(Instant::now());
+                                    self.turn_at = receipt.at;
+                                    self.prompt = receipt.prompt_id.clone();
+                                    self.acknowledged = None;
+                                    self.interrupt_request = None;
+                                    self.baseline_marker =
+                                        done_marker(content).map(|(_, marker)| marker.to_owned());
+                                    self.baseline_response =
+                                        response_header(content).map(str::to_owned);
+                                    self.stopped_boundary = None;
+                                }
+                                "Stop" if self.turn.is_some() => {
+                                    self.pending.clear();
+                                    self.stopped_boundary = Some(boundary);
+                                }
+                                "SessionEnd" | "ConfigChange" | "StopFailure" => {
+                                    self.pending.clear();
+                                    self.turn = None;
+                                    self.stopped_boundary = None;
+                                    self.acknowledged = None;
+                                    self.interrupt_request = None;
                                 }
                                 "PreToolUse"
                                     if self.started
@@ -321,9 +388,17 @@ impl Monitor {
                             };
                             self.received = None;
                             self.pending.clear();
+                            self.turn = None;
+                            self.stopped_boundary = None;
+                            self.acknowledged = None;
+                            self.interrupt_request = None;
                         }
                     }
                     if count == 31 {
+                        self.turn = None;
+                        self.stopped_boundary = None;
+                        self.acknowledged = None;
+                        self.interrupt_request = None;
                         self.pending.clear();
                         self.status.state = State::Unknown;
                         self.status.reason = "evidence backlog; ordering uncertain".into();
@@ -331,6 +406,10 @@ impl Monitor {
                 }
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
                 Err(_) => {
+                    self.turn = None;
+                    self.stopped_boundary = None;
+                    self.acknowledged = None;
+                    self.interrupt_request = None;
                     self.pending.clear();
                     self.status.state = State::Unknown;
                     self.status.reason = "evidence channel unavailable".into();
@@ -409,6 +488,107 @@ impl Monitor {
                 }
             }
         }
+        if self.screen_boundary != boundary {
+            self.screen_boundary = boundary;
+            self.output_observed = Instant::now();
+        }
+        if self.turn.is_some()
+            && self
+                .received
+                .is_some_and(|at| at.elapsed() <= Duration::from_secs(30))
+            && self.output_observed.elapsed() <= Duration::from_secs(5)
+            && self.pending.is_empty()
+            && self.stopped_boundary.is_none()
+            && self.interrupt_request.is_none()
+            && self.input_boundary.is_none_or(|input| boundary > input)
+            && (self.fixture || (self.supported_screen && self.supported_executable))
+            && content
+                .lines()
+                .rfind(|line| !line.trim().is_empty())
+                .is_some_and(|line| {
+                    (line.trim().starts_with("⏵⏵ auto mode on")
+                        || line.trim().starts_with("⏸ manual mode on"))
+                        && line.ends_with(" · esc to interrupt")
+                })
+            && response_header(content)
+                .is_some_and(|response| self.baseline_response.as_deref() != Some(response))
+        {
+            self.status.state = State::Working;
+            self.status.evidence =
+                Some("current-turn new native response + Claude 2.1.318 active footer".into());
+            self.status.reason = "30s turn evidence; output freshness bounded to 5s".into();
+        }
+        if self.turn.is_some()
+            && self
+                .received
+                .is_some_and(|at| at.elapsed() <= Duration::from_secs(30))
+            && (self.fixture || (self.supported_screen && self.supported_executable))
+            && self.stopped_boundary.is_some_and(|stop| boundary > stop)
+            && let Some((marker_index, marker)) = done_marker(content)
+            && self.baseline_marker.as_deref() != Some(marker)
+            && idle_composer(content).is_some_and(|composer| {
+                marker_index < composer
+                    && content
+                        .lines()
+                        .skip(marker_index + 1)
+                        .take(composer - marker_index - 1)
+                        .all(|line| {
+                            line.trim().is_empty()
+                                || line.trim().starts_with("✔ Update installed")
+                                || line.trim().starts_with("────────────────────")
+                        })
+            })
+        {
+            self.status.state = State::Completed;
+            self.status.evidence =
+                Some("current-turn Stop + new Claude 2.1.318 done marker and idle composer".into());
+            self.status.reason = "30s bounded native completion evidence".into();
+        }
+        self.active_screen = content
+            .lines()
+            .rfind(|line| !line.trim().is_empty())
+            .is_some_and(|line| {
+                (line.trim().starts_with("⏵⏵ auto mode on")
+                    || line.trim().starts_with("⏸ manual mode on"))
+                    && line.ends_with(" · esc to interrupt")
+            });
+        if (self.fixture || (self.supported_screen && self.supported_executable))
+            && self.interrupt_request.is_some_and(|(request, at)| {
+                boundary > request && at.elapsed() <= Duration::from_secs(5)
+            })
+            && let Some(composer) = idle_composer(content)
+            && content
+                .lines()
+                .take(composer)
+                .map(str::trim)
+                .filter(|line| {
+                    !line.is_empty()
+                        && !line.starts_with("✔ Update installed")
+                        && !line.starts_with("────────────────────")
+                })
+                .last()
+                .is_some_and(|line| {
+                    line.strip_prefix("⎿").is_some_and(|rest| {
+                        rest.trim() == "Interrupted · What should Claude do instead?"
+                    })
+                })
+        {
+            self.interrupt_request = None;
+            self.acknowledged = Some(Instant::now());
+            self.pending.clear();
+            self.turn = None;
+            self.stopped_boundary = None;
+        }
+        if self
+            .acknowledged
+            .is_some_and(|at| at.elapsed() <= Duration::from_secs(30))
+        {
+            self.status.state = State::Interrupted;
+            self.status.evidence = Some(
+                "native Ctrl-C + newly observed Claude 2.1.318 interruption acknowledgment".into(),
+            );
+            self.status.reason = "30s bounded native interruption evidence".into();
+        }
         if !running {
             self.status.state = State::Unknown;
             self.status.reason = "execution not running".into();
@@ -478,6 +658,7 @@ pub fn hook(path: &Path, token: String, session: String) {
                 String::new()
             },
             main_agent: json.get("agent_id").is_none_or(serde_json::Value::is_null),
+            at: millis(),
         };
         send(path, &receipt)
     })();
@@ -525,6 +706,69 @@ pub fn fixture(event: &str) {
             String::new()
         },
         main_agent: true,
+        at: millis(),
     };
     let _ = send(Path::new(&path), &receipt);
+}
+
+fn millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .try_into()
+        .unwrap_or(u64::MAX)
+}
+fn idle_composer(screen: &str) -> Option<usize> {
+    let lines: Vec<_> = screen.lines().map(str::trim).collect();
+    let footer = lines.iter().rfind(|line| !line.is_empty())?;
+    if !((footer.starts_with("⏵⏵ auto mode on") || footer.starts_with("⏸ manual mode on"))
+        && !footer.contains("esc to interrupt")
+        && !footer.contains("Esc to cancel"))
+    {
+        return None;
+    }
+    let composer = lines.iter().rposition(|line| *line == "❯")?;
+    (composer > 0
+        && lines[composer - 1].starts_with("────────────────────")
+        && lines
+            .get(composer + 1)
+            .is_some_and(|line| line.starts_with("────────────────────")))
+    .then_some(composer)
+}
+fn done_marker(screen: &str) -> Option<(usize, &str)> {
+    screen
+        .lines()
+        .collect::<Vec<_>>()
+        .into_iter()
+        .enumerate()
+        .rev()
+        .find_map(|(index, line)| {
+            let line = line.trim();
+            let rest = line.strip_prefix("✻ ")?;
+            let (verb, rest) = rest.split_once(" for ")?;
+            let (duration, clock) = rest.split_once(" · done ")?;
+            let (clock, suffix) = clock.rsplit_once(' ')?;
+            (verb.len() <= 32
+                && !verb.is_empty()
+                && verb.chars().all(|ch| ch.is_ascii_alphabetic())
+                && duration.len() <= 32
+                && !duration.is_empty()
+                && duration
+                    .chars()
+                    .all(|ch| ch.is_ascii_digit() || " smh".contains(ch))
+                && matches!(suffix, "AM" | "PM")
+                && (4..=5).contains(&clock.len())
+                && clock.contains(':')
+                && clock.chars().all(|ch| ch.is_ascii_digit() || ch == ':'))
+            .then_some((index, line))
+        })
+}
+
+fn response_header(screen: &str) -> Option<&str> {
+    screen
+        .lines()
+        .rev()
+        .map(str::trim)
+        .find(|line| line.starts_with("⏺ ") && line.len() > "⏺ ".len())
 }

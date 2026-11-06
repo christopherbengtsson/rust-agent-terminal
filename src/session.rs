@@ -1077,7 +1077,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     child = Some(launched);
                 }
                 Request::Input(bytes) => {
-                    if let Some(monitor) = monitor.as_mut() { monitor.input(screen.lock().unwrap().output_bytes); }
+                    if let Some(monitor) = monitor.as_mut() { monitor.input(screen.lock().unwrap().output_bytes, bytes.as_slice() == [3]); }
                     if let Some(monitor) = codex_monitor.as_mut() { monitor.input(screen.lock().unwrap().output_bytes); }
                     if bytes.len() > 4096 {
                         return Err("Input exceeds prototype 4096-byte limit".into());
@@ -1089,7 +1089,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                         .map_err(|e| format!("Native input queue unavailable: {e}; retry"))?;
                 }
                 Request::Key(key) => {
-                    if let Some(monitor) = monitor.as_mut() { monitor.input(screen.lock().unwrap().output_bytes); }
+                    if let Some(monitor) = monitor.as_mut() { monitor.input(screen.lock().unwrap().output_bytes, matches!(key.code, crossterm::event::KeyCode::Char('c' | 'C')) && key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) && !key.modifiers.contains(crossterm::event::KeyModifiers::ALT)); }
                     if let Some(monitor) = codex_monitor.as_mut() { monitor.input(screen.lock().unwrap().output_bytes); }
                     let application_cursor =
                         screen.lock().unwrap().parser.screen().application_cursor();
@@ -1101,7 +1101,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                         .map_err(|e| format!("Native input queue unavailable: {e}; retry"))?;
                 }
                 Request::Paste(text) => {
-                    if let Some(monitor) = monitor.as_mut() { monitor.input(screen.lock().unwrap().output_bytes); }
+                    if let Some(monitor) = monitor.as_mut() { monitor.input(screen.lock().unwrap().output_bytes, false); }
                     if let Some(monitor) = codex_monitor.as_mut() { monitor.input(screen.lock().unwrap().output_bytes); }
                     if text.len() > 4084 {
                         return Err("Paste exceeds 4084-byte limit".into());
@@ -1245,12 +1245,20 @@ pub fn scripted_child() -> io::Result<()> {
     let mut line = Vec::new();
     let mut approval = false;
     let mut flood_run = 0;
+    let mut native_active = false;
     for byte in io::stdin().lock().bytes() {
         match byte? {
             3 => {
                 line.clear();
-                println!("interrupted: 03\r");
-                print!("fixture> ");
+                if native_active {
+                    print!(
+                        "\x1b[2J\x1b[HClaude Code v2.1.318\r\n  ⎿  Interrupted · What should Claude do instead?\r\n────────────────────────────────────────\r\n❯ \r\n────────────────────────────────────────\r\n  ⏵⏵ auto mode on (shift+tab to cycle)"
+                    );
+                    native_active = false;
+                } else {
+                    println!("interrupted: 03\r");
+                    print!("fixture> ");
+                }
             }
             b'\r' => {
                 if line == b"exit" {
@@ -1286,6 +1294,32 @@ pub fn scripted_child() -> io::Result<()> {
                     print!("size: {cols}x{rows}\r\nfixture> ");
                 } else if line == b"fixture-failed-test" {
                     println!("test result: FAILED; agent continues\r");
+                } else if line == b"status-native-submit" {
+                    crate::native_status::fixture("UserPromptSubmit");
+                    print!("\x1b[2J\x1b[HClaude Code v2.1.318\r\n❯ proof\r\n");
+                } else if line == b"status-native-active" {
+                    native_active = true;
+                    print!(
+                        "\x1b[2J\x1b[HClaude Code v2.1.318\r\n⏺ Ownership controls when values are destroyed.\r\n\r\n✢ Noodling…\r\n────────────────────────────────────────\r\n❯ \r\n────────────────────────────────────────\r\n  ⏵⏵ auto mode on (shift+tab to cycle) · esc to interrupt"
+                    );
+                } else if line == b"status-native-blocked-stop" {
+                    crate::native_status::fixture("Stop");
+                    print!(
+                        "\x1b[2J\x1b[HClaude Code v2.1.318\r\n✢ Running Stop hooks…\r\n────────────────────────────────────────\r\n❯ \r\n────────────────────────────────────────\r\n  ⏵⏵ auto mode on (shift+tab to cycle) · esc to interrupt"
+                    );
+                } else if line == b"status-native-old-done" {
+                    crate::native_status::fixture("UserPromptSubmit");
+                    io::stdout().flush()?;
+                    thread::sleep(Duration::from_millis(80));
+                    crate::native_status::fixture("Stop");
+                    println!("\r");
+                } else if line == b"status-native-done" {
+                    crate::native_status::fixture("Stop");
+                    io::stdout().flush()?;
+                    thread::sleep(Duration::from_millis(80));
+                    print!(
+                        "\x1b[2J\x1b[HClaude Code v2.1.318\r\n⏺ proof answer\r\n\r\n✻ Cogitated for 1s · done 3:12 PM\r\n\r\n────────────────────────────────────────\r\n❯ \r\n────────────────────────────────────────\r\n  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents"
+                    );
                 } else if line == b"status-native-post" {
                     crate::native_status::fixture("PostToolUse");
                     println!("question answered; old dialog text is retained\r");
