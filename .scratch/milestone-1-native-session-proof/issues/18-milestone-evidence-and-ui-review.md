@@ -27,3 +27,10 @@ The correction and all four actual foreground Stop/ordinary-q retests passed on
 a3842906 (exact hashes and collector-tail corrections are in the proof). Ticket
 18 remains open for final code-followup checks, diagnosed aggregate failures and
 resource/latency revalidation after the live-ownership sampling change.
+
+Final runtime44b4d8c/17b9f65 was integrated in ticket18 at da46863c. All four
+real native foreground Stop/q cases repeated end to end with one unchanged
+prelaunch binary hash; independent same-identity readable History and final
+Shutdown also passed for each. Exact receipts and source boundaries are in the
+proof. Final resource revalidation and the complete final all-target suite
+remain required before resolution.

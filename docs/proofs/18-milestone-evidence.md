@@ -7,10 +7,10 @@ release workload, a physical reboot or graphical Terminal.app/iTerm compatibilit
 
 ## Current gate
 
-**Native foreground Stop and ordinary-quit retests passed for both tools on
-`a3842906fddfc5649af11a898f987785dc0e7ece` (includes integration `a39308b`).**
+**Final native foreground Stop and ordinary-quit retests passed for both tools on
+`da46863cbaffdbba9daa49ee2ffbdc8acfd74282` (includes integration `44b4d8c`).**
 The original actual Codex failure remains [preserved](18-stop-gate-failure.json).
-Final source-followup checks and resource/latency revalidation remain open;
+Final all-target checks and resource/latency revalidation remain open;
 Milestone 1 and ticket 18 are not yet declared complete.
 
 ## Source and native boundaries
@@ -87,6 +87,10 @@ This false successful Stop required the correction and fresh retests below. No u
 or user process was signaled.
 
 ## Consolidated independent evidence
+
+The ticket17 resource figures in this table are historical pre-tracker runs.
+They do not establish final live-tracker overhead; the final-source resource
+revalidation is a separate required gate.
 
 | Requirement | Exact evidence and limit |
 | --- | --- |
@@ -220,7 +224,9 @@ was Stopped with execution null, pending capture zero, and written equaled durab
 The Stop cases also had owner-lifetime accepted equal durable. After ordinary
 quit, that owner counter resets to zero on the new supervisor; it is not compared
 with the retained session prefix. Both ordinary q cases restored exact termios.
-Every verification tail obtained readable public History and confirmed Shutdown.
+The three corrected verification tails also obtained readable public History;
+the fresh Codex Stop retained its public durable extent and confirmed Shutdown.
+The final-source repetition below additionally verified readable History for all four.
 
 | Actual native action | Native PID | Ordinary tool PID / PGID | Heartbeat before→after then stable | Durable bytes |
 | --- | ---: | --- | --- | ---: |
@@ -270,3 +276,51 @@ retry guidance. The other compared capture with a fixture ledger lacking a
 bounded completed-write/in-flight-ledger interval. These are not presented as a
 passing suite. Cargo stopped before scripted/screen integration; later final
 checks need their own complete result.
+
+## Final runtime native boundary
+
+After integration `44b4d8c3997818358f62093b3d34e5215c373e08` (final runtime
+followup `17b9f65`), the four native cases were repeated on clean ticket18 merge
+`da46863cbaffdbba9daa49ee2ffbdc8acfd74282`. This includes 100 ms background
+tracking, fresh parent UID/start checks, full-identity stopped-state closure
+verification, the bounded in-flight fixture-ledger correction and semantic
+storage-error assertions. **All four passed end to end.**
+
+All four actual prelaunch executable hashes were identical:
+`953de3061ebdc60f598e15998f8b6d3ca0d2a3dc648a0c08c3a993127aaebbb5`.
+Canonical Claude318 and Codex167 hashes were rechecked after these runs and still
+match the pinned native hashes above. No runtime/helper was rebuilt during this
+four-case group.
+
+| Final actual action | Native PID | Ordinary tool PID / PGID | Heartbeat before→after then stable | Durable bytes |
+| --- | ---: | --- | --- | ---: |
+| Claude318 Stop |10136|Python10676 / shell-group10675|4→4|9936|
+| Claude318 ordinary q |10991|Python12210 / shell-group12209|4→4|11346|
+| Codex167 Stop |10746|Python12907 / own-group12907|4→5|30586|
+| Codex167 ordinary q |11787|Python13339 / own-group13339|4→5|27768|
+
+[Final exact identities, hashes and outcomes](18-native-final-summary.json),
+[raw whole-PTY captures, observations and helpers](18-native-final.tar.gz), and
+[archive/file checksums](18-native-final-manifest.json) preserve this new source
+boundary rather than rewriting the earlier runs. An independent read-only
+post-restart public History query for each case verified its same task/session/
+request/native identity, nonempty readable history and the same durable extent,
+then obtained another confirmed Shutdown. This started no native coding.
+
+Both ordinary q actions exited 0 and restored exact termios. Every native and
+heartbeat PID disappeared, ledger became stable, execution was null, current
+state Stopped, metadata committed and capture pending zero. Written equaled
+durable; owner-lifetime accepted equaled durable before Stop shutdown. The
+independent restarted owners correctly reset that transient accepted counter.
+All four primary collectors and all four History tails confirmed stopped=true.
+A final task-prefix process inventory showed no proof dashboards, supervisors or
+native invocations left. Existing user/default supervisors and shared native
+daemons were untouched.
+
+The [final-source Stopped whole dashboard](screens/18-final-native-codex-stopped.png)
+was rasterized and visually inspected; retained native Working prose remains
+last-screen history while Process Stopped/semantic Unknown are explicit.
+No normal-source native status-classifier logic changed after the initial
+interaction/status proof; lifecycle/ownership refinements are the separately
+repeated final native boundary here. Full final resource/all-target gates remain
+separate below.
