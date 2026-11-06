@@ -283,6 +283,7 @@ pub enum Command {
     SelectWorkspace(String),
     Capture(CaptureStream),
     Rename(uuid::Uuid, String, String),
+    ComparisonBase(uuid::Uuid, String, crate::working_diff::Base),
     Register(uuid::Uuid, crate::git::CheckoutIdentity),
     Prepare(Snapshot),
     Authorize(Snapshot),
@@ -448,12 +449,13 @@ impl Worker {
                             continue;
                         }
                     }
-                    let kind = match &command { Command::SelectWorkspace(..) => "selection", Command::Capture(..) => unreachable!(), Command::Rename(..) | Command::Register(..) => "registry", Command::Save(..) | Command::Prepare(..) | Command::Authorize(..) => "metadata", Command::History(..) | Command::HistorySession(..) | Command::HistoryTarget { .. } => "history", Command::Cleanup(..) | Command::Delete(..) | Command::Seal(..) => "cleanup", Command::Retry => "retry", Command::Flush(..) => "flush" };
+                    let kind = match &command { Command::SelectWorkspace(..) => "selection", Command::Capture(..) => unreachable!(), Command::ComparisonBase(..) | Command::Rename(..) | Command::Register(..) => "registry", Command::Save(..) | Command::Prepare(..) | Command::Authorize(..) => "metadata", Command::History(..) | Command::HistorySession(..) | Command::HistoryTarget { .. } => "history", Command::Cleanup(..) | Command::Delete(..) | Command::Seal(..) => "cleanup", Command::Retry => "retry", Command::Flush(..) => "flush" };
                     status.lock().unwrap().operation = Some((kind, Instant::now()));
                     let operation = match &command { Command::Prepare(snapshot) | Command::Authorize(snapshot) | Command::Save(snapshot) => Some(snapshot.operation.clone()), Command::Flush(operation) | Command::Seal(operation) => Some(operation.clone()), _ => None };
                     let result = match command {
                         Command::SelectWorkspace(task) => store.select_workspace(&task).map(Completion::Registry),
                         Command::Capture(..) => unreachable!(),
+                        Command::ComparisonBase(id, workspace, base) => Ok(Completion::Registered(id, store.comparison_base(&workspace, &base).map_err(|error| error.to_string()))),
                         Command::Rename(id, workspace, name) => Ok(Completion::Registered(id, store.rename(&workspace, &name).map_err(|error| error.to_string()))),
                         Command::Register(id, checkout) => Ok(Completion::Registered(id, store.register(checkout).map_err(|error| error.to_string()))),
                         Command::Cleanup(index) => store.start_cleanup(index).map(|_| Completion::Sealed),
@@ -754,6 +756,7 @@ impl Store {
             tx.execute_batch("CREATE TABLE IF NOT EXISTS workspace_names(workspace TEXT PRIMARY KEY, source TEXT NOT NULL); INSERT INTO workspace_names SELECT id,'retained' FROM workspaces WHERE true ON CONFLICT(workspace) DO UPDATE SET source='retained'; PRAGMA user_version=5;")?;
             tx.commit()?;
         }
+        db.execute_batch("CREATE TABLE IF NOT EXISTS workspace_comparison_bases(workspace TEXT PRIMARY KEY, reference BLOB NOT NULL, base_commit TEXT NOT NULL);")?;
         let mut store = Self {
             history_jobs: Default::default(),
             history_checkpoints: Default::default(),
@@ -1283,6 +1286,29 @@ impl Store {
         let tx = self.db.transaction()?;
         crate::registry::record(&tx, &state, Some(&path), &task)?;
         tx.commit()?;
+        crate::registry::snapshot(&self.db, current.as_deref())
+    }
+    fn comparison_base(
+        &mut self,
+        workspace: &str,
+        base: &crate::working_diff::Base,
+    ) -> Result<crate::registry::Registry> {
+        self.fault("registry")?;
+        let tx = self.db.transaction()?;
+        let exists: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM workspaces WHERE id=?1)",
+            [workspace],
+            |r| r.get(0),
+        )?;
+        if !exists {
+            return Err("Workspace unavailable; base not saved".into());
+        }
+        tx.execute("INSERT INTO workspace_comparison_bases(workspace,reference,base_commit) VALUES(?1,?2,?3) ON CONFLICT(workspace) DO UPDATE SET reference=excluded.reference,base_commit=excluded.base_commit", rusqlite::params![workspace,base.reference,base.commit])?;
+        tx.commit()?;
+        let current: Option<String> = self
+            .db
+            .query_row("SELECT task FROM app WHERE id=1", [], |row| row.get(0))
+            .optional()?;
         crate::registry::snapshot(&self.db, current.as_deref())
     }
     fn rename(&mut self, workspace: &str, name: &str) -> Result<crate::registry::Registry> {

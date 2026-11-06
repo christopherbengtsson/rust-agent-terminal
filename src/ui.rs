@@ -66,7 +66,15 @@ impl Ui {
         );
         let focus = if app.attached { "session" } else { "dashboard" };
         let title = if let Some(view) = &app.diff {
-            format!(" Working · {} ", crate::working_diff::printable(&view.name))
+            format!(
+                " {} · {} ",
+                if view.whole {
+                    "Whole workspace"
+                } else {
+                    "Working"
+                },
+                crate::working_diff::printable(&view.name)
+            )
         } else if app.cleanup_open {
             " History cleanup · oldest sealed stopped sessions first ".to_owned()
         } else if app.history_open {
@@ -547,7 +555,7 @@ impl Ui {
             && !app.attached
             && (frame.area().width < 80 || frame.area().height < 22)
         {
-            "j/k file · arrows scroll · r refresh · f/Esc back\ns stop · q quit · d detach · PgUp/PgDn"
+            "w Working/Whole · b base · j/k file · arrows scroll\nr refresh · f/Esc back · s stop · q quit · d detach"
         } else if app.first_prompt.is_some() || app.rename_workspace.is_some() {
             app.keyboard_help()
         } else if !app.attached
@@ -637,12 +645,20 @@ fn draw_working_diff(frame: &mut Frame, area: Rect, view: &crate::working_diff::
     );
     let [identity_area, error_area, body] = Layout::vertical([
         Constraint::Length(4),
-        Constraint::Length(if view.error.is_some() { 2 } else { 0 }),
+        Constraint::Length(if view.base_entry.is_some() {
+            3
+        } else if view.error.is_some() {
+            if snapshot.is_none() { 6 } else { 3 }
+        } else {
+            0
+        }),
         Constraint::Min(1),
     ])
     .areas(area);
     frame.render_widget(Paragraph::new(identity), identity_area);
-    if let Some(error) = &view.error {
+    if let Some(entry) = &view.base_entry {
+        frame.render_widget(Paragraph::new(format!("Local base (full refs/heads/… or refs/remotes/…):\n{}▏\nEnter saves and compares · Esc cancels · Ctrl-U clears", crate::working_diff::printable(entry))).wrap(Wrap { trim: false }), error_area);
+    } else if let Some(error) = &view.error {
         frame.render_widget(
             Paragraph::new(error.as_str())
                 .style(Style::default().fg(Color::Yellow))
@@ -653,7 +669,7 @@ fn draw_working_diff(frame: &mut Frame, area: Rect, view: &crate::working_diff::
     let Some(snapshot) = snapshot else {
         frame.render_widget(
             Paragraph::new(if view.loading {
-                "Loading Working comparison…"
+                "Loading comparison…"
             } else {
                 "Comparison unavailable; r retries. Esc returns."
             }),
