@@ -525,9 +525,8 @@ impl Worker {
                     }
                     if tx.send(event).is_err() { break; }
                 }
-                if let Some(event) = store.readable_step() {
-                    if tx.send(event).is_err() { break; }
-                }
+                if let Some(event) = store.readable_step()
+                    && tx.send(event).is_err() { break; }
                 if capacity_since.elapsed() >= Duration::from_secs(1) {
                     status.lock().unwrap().capacity = crate::cleanup::Capacity::sample(&store.directory);
                     capacity_since = Instant::now();
@@ -1294,9 +1293,6 @@ impl Store {
             .query_row("SELECT task FROM app WHERE id=1", [], |row| row.get(0))
             .optional()?;
         crate::registry::snapshot(&self.db, current.as_deref())
-    }
-    fn save(&mut self, state: &Observation, path: Option<Vec<u8>>, task: String) -> Result<()> {
-        self.save_named(state, path, task, None)
     }
     fn save_named(
         &mut self,
