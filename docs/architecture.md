@@ -69,9 +69,18 @@ dashboard controls it at a time; see
 necessary because the product requires agents to survive terminal
 or dashboard loss. The scripted prototype below implements supervisor/session
 ownership, durable persistence and conservative explicit crash reconciliation.
-The supervisor owns one active session per worktree, stable session IDs, launch
-deduplication, lifecycle transitions, and explicit stop versus detach. Ordinary
-quit requests supervisor shutdown; an unexpectedly lost client does not. On
+The supervisor enforces one active session per worktree and owns transport,
+controller election and Git admission. Its concrete `session::agent_session`
+owner retains launch deduplication, stable session identity, provisional execution,
+native controls, lifecycle transitions and final capture/durability obligations.
+The owner is a Rust value advanced by the supervisor, with private launch,
+execution and history records; it adds no session thread or event bus. It returns
+an observation snapshot and derived adoption eligibility, without exposing phase
+flags. The sole storage worker's completions are drained once and dispatched to
+that owner. Existing bounded creation, input, receipt, capture and cleanup workers
+retain their roles. Ordinary quit requests supervisor shutdown, which combines
+Git-job completion with the session owner's confirmed shutdown; an unexpectedly
+lost client does not. On
 supervisor failure/reboot, saved sessions become interrupted and require explicit
 recovery, never automatic coding restarts. Claude Code and Codex adapters use
 existing credentials and supported native resume; readable history is a separate
