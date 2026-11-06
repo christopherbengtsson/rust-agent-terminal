@@ -6071,14 +6071,30 @@ fn keyboard_project_registration_and_retained_selection_work_in_normal_and_small
             .success()
     );
     for (cols, rows) in [(160, 40), (60, 18)] {
-        let mut dashboard = Dashboard::open_geometry(
-            &fixture.repository,
-            &fixture.state(),
-            None,
-            None,
-            rows,
-            cols,
-        );
+        let deadline = Instant::now() + Duration::from_secs(8);
+        let mut dashboard = loop {
+            let mut candidate = Dashboard::open_geometry(
+                &fixture.repository,
+                &fixture.state(),
+                None,
+                None,
+                rows,
+                cols,
+            );
+            let screen = candidate.wait_any(&[
+                "Discovery complete",
+                "Adopted:",
+                "Another dashboard controls this supervisor",
+            ]);
+            if !screen.contains("Another dashboard controls this supervisor") {
+                break candidate;
+            }
+            candidate.kill();
+            assert!(
+                Instant::now() < deadline,
+                "previous dashboard controller was not released"
+            );
+        };
         dashboard.wait_any(&["Discovery complete", "Adopted:"]);
         if cols == 160 {
             dashboard.send(b"A");
@@ -6204,10 +6220,10 @@ fn first_prompt_and_manual_names_preserve_workspace_and_conversation_identity() 
     dashboard.wait("Adopted:");
     dashboard.send(b"C");
     dashboard.wait("First prompt");
-    dashboard.send(b"Cancel me");
+    dashboard.send(b"\x1b[200~Cancel me\x1b[201~");
     dashboard.send(b"\x1b");
-    dashboard.send(b"d");
-    dashboard.child.wait().unwrap();
+    std::thread::sleep(Duration::from_millis(100));
+    dashboard.kill();
     let mut control = Controller::connect(&fixture);
     assert!(control.greeting["identity"].is_null());
     let workspace = control.greeting["registry"]["workspaces"][0].clone();

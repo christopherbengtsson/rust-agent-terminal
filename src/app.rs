@@ -241,6 +241,32 @@ impl App {
             }
             return None;
         }
+        if let Some(path) = self.project_input.as_mut() {
+            match key.code {
+                KeyCode::Esc => self.project_input = None,
+                KeyCode::Enter => {
+                    let path = self.project_input.take().unwrap();
+                    if path.is_empty() {
+                        self.error = Some("Enter an existing local repository path".into());
+                        return None;
+                    }
+                    self.workspaces_open = true;
+                    return Some(Effect::Session(Request::Register(path.into_bytes())));
+                }
+                KeyCode::Backspace => {
+                    path.pop();
+                }
+                KeyCode::Char(character)
+                    if !key.modifiers.intersects(
+                        KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER,
+                    ) && path.len() < 32768 =>
+                {
+                    path.push(character);
+                }
+                _ => {}
+            }
+            return None;
+        }
         if !key
             .modifiers
             .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER)
@@ -274,32 +300,6 @@ impl App {
                 }
                 return None;
             }
-        }
-        if let Some(path) = self.project_input.as_mut() {
-            match key.code {
-                KeyCode::Esc => self.project_input = None,
-                KeyCode::Enter => {
-                    let path = self.project_input.take().unwrap();
-                    if path.is_empty() {
-                        self.error = Some("Enter an existing local repository path".into());
-                        return None;
-                    }
-                    self.workspaces_open = true;
-                    return Some(Effect::Session(Request::Register(path.into_bytes())));
-                }
-                KeyCode::Backspace => {
-                    path.pop();
-                }
-                KeyCode::Char(character)
-                    if !key.modifiers.intersects(
-                        KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER,
-                    ) && path.len() < 32768 =>
-                {
-                    path.push(character);
-                }
-                _ => {}
-            }
-            return None;
         }
         if key.code == KeyCode::Char('A')
             && !key
