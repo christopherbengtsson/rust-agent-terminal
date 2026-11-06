@@ -3,6 +3,7 @@ mod events;
 mod git;
 mod lifecycle;
 mod native_input;
+mod persistence;
 mod session;
 mod terminal;
 mod ui;

@@ -16,6 +16,10 @@ pub enum Effect {
 pub struct App {
     pub session: crate::session::Observation,
     pub attached: bool,
+    pub history_open: bool,
+    pub history_scroll: u16,
+    history_index: usize,
+    history_offset: u64,
     pub shutdown_pending: bool,
     detached: bool,
     pub launch_request: String,
@@ -31,6 +35,10 @@ impl App {
         Self {
             session: Default::default(),
             attached: false,
+            history_open: false,
+            history_scroll: 0,
+            history_index: 0,
+            history_offset: 0,
             shutdown_pending: false,
             detached: false,
             launch_request: uuid::Uuid::new_v4().to_string(),
@@ -79,6 +87,51 @@ impl App {
             }
             return Some(Effect::Session(Request::Key(key)));
         }
+        if key.modifiers.is_empty() {
+            match key.code {
+                KeyCode::Char('j') | KeyCode::Down if self.history_open => {
+                    self.history_scroll = self.history_scroll.saturating_add(1);
+                    return None;
+                }
+                KeyCode::Char('k') | KeyCode::Up if self.history_open => {
+                    self.history_scroll = self.history_scroll.saturating_sub(1);
+                    return None;
+                }
+                KeyCode::Char('h') => {
+                    self.history_open = !self.history_open;
+                    self.history_index = self.session.history_index;
+                    self.history_offset = 0;
+                }
+                KeyCode::Char('n') if self.history_open => {
+                    self.history_index += 1;
+                    self.history_offset = 0;
+                }
+                KeyCode::Char('p') if self.history_open => {
+                    self.history_index = self.history_index.saturating_sub(1);
+                    self.history_offset = 0;
+                }
+                KeyCode::Char(']') if self.history_open => {
+                    self.history_offset = self
+                        .session
+                        .history
+                        .as_ref()
+                        .and_then(|p| p.next)
+                        .unwrap_or(self.history_offset);
+                }
+                KeyCode::Char('[') if self.history_open => {
+                    self.history_offset =
+                        self.history_offset.saturating_sub(crate::persistence::PAGE);
+                }
+                _ => {}
+            }
+            if self.history_open && matches!(key.code, KeyCode::Char('h' | 'n' | 'p' | '[' | ']')) {
+                self.history_scroll = 0;
+                return Some(Effect::Session(Request::History {
+                    index: self.history_index,
+                    offset: self.history_offset,
+                }));
+            }
+        }
         match key.code {
             KeyCode::Char('d') if key.modifiers.is_empty() => {
                 if self.shutdown_pending {
@@ -113,6 +166,7 @@ impl App {
                 )));
             }
             KeyCode::Enter if key.modifiers.is_empty() && self.session.identity.is_some() => {
+                self.history_open = false;
                 self.attached = true;
                 return None;
             }
@@ -135,7 +189,7 @@ impl App {
         if self.attached {
             "Native input · Ctrl-C interrupt · Ctrl-] / Ctrl-5 dashboard (keeps session running)"
         } else {
-            "j/k select · r refresh · a adopt · l fixture · Enter attach · s stop · d detach · q/Esc/Ctrl-C quit/stop"
+            "h history · n/p session · [/] page · j/k select · r refresh · a adopt · l fixture · Enter attach · s stop · d detach · q/Esc/Ctrl-C quit/stop"
         }
     }
 
