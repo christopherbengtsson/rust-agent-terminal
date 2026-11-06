@@ -142,7 +142,7 @@ fn files(bytes: &[u8]) -> Result<(Vec<ChangedFile>, usize), String> {
             if x == b'D' || y == b'D' {
                 states.push("deletion");
             }
-            if x == b'A' {
+            if x == b'A' || y == b'A' {
                 states.push("added");
             }
             if x == b'T' || y == b'T' {
@@ -457,6 +457,19 @@ mod tests {
         );
     }
     #[test]
+    fn oversized_file_lists_remain_bounded_with_an_explicit_omission_count() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        git(root, &["init", "-q"]);
+        for index in 0..1030 {
+            fs::write(root.join(format!("file-{index:04}")), "text\n").unwrap();
+        }
+        let snapshot = inspect(root, "w", "r", None, &AtomicBool::new(false)).unwrap();
+        assert_eq!(snapshot.files.len(), 1024);
+        assert_eq!(snapshot.omitted, 6);
+        assert_eq!(snapshot.selected.as_deref(), Some(b"file-0000".as_slice()));
+    }
+    #[test]
     fn inspection_disables_repository_diff_textconv_and_fsmonitor_programs_and_labels_submodules() {
         use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();
@@ -591,6 +604,16 @@ mod tests {
         let request = app.diff.as_ref().unwrap().request.clone();
         app.observe_session(Observation {
             working_diff: Some(Response {
+                workspace: "w".into(),
+                request: "old-request".into(),
+                result: Err("stale request".into()),
+            }),
+            ..app.session.clone()
+        });
+        assert!(app.diff.as_ref().unwrap().loading);
+
+        app.observe_session(Observation {
+            working_diff: Some(Response {
                 workspace: "another-workspace".into(),
                 request: request.clone(),
                 result: Err("wrong workspace".into()),
@@ -707,6 +730,17 @@ mod tests {
         git(root, &["add", "tracked"]);
         fs::write(root.join("tracked"), "unstaged\n").unwrap();
         fs::write(root.join("new\nfile"), "new text\n\x1b[31m unsafe\n").unwrap();
+        std::os::unix::fs::symlink(root.join("tracked"), root.join("link")).unwrap();
+        let link = inspect(
+            root,
+            "workspace",
+            "link-request",
+            Some(b"link"),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        assert!(link.content.contains("unsupported"));
+        fs::remove_file(root.join("link")).unwrap();
         let index = fs::read(root.join(".git/index")).unwrap();
         let snapshot = inspect(
             root,

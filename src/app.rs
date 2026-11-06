@@ -314,7 +314,7 @@ impl App {
                 }
             });
             let Some(workspace) = workspace else {
-                self.error = Some("Adopt a checkout before inspecting its Working diff".into());
+                self.error = Some("Checkout has no retained workspace yet; wait for adoption metadata or explicitly adopt it before Working inspection".into());
                 return None;
             };
             let mut view =
