@@ -180,6 +180,101 @@ defer remote transport, provider abstractions, containers and extra crates until
 remote execution is explicitly scoped and its deployment/recovery trade-offs can
 be decided with evidence.
 
+## Milestone 2 migration boundaries (planned)
+
+The completed Milestone 1 implementation still has one global runtime/current
+adoption and singleton capture accounting. The persistence writer flushes its
+single active transcript handle when the session identity changes; simply
+allowing several PTYs would cause frequent commits under interleaved output.
+Early Milestone 2 work must establish retained workspace/session records,
+explicitly targeted requests/observations and fair bounded per-session capture/
+durability accounting while preserving one writer. Search/indexing must not
+monopolize that worker. Move synchronous adoption path/Git work out of the shared
+supervisor loop before adding potentially slow fetch/mutation operations. See
+the [Milestone 1 implementation audit](../.scratch/milestone-2-coding-coordination/interview.md#milestone-1-implementation-audit-prerequisites-within-milestone-2).
+
+The Milestone 2 interview retains one active coding session per worktree and
+external source editing, while explicitly deferring multiple simultaneous native
+sessions in one workspace and editing directly inside dashboard diffs. Preserve
+these future paths through concrete data ownership, not a speculative framework:
+
+- Workspace identity and session identity are separate. Workspace records own a
+  collection of historical/current session identities; runtime, input, viewport,
+  status and capture operations target a specific session. Enforce the current
+  one-active-coding-session limit through reservations on canonical worktree
+  identity, attributed to workspace/session IDs. Aliased or duplicate workspace
+  records must not bypass checkout exclusivity. Keep this admission policy
+  separate from the runtime collection and durable session schema.
+  A later concurrency change still requires real shared-file/resize/input and
+  native compatibility decisions; it is not merely increasing a numeric limit.
+- Deepening launch and history completion must remain per Agent session, not
+  create a new singleton runtime per Workspace. PTY, native conversation, status,
+  input, cancellation and capture belong to that session; the Worktree and its
+  branch are shared Workspace resources. Stopping or sealing one session alone
+  cannot authorize archive, checkpoint, detach-for-branch-deletion or folder
+  removal. Those Workspace operations require all relevant managed sessions and
+  uncertain execution reservations to be accounted for and their capture tails
+  complete, then hold off new admission while mutation is pending. This is useful
+  with today's limit too; it does not implement future concurrent agents or
+  promise control over arbitrary externally started processes.
+- Keep named diff content, comparison identity and file/line attribution separate
+  from Ratatui presentation and external-editor handoff. Future inline editing
+  can use an explicit execution-side save operation with freshness checks; the
+  renderer must not become an owner of checkout writes. Do not add placeholder
+  edit controls, a plugin framework or unused backend abstractions now.
+- Archive saves a local checkpoint when needed and pins the saved HEAD with a
+  workspace-specific Git reference before optional local-branch deletion. A
+  metadata commit hash without a live Git reference is insufficient protection
+  from Git garbage collection. Retain the folder and ignored files; detach the
+  stopped archived checkout at its saved commit when necessary to release its
+  branch. Never force-delete a branch checked out elsewhere or overwrite a
+  changed ref. Recovery must reconcile Git and durable metadata after a lost
+  reply/crash, keep save/cleanup outcomes distinguishable, and recreate a branch
+  on restore without overwriting a reused name. Archive refs and saved code are
+  distinct from transcript deletion; no age-triggered cleanup is implied.
+
+### Compatibility with later milestones
+
+Milestone 2 changes concrete coding-session mechanisms. Preserve these boundaries
+for Milestones 3–5 without implementing their features prematurely:
+
+- **Review execution:** future restricted preparation can inspect a PR without
+  a registered local project or coding workspace. Its review-cycle/comparison
+  identity and revision-pinned snapshot remain separate from ordinary coding
+  launch, arbitrary project setup and checkout mutation under ADR 0002. Reusing
+  process/storage mechanisms must not grant those coding capabilities. Coding
+  admission, one-at-a-time review preparation and sole SQLite-writer ownership
+  are independent limits; the later review queue cannot serialize all coding.
+- **Diffs, history and drafts:** coding comparisons and searchable terminal text
+  are not substitutes for pinned review head/base identity (ADR 0006), structured
+  draft comments/anchors/choices or exact saved editor text. Comparison artifacts
+  identify their context. External source editing and future inline source edits
+  are separate from Milestone 3 review-comment editing. History projections are
+  derived data; later structured draft writes need their own durable records and
+  fair storage scheduling, not reconstruction from transcripts.
+- **Archive and own-PR continuation:** deleting a visible local branch must not
+  erase retained workspace identity, original branch/base/checkpoint information
+  or later linked PR/review records, nor imply merge, push or remote deletion.
+  Milestone 4 PR links must use repository/PR identity independently of a reused
+  or recreated branch name. A workspace archive ref is not a review comparison.
+  Report checkpoint save, archive visibility and optional branch-cleanup outcomes
+  distinctly, preserving confirmed recovery refs through partial failure.
+- **Attention and validation:** historical or unacknowledged attention context
+  remains separate from current evidenced semantic state under ADR 0003. Expired
+  confidence stays Unknown; an old event must not masquerade as a current request.
+  In-app coding coordination belongs here; macOS notification delivery/permissions
+  and combined six-coding-session/PR/reviewer validation remain Milestone 5 work.
+- **Launch/setup boundaries:** naming is metadata work, not permission to create
+  a coding turn. Create without starting, startup, restore and reconciliation
+  never launch an agent or submit a prompt. Any initial prompt belongs to an
+  explicit Create and start request. Configured setup runs with owned process
+  progress, cancellation, quit and uncertain-outcome handling; an uncertain setup
+  command must not be replayed automatically because it can have external effects.
+  This does not add review automation or general onboarding to Milestone 2.
+
+These are requirements for future Milestone 2 implementation, not claims that
+the existing singleton supervisor or editor/diff flows already implement them.
+
 ## Native-session interaction baseline (planned)
 
 This is the design baseline for Milestone 1, not a description of implemented

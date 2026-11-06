@@ -89,6 +89,20 @@ Acceptance: complete C1–C7, including real macOS checks with both supported to
 Persistence and necessary setup arrive with the first feature that needs them;
 they are not deferred to release validation.
 
+Begin with the prerequisites identified from the completed session proof:
+retained project/workspace/session records and migration, explicitly targeted
+coding operations with canonical-worktree exclusivity, fair multi-session capture
+and search scheduling, and execution-owned bounded Git/setup jobs with recoverable
+outcomes. Qualify the native creation/naming/history experience early rather than
+assuming terminal recordings are structured chat messages.
+
+Preserve the [later-milestone boundaries](architecture.md#compatibility-with-later-milestones):
+restricted revision-pinned reviewers, structured review drafts and GitHub actions
+remain Milestones 3–4; macOS notifications and combined release validation remain
+Milestone 5. Coding-history projection and local archive recovery must not replace
+review records or future PR identity. These are early Milestone 2 tickets, not a
+new prerequisite milestone or a reopening of the completed Milestone 1 proof.
+
 ## Milestone 3 — GitHub review preparation and human submission
 
 A separate milestone in the same first release, following the session proof:

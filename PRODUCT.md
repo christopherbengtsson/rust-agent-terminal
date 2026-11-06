@@ -46,6 +46,7 @@ The first release exposes these settings:
 | Notifications | Persistent in-app indicators and configurable macOS notifications, subject to OS permission. |
 | Dashboard exit | Quit and stop local activity by default; explicit detach is also available. The default exit behavior is configurable. |
 | Task base branch | Repository default branch by default, with an override when starting a task. |
+| Delete local branch on archive | Enabled for branches created by the product; disabled for adopted existing branches unless explicitly selected for deletion. Archived work remains recoverable independently of the branch name. |
 
 Squash is the default PR merge method. An explicit auto-merge choice belongs to the individual PR and starts off.
 
@@ -58,13 +59,35 @@ Settings must describe working capabilities. Future options are not exposed as n
 | Concept | Meaning |
 | --- | --- |
 | Project | A registered local Git repository and its worktrees and tasks. |
-| Task | An identifiable stream of coding work, associated with a project and worktree, with session history and an optional linked PR. |
+| Workspace (called task elsewhere in this document) | An identifiable stream of coding work, associated with a project and worktree, with session history and an optional linked PR. It persists across agent conversations. |
 | Worktree | The checkout and branch in which the task's agent works. |
 | Agent session | A conversation and interactive runtime using Claude Code or Codex CLI, attached to a task's worktree. |
 
 Users add existing local repositories. The dashboard discovers their existing worktrees and allows explicit adoption of an existing worktree to continue work. Discovery alone never starts an agent or changes repository files. Cloning repositories remains available through ordinary Git tooling rather than a dedicated dashboard flow.
 
 A new independent coding task gets a new branch and worktree based on the selected base branch. The project, task identity, branch, worktree path, and agent must be easy to identify without inspecting terminal output. The precise task-creation flow is left to UI design.
+
+The user-facing name for this unit is workspace. Creation does not require a
+manually entered title: readable names are derived from what the user asks the
+agent to do, with manual renaming available. The workspace's identity and folder
+remain stable when its name changes. Offer an explicit Create and start action
+that creates the workspace, runs configured setup, and starts the selected native
+agent, including the user's supplied first prompt when present. Creating without
+starting is also available. Creation, setup, and agent launch retain distinct
+outcomes: failed later steps keep the created workspace and offer recovery
+without duplicating completed work or silently launching an agent.
+
+Normally creation fetches the configured remote base before creating the new
+branch. If that fails, explain that the latest code could not be obtained and
+offer an explicit choice to create from a locally available version, identifying
+the commit used. Repositories without a remote can use a selected local base.
+
+Projects can configure an optional setup command that runs in each newly created
+workspace. Show progress and errors. Failed setup keeps the workspace and offers
+Retry setup or an explicit Continue without setup choice before agent launch.
+Starting the agent requires the user's explicit launch intent, either Create and
+start or a later Start action. Failed setup does not silently start an agent;
+continuing explains whether the previously requested launch will proceed.
 
 The dashboard permits one active coding-agent session per worktree in this release. Historical sessions remain accessible, and a subsequent session can use either supported tool. Switching tools starts a new native conversation; it does not transfer the previous tool's conversation state.
 
@@ -74,10 +97,39 @@ Starting, interrupting, stopping, resuming, archiving, removing a worktree, and 
 
 - Exiting an agent through its native CLI stops that session's process without deleting its history or task context.
 - Resume uses the agent's supported native session recovery. Retaining readable history is guaranteed separately from the ability to resume a native conversation.
+- Users can select an older conversation as well as the latest one for explicit
+  native resume, using its original agent tool. An occupied worktree offers
+  attachment to its running session; resuming another conversation requires that
+  session to stop first.
 - If native resume is unavailable, explain why and allow a new session in the retained worktree without pretending the old conversation resumed.
 - Archiving is explicit. Agent exit, turn completion, or PR merge does not automatically mean the task should be archived.
 - Archiving hides a task from active work while retaining its history and checkout.
+- Archiving requires confirmed session stop. A clearly labeled Stop and archive
+  action can perform both in one user flow; failed or uncertain stop prevents
+  saving and archive completion. Stop also remains available independently.
+  Unarchiving restores visibility without starting an agent.
+- When unfinished code changes are present, archiving saves them in a clearly
+  named local archive checkpoint commit on the workspace branch. Successful
+  feedback identifies the checkpoint and says it is saved locally, not pushed.
+  Failed saving leaves the workspace unarchived with an actionable explanation.
+  The UI must identify files excluded from the checkpoint rather than imply that
+  every workspace file was backed up.
+- Archive checkpoints include tracked files and new files Git does not ignore.
+  Ignored files remain untouched in the retained workspace folder and are
+  identified as outside the checkpoint's coverage.
+- Archive retains a recovery point independently of the visible branch name.
+  When Delete local branch on archive applies, delete the local branch only after
+  confirming that saved work remains recoverable. Preserve the workspace folder
+  and history. Restoration can recreate a branch without overwriting a branch
+  that now uses the old name. Do not automatically delete remote branches.
 - Worktree cleanup is a separate action with checks for uncommitted and unpushed work. Cleanup must not silently discard that work.
+- Removing a workspace folder retains saved commits, the archive recovery point,
+  session history, and any branch not explicitly selected for archive deletion.
+  Confirm a saved recovery point for the exact current commit before removal,
+  including detached worktrees and workspaces that have never been archived.
+  Unsaved files block removal. If commits are saved only locally, warn that they
+  have not been pushed and require explicit confirmation before folder removal.
+  Uncertain checks remain visible and block removal.
 - Removing a worktree does not remove session history or review records. The UI explains when a removed checkout prevents resuming work in place.
 - History remains until explicitly deleted. Archived tasks and stopped sessions remain discoverable through navigation and search.
 
@@ -93,6 +145,12 @@ State includes enough context to understand what needs attention. A quiet termin
 
 Both core workflows are fully keyboard-operable. Dashboard navigation provides Vim-style movement, arrow navigation, search, and discoverable keyboard help. Exact bindings and responsive layout details are UI-design decisions within the dashboard image's target composition.
 
+Find workspace searches project, workspace title, branch, and path. Search
+history finds text in retained conversations and captured terminal output across
+workspaces, including archived workspaces and those whose checkout is missing.
+History results open the matching session and passage; unavailable checkouts and
+archived state remain visible.
+
 Dashboard navigation and native agent interaction have explicit focus. Attaching to a session gives the native CLI control of input, including its prompts, approvals, and normal shortcuts. A documented escape shortcut returns to dashboard navigation. For example, Ctrl-C within an attached session retains the agent's native interrupt behavior; it is not redefined as a global quit action.
 
 The user can move between projects, tasks, sessions, and reviews while background work continues. Opening an external editor and returning restores the previous dashboard context.
@@ -107,7 +165,14 @@ Diffs follow the user's current job:
 
 The coding-task default is always working changes, rather than remembering a different comparison from a previous inspection. The user can explicitly select the whole-task comparison.
 
-Diffs can be inspected in Vim by default or a configured alternative editor. PR revision context must remain clear; a review diff must not silently show unrelated local working changes. Dedicated staging, commit, and push controls are deferred.
+Coding-task changes are inspectable in the dashboard through a changed-file list
+and readable diffs. The user can also open either coding comparison in Vim by
+default or a configured alternative editor. A separate Open task in editor action
+opens the task's actual working files for editing. Closing a terminal editor
+returns to the same task and dashboard context. These are distinct inspection
+and editing actions; exact bindings and presentation remain UI-design decisions.
+
+PR revision context must remain clear; a review diff must not silently show unrelated local working changes. Dedicated staging, commit, and push controls are deferred.
 
 ## Giving reviews
 
@@ -245,8 +310,15 @@ These are outside the first release:
 - Arbitrary agent-command support beyond the two supported integrations, or a replacement conversation interface that hides their native CLIs.
 - Importing historical sessions started outside the dashboard or transferring native conversation state between agent tools.
 - Multiple active coding agents sharing a worktree. Keep this in mind as a future configurable capability without exposing it as a launch setting.
+- Editing source directly inside the dashboard's diff view. Milestone 2 supports
+  dashboard inspection and external editing; inline editing is a later addition.
 - Automatically running review builds, lints, or tests. Future configuration may enable selected commands; it is deferred rather than merely switched off in this release.
 - Dedicated cloning, staging, commit, push, or PR-creation controls.
+- Future project entry points should more closely follow Conductor: Open GitHub
+  project to select and clone a GitHub repository, and Quick start to create a new
+  local repository. These are planned later additions alongside Open project for
+  an existing local repository; they are outside Milestone 2 and are not assigned
+  a delivery milestone yet.
 - Replying to GitHub conversations, resolving threads, or automatically acting on feedback.
 - Automatic regeneration of stale drafts or ongoing monitoring of completed reviews without a renewed request.
 - Automatic publication of agent-generated reviews or automatic merging without a user's explicit merge or auto-merge decision.
