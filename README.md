@@ -386,7 +386,9 @@ prompt. Independent workspace creation uses the same native launch boundary.
 `N` creates an independent workspace in the selected registered project. The form
 shows its base, suggested branch and stable folder, chosen agent and optional
 first prompt; it requires no title. Choose a local branch explicitly when there
-is no unambiguous remote default. Enter means Create without starting; Ctrl-S
+is no unambiguous remote default. With remotes configured, use an explicit remote
+base (for example `origin/main`) or a local branch with a configured upstream.
+Enter means Create without starting; Ctrl-S
 means Create and start. Generated folders live under the supervisor state
 folder's `workspaces/<project>/<operation>` directory, outside the original
 checkout. Branch, folder and base overrides never overwrite existing work.

@@ -623,7 +623,14 @@ impl Ui {
                             .as_ref()
                             .map(|e| format!("Native launch failed: {}", visible(e)))
                             .unwrap_or_else(|| {
-                                "Native agent started; attach through its workspace".into()
+                                if receipt.lifecycle == crate::events::Lifecycle::Running {
+                                    "Native agent started; attach through its workspace".into()
+                                } else {
+                                    format!(
+                                        "Native launch confirmed; process {:?}; history retained",
+                                        receipt.lifecycle
+                                    )
+                                }
                             })
                     } else if receipt.pending {
                         "Native launch awaiting durable result".into()

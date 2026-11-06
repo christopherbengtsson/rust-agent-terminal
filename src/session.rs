@@ -446,7 +446,11 @@ impl Sessions {
                     request: state.launch_request.clone(),
                     session: state.session_identity.as_ref().map(|id| id.session.clone()),
                     lifecycle: state.lifecycle,
-                    result: state.launch_result.clone(),
+                    result: if state.metadata_pending {
+                        None
+                    } else {
+                        state.launch_result.clone()
+                    },
                     pending: state.metadata_pending,
                     error: state.error.clone(),
                 });

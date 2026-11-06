@@ -34,7 +34,8 @@ commit and displayed launch choice. Renaming remains the existing independent
 local metadata operation.
 
 The receipt separates saved checkout facts from the originating native owner's
-launch result. It displays base and exact commit before the local fallback action.
+launch result. Provisional native results are masked until that owner's matching
+durability obligations settle, just like the existing top-level launch result. It displays base and exact commit before the local fallback action.
 TestBackend assertions exercise 160×40 and 60×18 forms and fallback receipts,
 including an intentionally long fetch error that previously hid the commit.
 The creation form/receipt occupies the native-session area while the normal
