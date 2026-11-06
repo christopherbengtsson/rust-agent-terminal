@@ -289,7 +289,7 @@ impl Ui {
                 &compact_help
             } else {
                 compact_help = format!(
-                    "a adopt · c Claude · l fixture · Enter attach · s stop · d detach\nq quit/stop · Process: {:?} · status: unknown",
+                    "a adopt · c Claude · l fixture · Enter attach · s stop · u reconcile · d detach\nq quit/stop · Process: {:?} · status: unknown",
                     app.session.lifecycle
                 );
                 &compact_help

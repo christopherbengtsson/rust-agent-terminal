@@ -32,6 +32,7 @@ pub enum Request {
     Launch(String),
     LaunchClaude(String),
     QueryLaunch(String),
+    Reconcile,
     History { index: usize, offset: u64 },
     Input(Vec<u8>),
     Key(crossterm::event::KeyEvent),
@@ -60,6 +61,8 @@ pub struct LaunchResult {
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Observation {
+    #[serde(default)]
+    pub execution: Option<crate::recovery::Execution>,
     #[serde(default)]
     pub history: Option<crate::persistence::HistoryPage>,
     #[serde(default)]
@@ -362,6 +365,11 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             task_identity.clone(),
         ))?;
     let mut save_pending = 1usize;
+    let mut pending_launch: Option<Request> = None;
+    let mut prepared_ready = false;
+    let mut gate_release: Option<SyncSender<()>> = None;
+    let mut gate_receipt: Option<Receiver<crate::recovery::Receipt>> = None;
+    let mut outcome_reply = false;
     state.metadata_pending = true;
     let mut metadata_failed = false;
     let mut flush_pending = false;
@@ -386,6 +394,16 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
         while let Ok(event) = storage.events.try_recv() {
             use crate::persistence::Completion;
             match event {
+                Completion::Prepared => {
+                    save_pending = save_pending.saturating_sub(1);
+                    prepared_ready = true;
+                }
+                Completion::Authorized => {
+                    save_pending = save_pending.saturating_sub(1);
+                    if let Some(release) = gate_release.take() {
+                        let _ = release.try_send(());
+                    }
+                }
                 Completion::Saved => {
                     save_pending = save_pending.saturating_sub(1);
                     if save_pending == 0 {
@@ -405,6 +423,19 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     if kind == "metadata" {
                         save_pending = save_pending.saturating_sub(1);
                         metadata_failed = true;
+                        pending_launch = None;
+                        prepared_ready = false;
+                        gate_release = None;
+                    }
+                    if outcome_reply || pending_launch.is_none() {
+                        outcome_reply = false;
+                        state.metadata_pending = true;
+                        state.error = Some(format!(
+                            "Launch/storage outcome not durable: {error}; stop or repair storage before retrying"
+                        ));
+                        if let Some(stream) = controller.as_mut() {
+                            let _ = send_observation(stream, &state);
+                        }
                     }
                     flush_pending = false;
                     shutdown = false;
@@ -413,6 +444,72 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                         "History storage failed: {error}; not saved, retry quit"
                     ));
                 }
+            }
+        }
+        if let Some(receipt) = &gate_receipt
+            && let Ok(result) = receipt.try_recv()
+        {
+            gate_receipt = None;
+            crate::recovery::crash_barrier(directory, "before-result");
+            match result {
+                crate::recovery::Receipt::Executed => {
+                    if let Some(evidence) = &state.execution
+                        && let Err(error) = evidence.verify_live()
+                    {
+                        state.error = Some(format!(
+                            "Exec receipt lost its live process identity: {error}; launch outcome uncertain"
+                        ));
+                    }
+                }
+                crate::recovery::Receipt::ExecFailed(error) => {
+                    state.execution = None;
+                    state.error = Some(if state.agent.as_deref() == Some("Claude Code") {
+                        format!(
+                            "Claude Code launch failed: {error}; adopted checkout retained. Install claude on PATH and run claude auth login in your usual terminal"
+                        )
+                    } else {
+                        format!(
+                            "Native executable launch failed: {error}; adopted checkout retained"
+                        )
+                    });
+                }
+                crate::recovery::Receipt::Unknown(error) => {
+                    state.error = Some(format!(
+                        "Native exec receipt uncertain: {error}; stop managed execution or reconcile explicitly"
+                    ))
+                }
+            }
+            let result = LaunchResult {
+                request: state.launch_request.clone(),
+                identity: state.identity.clone(),
+                error: state.error.clone(),
+            };
+            launches.insert(result.request.clone(), result.clone());
+            state.launch_result = Some(result);
+            match storage.commands.try_send(crate::persistence::Command::Save(
+                crate::persistence::metadata(&state),
+                checkout.as_ref().map(|p| path_bytes(p)),
+                task_identity.clone(),
+            )) {
+                Ok(()) => {
+                    save_pending += 1;
+                    outcome_reply = true;
+                }
+                Err(error) => {
+                    metadata_failed = true;
+                    state.error = Some(format!(
+                        "Launch outcome not durable: {error}; reconcile before replacement"
+                    ));
+                }
+            }
+        }
+        if outcome_reply && save_pending == 0 && !metadata_failed {
+            crate::recovery::crash_barrier(directory, "after-result");
+            outcome_reply = false;
+            state.metadata_pending = false;
+            screen.lock().unwrap().snapshot(&mut state);
+            if let Some(stream) = controller.as_mut() {
+                let _ = send_observation(stream, &state);
             }
         }
         if let Some(done) = &capture_done
@@ -482,6 +579,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                 } else {
                     Lifecycle::Stopped
                 };
+                state.execution = None;
                 final_flush = false;
                 if storage
                     .commands
@@ -507,7 +605,11 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             return Ok(());
         }
         // Accept/reject independently of the active client's commands or output.
-        for _ in 0..32 {
+        for _ in 0..if pending_launch.is_some() || gate_receipt.is_some() || outcome_reply {
+            0
+        } else {
+            32
+        } {
             match listener.accept() {
                 Ok((mut incoming, _)) => {
                     incoming.set_write_timeout(Some(Duration::from_millis(100)))?;
@@ -531,43 +633,52 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                 Err(error) => return Err(error.into()),
             }
         }
-        let Some(stream) = controller.as_mut() else {
-            thread::sleep(Duration::from_millis(5));
-            continue;
-        };
-        let mut incoming = [0; 4096];
-        match stream.read(&mut incoming) {
-            Ok(0) => {
-                controller = None;
-                pending.clear();
+        if !(prepared_ready && pending_launch.is_some()) {
+            let Some(stream) = controller.as_mut() else {
+                thread::sleep(Duration::from_millis(5));
                 continue;
+            };
+            let mut incoming = [0; 4096];
+            match stream.read(&mut incoming) {
+                Ok(0) => {
+                    controller = None;
+                    pending.clear();
+                    continue;
+                }
+                Ok(n) => pending.extend_from_slice(&incoming[..n]),
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
+                Err(_) => {
+                    controller = None;
+                    pending.clear();
+                    continue;
+                }
             }
-            Ok(n) => pending.extend_from_slice(&incoming[..n]),
-            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
-            Err(_) => {
+            if pending.len() > MAX_FRAME {
                 controller = None;
                 pending.clear();
                 continue;
             }
         }
-        if pending.len() > MAX_FRAME {
-            controller = None;
-            pending.clear();
-            continue;
-        }
-        let Some(end) = pending.iter().position(|byte| *byte == b'\n') else {
-            thread::sleep(Duration::from_millis(5));
-            continue;
-        };
-        let bytes: Vec<_> = pending.drain(..=end).collect();
-        let request: Request = match serde_json::from_slice(&bytes) {
-            Ok(request) => request,
-            Err(_) => {
-                controller = None;
-                pending.clear();
+        let continuing = prepared_ready && pending_launch.is_some();
+        let request: Request = if continuing {
+            prepared_ready = false;
+            pending_launch.take().unwrap()
+        } else {
+            let Some(end) = pending.iter().position(|byte| *byte == b'\n') else {
+                thread::sleep(Duration::from_millis(5));
                 continue;
+            };
+            let bytes: Vec<_> = pending.drain(..=end).collect();
+            match serde_json::from_slice(&bytes) {
+                Ok(request) => request,
+                Err(_) => {
+                    controller = None;
+                    pending.clear();
+                    continue;
+                }
             }
         };
+        let mut deferred = false;
         if !matches!(request, Request::Screen) {
             state.error = None;
         }
@@ -579,6 +690,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                 Request::Adopt(_)
                     | Request::Launch(_)
                     | Request::LaunchClaude(_)
+                    | Request::Reconcile
                     | Request::Stop
                     | Request::Shutdown
             );
@@ -598,6 +710,14 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                 state.launch_result = Some(recorded.clone());
                 state.error = recorded.error.clone();
                 return Ok(());
+            }
+            if pending_launch.is_some() || gate_receipt.is_some() {
+                if matches!(
+                    request,
+                    Request::Adopt(_) | Request::Launch(_) | Request::LaunchClaude(_)
+                ) {
+                    return Err("Launch reconciliation pending; wait for durable outcome".into());
+                }
             }
             match request {
                 Request::Adopt(bytes) => {
@@ -621,7 +741,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                             "Stop the existing session before adopting another checkout".into()
                         );
                     }
-                    if state.lifecycle == Lifecycle::Interrupted && checkout.as_ref() != Some(&path) {
+                    if state.execution.is_some() && child.is_none() && checkout.as_ref() != Some(&path) {
                         return Err("Interrupted execution is uncertain; inspect history before changing adoption".into());
                     }
                     if checkout.as_ref() != Some(&path) {
@@ -632,9 +752,15 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     state.adopted = Some(path.display().to_string());
                     checkout = Some(path);
                 }
+                Request::Reconcile => {
+                    if child.is_some() || stopping.is_some() { return Err("Session owned by current supervisor; stop it normally".into()); }
+                    if let Some(evidence) = &state.execution { evidence.reconcile()?; }
+                    state.execution = None;
+                    state.error = Some("Reconciled: no released coding execution survives; history retained. Explicitly launch a new conversation when ready.".into());
+                }
                 Request::QueryLaunch(_) => return Err("Launch request unknown to this supervisor; do not replay uncertain activity after supervisor loss".into()),
                 Request::Launch(request) | Request::LaunchClaude(request) => {
-                    if state.lifecycle == Lifecycle::Interrupted { return Err("Interrupted execution is uncertain; inspect history, do not replace until reconciled".into()); }
+                    if state.execution.is_some() && !continuing && child.is_none() { return Err("Interrupted execution is uncertain; u reconciles process evidence. Verified reboot resolves unknown descendants; no automatic coding restart.".into()); }
                     if request.is_empty() || request.len() > 128 {
                         return Err("Launch request must contain 1–128 bytes".into());
                     }
@@ -646,6 +772,18 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                         return Err("A session already exists; attach to it".into());
                     }
                     let path = checkout.as_ref().ok_or("Adopt a checkout before launch")?;
+                    if !continuing {
+                        state.execution = Some(crate::recovery::Execution::prepared()?);
+                        let session = uuid::Uuid::new_v4().to_string();
+                        state.identity = Some(format!("task={} session={} request={request}", task_identity, session));
+                        state.launch_result = None;
+                        state.lifecycle = Lifecycle::Interrupted;
+                        storage.commands.try_send(crate::persistence::Command::Prepare(crate::persistence::metadata(&state), Some(path_bytes(path)), task_identity.clone()))?;
+                        save_pending += 1;
+                        pending_launch = Some(if claude { Request::LaunchClaude(request) } else { Request::Launch(request) });
+                        deferred = true;
+                        return Ok(());
+                    }
                     let (rows, cols) = screen.lock().unwrap().parser.screen().size();
                     let pty = native_pty_system().openpty(PtySize {
                         rows: rows.get(),
@@ -653,13 +791,17 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                         pixel_width: 0,
                         pixel_height: 0,
                     })?;
-                    let mut command = if claude {
-                        CommandBuilder::new("claude")
-                    } else {
-                        let mut fixture = CommandBuilder::new(std::env::current_exe()?);
-                        fixture.arg("--scripted-child");
-                        fixture
-                    };
+                    crate::recovery::crash_barrier(directory, "before-create");
+                    let gate_path = directory.join("launch-gate.sock");
+                    let _ = fs::remove_file(&gate_path);
+                    let gate_listener = UnixListener::bind(&gate_path)?;
+                    fs::set_permissions(&gate_path, fs::Permissions::from_mode(0o600))?;
+                    let nonce = uuid::Uuid::new_v4().to_string();
+                    let mut command = CommandBuilder::new(std::env::current_exe()?);
+                    command.arg("--launch-gate");
+                    command.arg(&gate_path);
+                    command.arg(&nonce);
+                    command.arg(if claude { "claude" } else { "fixture" });
                     command.env("TERM", "xterm-256color");
                     command.cwd(path);
                     let launched = pty.slave.spawn_command(command).map_err(|error| {
@@ -669,6 +811,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                             format!("Fixture launch failed: {error}; retry l")
                         }
                     })?;
+                    crate::recovery::crash_barrier(directory, "after-create");
                     state.agent = Some(
                         if claude {
                             "Claude Code"
@@ -682,6 +825,31 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                         .process_id()
                         .ok_or("Missing managed process identity")?
                         .try_into()?;
+                    state.execution.as_mut().ok_or("Missing durable intent")?.identify(process_group)?;
+                    let (release, authorized) = mpsc::sync_channel(1);
+                    let (receipt, result) = mpsc::sync_channel(1);
+                    gate_release = Some(release);
+                    gate_receipt = Some(result);
+                    thread::spawn(move || {
+                        let result = (|| -> io::Result<crate::recovery::Receipt> {
+                            let (mut stream, _) = gate_listener.accept()?;
+                            stream.set_read_timeout(Some(Duration::from_secs(5)))?;
+                            let mut actual = vec![0; nonce.len()];
+                            stream.read_exact(&mut actual)?;
+                            if actual != nonce.as_bytes() { return Err(io::Error::other("Launch gate nonce mismatch")); }
+                            authorized.recv().map_err(|_| io::Error::other("Launch authorization lost"))?;
+                            stream.write_all(&[1])?;
+                            let mut error = String::new();
+                            stream.take(4096).read_to_string(&mut error)?;
+                            if !error.is_empty() { return Ok(crate::recovery::Receipt::ExecFailed(error)); }
+                            Ok(crate::recovery::Receipt::Executed)
+                        })().unwrap_or_else(|e| crate::recovery::Receipt::Unknown(e.to_string()));
+                        let _ = receipt.send(result);
+                        let _ = fs::remove_file(gate_path);
+                    });
+                    storage.commands.try_send(crate::persistence::Command::Authorize(crate::persistence::metadata(&state), Some(path_bytes(path)), task_identity.clone()))?;
+                    save_pending += 1;
+                    deferred = true;
                     let mut sink = pty.master.take_writer()?;
                     let (input, writes) = mpsc::sync_channel::<Vec<u8>>(32);
                     let errors = write_errors.clone();
@@ -698,8 +866,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     state.stopped = false;
                     native_exit = false;
                     state.history_index = 0;
-                    let session = uuid::Uuid::new_v4().to_string();
-                    state.identity = Some(format!("task={} session={} request={request}", task_identity, session));
+                    let session = crate::persistence::session_id(state.identity.as_ref().ok_or("Missing prepared identity")?).map_err(|e| e.to_string())?;
                     let capture = storage.output.clone();
                     let (finished, done) = mpsc::sync_channel(1);
                     capture_done = Some(done);
@@ -786,6 +953,9 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                 }
                 Request::Screen => {}
                 Request::Stop | Request::Shutdown => {
+                    if child.is_none() && state.execution.is_some() {
+                        return Err("Interrupted execution remains uncertain; u reconciles evidence, d detaches. A missing native leader may require verified reboot before replacement or confirmed shutdown.".into());
+                    }
                     shutdown |= matches!(request, Request::Shutdown);
                     if stopping.is_none() {
                         if let Some(active) = child.take() {
@@ -804,7 +974,9 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
         if let Err(error) = result {
             state.error = Some(error.to_string());
         }
+        let fresh_launch = launch_request.is_some() && recorded.is_none();
         if let Some(request) = launch_request
+            && !deferred
             && recorded.is_none()
             && request.len() <= 128
             && !request.is_empty()
@@ -822,7 +994,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             launches.insert(request, result.clone());
             state.launch_result = Some(result);
         }
-        if save {
+        if save && !deferred {
             match storage.commands.try_send(crate::persistence::Command::Save(
                 crate::persistence::metadata(&state),
                 checkout.as_ref().map(|p| path_bytes(p)),
@@ -831,6 +1003,9 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                 Ok(()) => {
                     save_pending += 1;
                     state.metadata_pending = true;
+                    if fresh_launch {
+                        outcome_reply = true;
+                    }
                 }
                 Err(error) => {
                     metadata_failed = true;
@@ -841,7 +1016,11 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         screen.lock().unwrap().snapshot(&mut state);
-        if send_observation(stream, &state).is_err() {
+        if !deferred
+            && !outcome_reply
+            && let Some(stream) = controller.as_mut()
+            && send_observation(stream, &state).is_err()
+        {
             controller = None;
             pending.clear();
         }
@@ -883,7 +1062,17 @@ pub fn scripted_child() -> io::Result<()> {
                 if line == b"exit" {
                     break;
                 }
-                if line == b"no-read" {
+                if line == b"survive" {
+                    // Isolated crash fixture: remain alive when the owning PTY closes.
+                    unsafe {
+                        libc::signal(libc::SIGHUP, libc::SIG_IGN);
+                    }
+                    println!("survival enabled\r");
+                    io::stdout().flush()?;
+                    loop {
+                        thread::sleep(Duration::from_secs(60));
+                    }
+                } else if line == b"no-read" {
                     println!("input paused\r");
                     io::stdout().flush()?;
                     loop {

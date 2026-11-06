@@ -45,11 +45,15 @@ pub fn metadata(state: &Observation) -> Box<Observation> {
     Box::new(saved)
 }
 pub enum Command {
+    Prepare(Box<Observation>, Option<Vec<u8>>, String),
+    Authorize(Box<Observation>, Option<Vec<u8>>, String),
     Save(Box<Observation>, Option<Vec<u8>>, String),
     History(usize, u64),
     Flush,
 }
 pub enum Completion {
+    Prepared,
+    Authorized,
     Saved,
     History(HistoryPage),
     Flushed,
@@ -89,8 +93,10 @@ impl Worker {
             loop {
                 // Reserve control capacity independently from capture traffic.
                 if let Ok(command) = control.try_recv() {
-                    let kind = match &command { Command::Save(..) => "metadata", Command::History(..) => "history", Command::Flush => "flush" };
+                    let kind = match &command { Command::Save(..) | Command::Prepare(..) | Command::Authorize(..) => "metadata", Command::History(..) => "history", Command::Flush => "flush" };
                     let result = match command {
+                        Command::Prepare(state, checkout, task) => store.save(&state, checkout, task).map(|_| Completion::Prepared),
+                        Command::Authorize(state, checkout, task) => store.save(&state, checkout, task).map(|_| Completion::Authorized),
                         Command::Save(state, checkout, task) => store.save(&state, checkout, task).map(|_| Completion::Saved),
                         Command::History(index, offset) => store.history(index, offset).map(Completion::History),
                         Command::Flush => {
@@ -239,12 +245,36 @@ impl Store {
                 |r| r.get(0),
             )?;
         }
-        if matches!(
-            state.lifecycle,
-            Lifecycle::Running | Lifecycle::Stopping | Lifecycle::StopFailed
-        ) {
+        if state.execution.is_some()
+            || matches!(
+                state.lifecycle,
+                Lifecycle::Running | Lifecycle::Stopping | Lifecycle::StopFailed
+            )
+        {
+            if state.execution.is_none() {
+                state.execution = Some(crate::recovery::Execution {
+                    boot: String::new(),
+                    pid: None,
+                    start: None,
+                    released: true,
+                });
+            }
             state.lifecycle = Lifecycle::Interrupted;
-            state.error = Some("Interrupted supervisor: retained history available; execution is uncertain. No automatic restart.".into());
+            state.error = Some("Interrupted supervisor: retained history available; execution is uncertain. No automatic restart. u reconciles; absent native leader may require verified reboot.".into());
+        }
+        if state.execution.is_some()
+            && !launches
+                .iter()
+                .any(|result: &crate::session::LaunchResult| result.request == state.launch_request)
+        {
+            state.launch_result = Some(crate::session::LaunchResult { request: state.launch_request.clone(), identity: state.identity.clone(), error: Some("Interrupted launch: native execution outcome uncertain; reconcile explicitly with u. No automatic restart.".into()) });
+            self.save(&state, path.clone(), task.clone())?;
+        }
+        let mut launches = launches;
+        if let Some(result) = &state.launch_result {
+            if !launches.iter().any(|known| known.request == result.request) {
+                launches.push(result.clone());
+            }
         }
         Ok(Restored {
             state,
