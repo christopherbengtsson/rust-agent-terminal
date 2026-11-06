@@ -34,14 +34,27 @@ Errors appear in the dashboard, where you can retry or quit.
 | `l` | Launch the scripted PTY fixture in the adopted checkout |
 | Enter | Attach to the existing fixture |
 | Ctrl-] | Return from attached focus to dashboard navigation |
-| `q` / Esc / Ctrl-C | In dashboard focus, stop the fixture and quit |
+| `s` | In dashboard focus, stop the fixture and keep the dashboard open |
+| `d` | In dashboard focus, detach and exit while preserving execution |
+| `q` / Esc / Ctrl-C | In dashboard focus, request supervisor shutdown and quit after confirmed stop |
 
 In attached focus, UTF-8 characters, Ctrl-C, legacy control/Alt shortcuts,
 arrows, navigation keys, F1–F12 and Shift-Tab reach the fixture PTY. The pane and
 help show input focus; attached `q` and Esc are native input. Ctrl-] (the same
 legacy byte as Ctrl-5) returns to dashboard focus without stopping the fixture;
 Enter reattaches to the same child. This provisional chord still needs both
-native-agent proofs. Ordinary quit waits for the supervisor's confirmed stop.
+native-agent proofs. Ordinary quit visibly waits for the supervisor's confirmed
+stop. Stop sends TERM to the managed process group, escalates to KILL after
+500 ms, then confirms the leader exit and absence of executing group members.
+Verification errors or execution remaining after the two-second deadline stay
+visible; retry `s` or `q` after addressing the error. A verification subprocess
+has its own 500 ms timeout. These are fixture-tested process-group boundaries;
+processes that deliberately leave that group are outside this cleanup guarantee.
+Native `exit` retains the latest screen and task/session attribution and returns
+to dashboard focus. A subsequent explicit launch creates a new session.
+Neither native exit nor stop deletes working files. Detach restores the terminal
+and closes only the dashboard connection. Unexpected dashboard loss also preserves
+execution. No durable-history flush is implemented; that remains ticket 08.
 
 Bracketed paste is enabled on the outer terminal and forwarded with delimiters
 when the child requests that mode; otherwise multiline paste normalizes line
@@ -77,12 +90,13 @@ endpoint is never displaced. Keep the lock file in place, including after shutdo
 Use separate private `--state-dir` directories only for isolated experiments.
 
 This prototype has no durable metadata/history, supervisor-crash launch
-reconciliation, or guaranteed descendant cleanup. Do not use it for real coding
+reconciliation, or cleanup of processes that escape the managed process group. Do not use it for real coding
 work. Dashboard loss preserves the supervisor and fixture; reconnect and quit
 normally to clean up. Do not remove a socket for a running supervisor. The bounded
 parsed screen retains the latest 100×24 cells without scrollback; it is not history.
 See the [first-slice evidence](docs/proofs/01-scripted-pty.md) and
-[ownership evidence](docs/proofs/02-session-ownership.md) for tested scope.
+[ownership evidence](docs/proofs/02-session-ownership.md) and
+[lifecycle evidence](docs/proofs/06-lifecycle.md) for tested scope.
 
 ## Development
 

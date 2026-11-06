@@ -44,8 +44,9 @@ impl Ui {
             reviews,
         );
         let title = format!(
-            " Scripted PTY · Focus: {} · semantic status: unknown ",
-            if app.attached { "session" } else { "dashboard" }
+            " Scripted PTY · Focus: {} · Process: {:?} · semantic status: unknown ",
+            if app.attached { "session" } else { "dashboard" },
+            app.session.lifecycle
         );
         let text = if app.session.screen.is_empty() {
             "Adopt a checkout (a), then launch the fixture (l)."
@@ -152,38 +153,50 @@ impl Ui {
             details,
         );
 
-        let (message, color) =
-            if let Some(error) = app.session.error.as_ref().or(app.error.as_ref()) {
-                (
-                    format!(
-                        "{} · r to retry. Previous results retained.",
-                        visible(error)
-                    ),
-                    Color::Red,
-                )
-            } else if let Some(path) = &app.session.adopted {
-                (
-                    format!(
-                        "Adopted: {} · {}",
-                        visible(path),
-                        app.session
-                            .identity
-                            .as_deref()
-                            .unwrap_or("ready to launch scripted fixture")
-                    ),
-                    Color::Cyan,
-                )
-            } else if app.loading {
-                (
-                    "Discovering worktrees… Navigation remains available.".to_owned(),
-                    Color::Yellow,
-                )
-            } else {
-                (
-                    "Discovery complete. No checkout adopted; no child launched.".to_owned(),
-                    Color::Green,
-                )
-            };
+        let (message, color) = if app.shutdown_pending {
+            (
+                "Shutdown pending: confirming managed execution has stopped…".into(),
+                Color::Yellow,
+            )
+        } else if let Some(error) = app.session.error.as_ref().or(app.error.as_ref()) {
+            (
+                format!("{} · Previous results retained.", visible(error)),
+                Color::Red,
+            )
+        } else if let Some(path) = &app.session.adopted {
+            (
+                format!(
+                    "Adopted: {} · {}",
+                    visible(path),
+                    app.session
+                        .identity
+                        .as_deref()
+                        .unwrap_or("ready to launch scripted fixture")
+                ),
+                Color::Cyan,
+            )
+        } else if app.loading {
+            (
+                "Discovering worktrees… Navigation remains available.".to_owned(),
+                Color::Yellow,
+            )
+        } else {
+            (
+                "Discovery complete. No checkout adopted; no child launched.".to_owned(),
+                Color::Green,
+            )
+        };
+        let message = if app.session.error.is_some() {
+            format!(
+                "{message}\n{}",
+                app.session
+                    .identity
+                    .as_deref()
+                    .unwrap_or("No session identity")
+            )
+        } else {
+            message
+        };
         frame.render_widget(
             Paragraph::new(message)
                 .style(Style::default().fg(color))

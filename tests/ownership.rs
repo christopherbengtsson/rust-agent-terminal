@@ -15,6 +15,9 @@ struct Dashboard {
 }
 impl Dashboard {
     fn open(repository: &Path, state: &Path) -> Self {
+        Self::open_with_path(repository, state, None)
+    }
+    fn open_with_path(repository: &Path, state: &Path, path: Option<&std::ffi::OsStr>) -> Self {
         let pty = native_pty_system()
             .openpty(PtySize {
                 rows: 40,
@@ -24,6 +27,9 @@ impl Dashboard {
             })
             .unwrap();
         let mut command = CommandBuilder::new(env!("CARGO_BIN_EXE_agent-terminal"));
+        if let Some(path) = path {
+            command.env("PATH", path);
+        }
         command.arg(repository);
         command.arg("--state-dir");
         command.arg(state);
@@ -74,12 +80,17 @@ impl Drop for Dashboard {
         self.kill();
     }
 }
+// Each scenario deliberately controls its own concurrency. Keep unrelated outer
+// PTY scenarios from competing for host process/terminal resources.
+static SCENARIO: std::sync::Mutex<()> = std::sync::Mutex::new(());
 struct Fixture {
+    _scenario: std::sync::MutexGuard<'static, ()>,
     temp: tempfile::TempDir,
     repository: PathBuf,
 }
 impl Fixture {
     fn new() -> Self {
+        let scenario = SCENARIO.lock().unwrap_or_else(|error| error.into_inner());
         let temp = tempfile::tempdir_in("/private/tmp").unwrap();
         let repository = temp.path().join("checkout with spaces");
         std::fs::create_dir(&repository).unwrap();
@@ -92,7 +103,11 @@ impl Fixture {
                 .status
                 .success()
         );
-        Self { temp, repository }
+        Self {
+            _scenario: scenario,
+            temp,
+            repository,
+        }
     }
     fn state(&self) -> PathBuf {
         self.temp.path().join("state")
@@ -300,4 +315,205 @@ fn unsafe_state_directory_is_explained_without_changing_discovery() {
     dashboard.send(b"r");
     dashboard.wait("Project / worktrees (1)");
     assert!(!target.join("supervisor.sock").exists());
+}
+
+#[test]
+fn native_exit_retains_context_and_explicit_stop_cleans_refusing_descendant() {
+    let fixture = Fixture::new();
+    let sentinel = fixture.repository.join("working change");
+    std::fs::write(&sentinel, "retain me").unwrap();
+    let mut dashboard = fixture.open();
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted");
+    dashboard.send(b"l");
+    dashboard.wait("fixture>");
+    dashboard.send(b"exit\r");
+    dashboard.wait("Process: Exited");
+    let exited = dashboard.wait("task=");
+    let task = exited
+        .split("task=")
+        .nth(1)
+        .unwrap()
+        .chars()
+        .take(36)
+        .collect::<String>();
+    dashboard.send(b"l");
+    dashboard.wait("Focus: session");
+    dashboard.wait(&format!("task={task}"));
+    dashboard.send(b"descendant\r");
+    let screen = dashboard.wait("descendant pid=");
+    let descendant: i32 = screen
+        .split("descendant pid=")
+        .nth(1)
+        .unwrap()
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap();
+    dashboard.send(&[0x1d]);
+    dashboard.wait("Focus: dashboard");
+    let stopping = Instant::now();
+    dashboard.send(b"s");
+    dashboard.wait("Process: Stopped");
+    let elapsed = stopping.elapsed();
+    assert!(
+        elapsed >= Duration::from_millis(500),
+        "TERM refusal must exercise escalation"
+    );
+    assert!(elapsed < Duration::from_secs(3));
+    eprintln!("TERM-refusing descendant stop confirmed in {elapsed:?}");
+    let output = Command::new("ps")
+        .args(["-p", &descendant.to_string(), "-o", "stat="])
+        .output()
+        .unwrap();
+    assert!(
+        output.stdout.is_empty()
+            || String::from_utf8_lossy(&output.stdout)
+                .trim()
+                .starts_with('Z'),
+        "descendant must not execute"
+    );
+    assert_eq!(std::fs::read_to_string(sentinel).unwrap(), "retain me");
+    dashboard.send(b"q");
+}
+
+#[test]
+fn explicit_detach_restores_dashboard_and_preserves_execution() {
+    let fixture = Fixture::new();
+    let mut dashboard = fixture.open();
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted");
+    dashboard.send(b"l");
+    dashboard.wait("fixture>");
+    dashboard.send(&[0x1d]);
+    dashboard.wait("Focus: dashboard");
+    dashboard.send(b"d");
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while dashboard.child.try_wait().unwrap().is_none() {
+        assert!(Instant::now() < deadline, "detach should exit promptly");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let mut restoration = Vec::new();
+    while let Ok(bytes) = dashboard.output.recv_timeout(Duration::from_millis(100)) {
+        restoration.extend(bytes);
+    }
+    assert!(
+        restoration.windows(8).any(|bytes| bytes == b"\x1b[?1049l"),
+        "detach leaves alternate screen"
+    );
+    assert!(
+        restoration.windows(8).any(|bytes| bytes == b"\x1b[?2004l"),
+        "detach disables bracketed paste"
+    );
+    fixture.assert_one_owner_and_child();
+    let mut reopened = fixture.open();
+    reopened.wait("fixture>");
+    reopened.send(b"identity\r");
+    reopened.wait("same-child pid=");
+    reopened.send(&[0x1d]);
+    reopened.wait("Focus: dashboard");
+    reopened.send(b"q");
+}
+
+#[test]
+fn failed_execution_verification_is_visible_and_quit_retries_after_repair() {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = Fixture::new();
+    let tools = fixture.temp.path().join("tools");
+    std::fs::create_dir(&tools).unwrap();
+    let ps = tools.join("ps");
+    std::fs::write(&ps, "#!/bin/sh\nexit 1\n").unwrap();
+    std::fs::set_permissions(&ps, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let path = std::env::join_paths(
+        std::iter::once(tools).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+    )
+    .unwrap();
+    let mut dashboard =
+        Dashboard::open_with_path(&fixture.repository, &fixture.state(), Some(&path));
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted");
+    dashboard.send(b"l");
+    dashboard.wait("fixture>");
+    dashboard.send(&[0x1d]);
+    dashboard.wait("Focus: dashboard");
+    dashboard.send(b"q");
+    dashboard.wait("Stop unconfirmed:");
+    dashboard.wait("Process: StopFailed");
+    assert!(
+        dashboard.child.try_wait().unwrap().is_none(),
+        "failed quit must stay visible"
+    );
+    dashboard.wait("task=");
+    std::fs::remove_file(&ps).unwrap();
+    std::os::unix::fs::symlink("/bin/ps", ps).unwrap();
+    dashboard.send(b"q");
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while dashboard.child.try_wait().unwrap().is_none() {
+        assert!(
+            Instant::now() < deadline,
+            "retry must confirm shutdown after repair"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(!fixture.state().join("supervisor.sock").exists());
+}
+
+#[test]
+fn saturated_native_input_does_not_block_stop_control() {
+    use std::io::{BufRead, BufReader};
+    use std::os::unix::net::UnixStream;
+    let fixture = Fixture::new();
+    let mut dashboard = fixture.open();
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted");
+    dashboard.send(b"l");
+    dashboard.wait("fixture>");
+    dashboard.send(b"no-read\r");
+    dashboard.wait("input paused");
+    dashboard.kill();
+    std::thread::sleep(Duration::from_millis(100));
+    let mut stream = UnixStream::connect(fixture.state().join("supervisor.sock")).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(3)))
+        .unwrap();
+    let mut reader = BufReader::new(stream.try_clone().unwrap());
+    let read = |reader: &mut BufReader<UnixStream>| -> serde_json::Value {
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        serde_json::from_str(&line).unwrap()
+    };
+    assert!(!read(&mut reader)["control_denied"].as_bool().unwrap());
+    let input = serde_json::to_vec(&serde_json::json!({"Input": vec![120; 4096]})).unwrap();
+    let mut saturated = false;
+    for _ in 0..100 {
+        stream.write_all(&input).unwrap();
+        stream.write_all(b"\n").unwrap();
+        let observation = read(&mut reader);
+        saturated |= observation["error"]
+            .as_str()
+            .is_some_and(|e| e.contains("Native input queue unavailable"));
+    }
+    assert!(
+        saturated,
+        "fixture must actually saturate the bounded writer queue"
+    );
+    let started = Instant::now();
+    stream.write_all(b"\"Shutdown\"\n").unwrap();
+    let mut observation = read(&mut reader);
+    while !observation["stopped"].as_bool().unwrap() {
+        assert!(started.elapsed() < Duration::from_secs(3));
+        std::thread::sleep(Duration::from_millis(20));
+        stream.write_all(b"\"Screen\"\n").unwrap();
+        observation = read(&mut reader);
+    }
+    assert!(started.elapsed() < Duration::from_secs(3));
+    eprintln!(
+        "Saturated-input shutdown confirmed in {:?}",
+        started.elapsed()
+    );
 }
