@@ -25,3 +25,20 @@ cargo test --locked --all-targets
 - Publishing a GitHub review requires an explicit user submission action after
   previewing the exact revision, outcome, and selected comments. Preparation,
   editing, navigation, or an agent's decision must never publish a review.
+
+## Agent skills
+
+### Issue tracker
+
+Specs and tickets live as local Markdown under `.scratch/<feature-slug>/`.
+Before reading or publishing specs or tickets, read `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Tickets use the five default triage roles in their `Status:` line.
+Before triaging, read `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context layout: root `GLOSSARY.md` and `docs/adr/`.
+Before exploring the codebase, read `docs/agents/domain.md`.
