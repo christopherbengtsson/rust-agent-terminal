@@ -52,8 +52,8 @@ smaller pieces. The scripted child reports exact bytes, accepts `approve` then
 Encoding uses legacy xterm sequences. Super/Hyper/Meta and unmappable control
 characters report an error. Legacy terminals cannot distinguish every modifier
 combination (for example Ctrl-Enter versus Enter), or Ctrl-] versus Ctrl-5.
-Keyboard enhancement protocols, mouse forwarding, IME composition guarantees and
-dynamic PTY resize remain unimplemented. Child cursor-key mode is respected by the supervisor at encoding time. Paste requires terminal bracketed-paste support; Crossterm buffers an entire
+Keyboard enhancement protocols, mouse forwarding and IME composition guarantees
+remain unimplemented. Child cursor-key mode is respected by the supervisor at encoding time. Paste requires terminal bracketed-paste support; Crossterm buffers an entire
 incoming paste before the application can reject its size. See the
 [input proof](docs/proofs/03-native-input.md) for the tested bytes and boundaries.
 
@@ -80,7 +80,14 @@ This prototype has no durable metadata/history, supervisor-crash launch
 reconciliation, or guaranteed descendant cleanup. Do not use it for real coding
 work. Dashboard loss preserves the supervisor and fixture; reconnect and quit
 normally to clean up. Do not remove a socket for a running supervisor. The bounded
-parsed screen retains the latest 100×24 cells without scrollback; it is not history.
+parsed screen follows the session pane viewport (up to 200×80 cells), without
+scrollback; it is not history. The PTY and parser resize together, including
+while dashboard focus is active. Small terminals hide the sidebar and retain
+a short session identity, focus/status and essential actions. Native cell colors,
+styles, wide Unicode and cursor are rendered within the pane; child terminal
+controls never run directly on the outer terminal. Mouse requests are parsed but
+mouse input is not forwarded. See the [screen proof](docs/proofs/04-session-screen.md)
+for geometry, captures and parser limitations.
 See the [first-slice evidence](docs/proofs/01-scripted-pty.md) and
 [ownership evidence](docs/proofs/02-session-ownership.md) for tested scope.
 
