@@ -3,6 +3,15 @@
 The [product specification](../PRODUCT.md) defines the first release. These are
 engineering checkpoints within that release, not a reduction of its requirements.
 
+The [dashboard image](images/conductor-dashboard-v3.jpg) is the UI target throughout
+implementation. Shape each usable UI slice toward its composition and visual
+direction, showing real functionality and honest empty/unavailable states as
+features arrive. Compare terminal screenshots against it at usable milestone
+checkpoints and check smaller terminal sizes. Raise feasibility problems and
+material deviations explicitly, with consequences and proposed alternatives.
+The product specification identifies where the image differs from release
+behavior, including worktree concurrency and native CLI presentation.
+
 ## Foundation — this change
 
 - One Rust package with modules for terminal ownership, rendering, state/events,
@@ -21,7 +30,9 @@ This checkpoint does not yet launch or attach to agents.
 Open the dashboard in one Git repository, list its worktrees, explicitly adopt
 one, and launch or attach to one managed coding-agent session. Navigate the
 dashboard while that agent runs. Begin with a PTY/supervisor prototype before
-adding project management, review features, or visual polish.
+adding project management or review features. The first usable session UI should
+already follow the target composition; detailed polish follows validated native
+interaction.
 
 Acceptance:
 
@@ -39,15 +50,39 @@ Acceptance:
 6. Kill the dashboard, reopen it, and reconnect to the surviving supervisor and
    session. Ordinary quit explicitly stops managed activity; detach preserves it.
    Supervisor failure restores records as interrupted without restarting coding.
+   Lose a launch acknowledgement and verify reconnect recovers the same request's
+   result. Crash around process creation and reconcile any surviving child before
+   allowing a replacement launch.
 7. Capture readable history independently of native resume. Test exit, missing
    executable, spawn failure, interrupt, and transcript recovery on macOS.
+   Measure the one-second healthy-storage flush target, clean-shutdown flushing,
+   and recovery of durable output after abrupt failure.
+8. For each supported native CLI version, demonstrate requests for input and
+   approval, turn completion, and interruption using tool evidence. Verify that
+   missing evidence produces an unknown state rather than an inferred outcome;
+   see [the status decision](adr/0003-evidence-based-agent-status.md).
+9. Measure bounded memory and queue behavior, transcript disk growth, and
+   persistence throughput under sustained output, including detached sessions
+   and slow subscribers. Exercise slow/full storage without silent output loss
+   or a frozen dashboard, and verify explicit history cleanup; see [the storage
+   decision](adr/0004-preserve-history-with-explicit-cleanup.md).
 
 These checks resolve the highest-risk boundary; they do not claim the complete
 release workload or all coding acceptance criteria C1–C9 are satisfied. New-task
 worktree creation, multiple projects, history search, editor/diff integration,
 own-PR feedback/merging, setup, and notifications follow this proof.
 
-## Milestone 2 — GitHub review preparation and human submission
+## Milestone 2 — coding coordination
+
+Following the native-session proof, complete multi-project navigation, independent
+task and worktree creation, task/history search, native resume, archival and safe
+worktree removal, and working/whole-task diffs with external-editor return.
+
+Acceptance: complete C1–C7, including real macOS checks with both supported tools.
+Persistence and necessary setup arrive with the first feature that needs them;
+they are not deferred to release validation.
+
+## Milestone 3 — GitHub review preparation and human submission
 
 A separate milestone in the same first release, following the session proof:
 
@@ -59,8 +94,30 @@ A separate milestone in the same first release, following the session proof:
   builds or tests automatically.
 - Show drafts beside revision-specific diffs, support editing and explicit
   revalidation of stale comments, and preview exact selected content/outcome.
+  Record both head and base/comparison revisions; exercise base-only comparison
+  changes as well as new author commits.
 - Publish only through explicit user submission. Refresh eligibility/revision
   and reconcile uncertain network outcomes before allowing a duplicate retry.
-- Verify product criteria R1–R11 and the full combined responsiveness workload,
-  including real macOS tool/editor/recovery checks, before calling the release
-  usable. Complete the remaining coding and own-PR criteria as well.
+- Verify product criteria R1–R11, including native reviewer, GitHub, editor,
+  interruption, and uncertain-publication checks.
+
+## Milestone 4 — own-PR continuation
+
+Link task PRs, show incoming feedback, explicitly send selected feedback to the
+coding agent, and provide explicit merge and per-PR auto-merge actions.
+
+Acceptance: complete C8–C9, including blocked merges, auto-merge cancellation,
+uncertain remote outcomes, and preservation of task/worktree history.
+
+## Milestone 5 — combined release validation
+
+Complete remaining setup and notification behavior, then exercise both workflows
+together against every product acceptance criterion. Validate the reference
+workload of three projects, six coding sessions, and ten tracked PRs with one
+review being prepared; measure navigation, attach, and remote-discovery targets.
+Verify offline use, sleep/wake, dashboard loss, reboot, and recovery on macOS.
+
+Acceptance: C1–C9, R1–R11, setup, notifications, interruption behavior, and the
+combined responsiveness requirements all pass with recorded native-tool versions
+and workload/hardware details. Earlier checkpoints alone do not establish release
+readiness.

@@ -4,7 +4,9 @@
 
 [VISION.md](VISION.md) establishes the direction. This document defines the user-visible behavior and release requirements that make that direction usable for the first time. Detailed architecture belongs in a separate document.
 
-The product is unnamed. Conductor is a reference application, not the product name. The dashboard image in the vision is visual inspiration; its layout, branding, keybindings, commands, and examples are not requirements.
+The product is unnamed. Conductor is a reference application, not the product name. The [dashboard image](docs/images/conductor-dashboard-v3.jpg) is the UI target: reviews above a project/worktree/session tree on the left, a prominent active-session area on the right, and visible status and keyboard actions. Preserve its overall composition and visual direction as implementation progresses, adapting to terminal size. Raise feasibility problems and material deviations explicitly rather than silently substituting another UI. Branding, exact keybindings, commands, and example content remain illustrative.
+
+The image shows multiple agents within a worktree and a simplified session transcript/input area. The first release still permits only one active coding session per worktree and preserves each agent's native CLI interaction. These differences must be visible in implementation reviews; the image does not override those confirmed behaviors.
 
 The requirements below are confirmed product decisions. Deferred capabilities and unresolved details are listed separately at the end. This document defines intended behavior, not functionality already implemented in the repository.
 
@@ -89,7 +91,7 @@ State includes enough context to understand what needs attention. A quiet termin
 
 ## Keyboard interaction and diff inspection
 
-Both core workflows are fully keyboard-operable. Dashboard navigation provides Vim-style movement, arrow navigation, search, and discoverable keyboard help. Exact bindings and layout are UI-design decisions.
+Both core workflows are fully keyboard-operable. Dashboard navigation provides Vim-style movement, arrow navigation, search, and discoverable keyboard help. Exact bindings and responsive layout details are UI-design decisions within the dashboard image's target composition.
 
 Dashboard navigation and native agent interaction have explicit focus. Attaching to a session gives the native CLI control of input, including its prompts, approvals, and normal shortcuts. A documented escape shortcut returns to dashboard navigation. For example, Ctrl-C within an attached session retains the agent's native interrupt behavior; it is not redefined as a global quit action.
 
@@ -253,6 +255,6 @@ These are outside the first release:
 
 The product name and license remain undecided. Neither is inferred from Conductor or the visual reference.
 
-UI design will determine layout, exact keybindings, task-creation interactions, comparison controls, and presentation of history and revision reconciliation while preserving the behavior defined here.
+UI design will refine the target composition for terminal sizes, exact keybindings, task-creation interactions, comparison controls, and presentation of history and revision reconciliation while preserving the behavior defined here. Compare usable implementation slices against the dashboard image; report material deviations and feasibility issues with their consequences and proposed alternatives.
 
 Engineering must validate supported native-tool versions and their status, transcript, approval, interruption, and resume behavior. Compatibility limitations must be explicit; the release cannot claim support based solely on simulated interactions. Architecture, persistence mechanisms, process management, GitHub integration details, and the automated validation harness belong in separate documents.

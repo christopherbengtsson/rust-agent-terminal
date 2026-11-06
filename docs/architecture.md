@@ -8,6 +8,13 @@ prototype and subsequent GitHub review work.
 
 ## Boundaries and data flow
 
+The UI works toward the [dashboard image](images/conductor-dashboard-v3.jpg):
+reviews and project navigation on the left, a prominent native-session view on
+the right, and visible status and keyboard actions. Adapt to terminal size and
+validate with screenshots as usable slices land. Surface feasibility problems
+and material deviations explicitly; product behavior, including one active
+session per worktree and native CLI interaction, governs conflicts in the image.
+
 **Terminal and UI (`terminal`, `ui`, `main`).** Crossterm owns raw mode and the
 alternate screen; Ratatui renders a snapshot of application state. A terminal
 guard restores modes on errors and normal exit, with panic restoration as well.
@@ -26,6 +33,9 @@ identity, focus, session lifecycle, review revisions, and user decisions will
 extend this model. A process being alive is not proof that an agent is working;
 quiet output is not proof of completion. Report unknown semantic state explicitly
 until a supported adapter supplies evidence.
+Supported native-tool versions must demonstrate dependable lifecycle and
+attention signals in macOS scenarios; see
+[the status decision](adr/0003-evidence-based-agent-status.md).
 
 **Git/worktrees (`git`).** A dedicated worker runs `git -C <path> worktree list
 --porcelain -z`, parses NUL-delimited fields, and sends a completion event.
@@ -40,8 +50,11 @@ the UI or dashboard exit; process deadlines belong in the next worker hardening.
 
 **Agent sessions (next).** A local supervisor process, implemented as another
 mode of the same executable, must own child processes, PTYs, and history. The
-dashboard is a reconnectable client over a user-private local socket. This
-separation is necessary because the product requires agents to survive terminal
+dashboard is a reconnectable client over a user-private local socket. There is
+one supervisor per macOS user, shared across projects, and at most one connected
+dashboard controls it at a time; see
+[the ownership decision](adr/0001-user-wide-supervisor.md). This separation is
+necessary because the product requires agents to survive terminal
 or dashboard loss. No supervisor/session code or persistence is present yet.
 The prototype must validate this choice before other features rely on it.
 The supervisor owns one active session per worktree, stable session IDs, launch
@@ -51,6 +64,10 @@ supervisor failure/reboot, saved sessions become interrupted and require explici
 recovery, never automatic coding restarts. Claude Code and Codex adapters use
 existing credentials and supported native resume; readable history is a separate
 guarantee from native conversation recovery.
+Reconnect recovers the result of the same launch request after a lost response.
+An uncertain launch after supervisor failure requires reconciliation of any
+surviving child before another launch in that worktree; see
+[the launch decision](adr/0005-reconcile-uncertain-session-launches.md).
 
 **Persistence (planned).** Keep repository working files separate from product
 state. Store versioned configuration and durable records in the user's macOS
@@ -61,6 +78,17 @@ choices, examined/validated/submitted revisions, and uncertain remote outcomes.
 Bounded, append-only transcript chunks live alongside it; records retain their
 paths after worktree removal. Do not save credentials or silently delete history.
 Schema migration and crash recovery must be tested before persistence ships.
+Saved edits require a durable acknowledgement. Streaming history uses bounded
+buffers and batched persistence, targeting durable flushes at least once per
+second under healthy storage. This is an operating target, not a maximum loss
+guarantee during storage failure. Clean shutdown flushes pending history and
+reports failed writes.
+Low storage prompts explicit cleanup, suggesting oldest stopped sessions first;
+history is retained until explicitly deleted. Storage failures remain visible,
+and full buffers apply backpressure rather than silently drop output, while the
+dashboard remains responsive. Backpressure on PTY reads is not a guarantee that
+agent work or background commands have stopped. See [the history and cleanup
+decision](adr/0004-preserve-history-with-explicit-cleanup.md).
 The foundation writes no product state; selection lasts only for this run.
 
 ## Investigate the interactive-session boundary first
@@ -91,11 +119,19 @@ real macOS results. Linux fixtures alone cannot prove either native integration.
 ## Review and validation boundaries
 
 Later GitHub workers use existing `gh` authentication and a serial preparation
-queue. Draft preparation, local editing, submission, and merge commands remain
-distinct effects. Local drafts identify the examined revision and any later
-human-validated revision. Publishing requires an explicit user action on an
+queue. The background reviewer receives revision-pinned context under enforced
+restrictions against arbitrary shell execution, task-checkout mutation, and
+GitHub writes; see [the preparation decision](adr/0002-restricted-review-preparation.md).
+Both native integrations must validate this contract with existing authentication
+before preparation ships. Draft preparation, local editing, submission, and
+merge commands remain distinct effects. Local drafts identify the examined
+revision and any later human-validated revision, retaining both head and
+base/comparison revisions used for the diff; see
+[the comparison decision](adr/0006-identify-both-sides-of-review-comparisons.md).
+Publishing requires an explicit user action on an
 exact preview and a fresh revision/eligibility check. A revision change blocks
-submission until revalidation; uncertain outcomes require reconciliation before
+submission until revalidation, including a changed base/comparison; uncertain
+outcomes require reconciliation before
 retrying. Background failures preserve human edits and never label partial work
 ready. No GitHub access is part of the foundation.
 
@@ -104,3 +140,7 @@ tests, and terminal smoke checks. Next add a scripted PTY agent, supervisor
 failure tests, and measured navigation/attach latency, then real Claude Code,
 Codex CLI, editor, and recovery checks on macOS. CI formatting, Clippy, builds,
 and tests support those checks; they do not substitute for native evidence.
+Implementation must also define and measure memory and queue limits, transcript
+disk growth, persistence throughput, and slow/full-disk behavior under sustained
+output. Include detached sessions and slow subscribers; report the workload and
+resource measurements alongside responsiveness results.

@@ -14,11 +14,11 @@ Start a task with an established coding agent in its own Git worktree. It gets a
 
 Open the diff in Vim when you want to inspect the changes closely. Return to the dashboard and continue from there. The workflow should fit the shell, editor, and Git habits you already rely on. Navigating between tasks should feel as direct as switching buffers.
 
-The visual reference brings reviews and a project tree beside a prominent active session, with clear status labels and visible keyboard actions. The product name is still undecided.
+The UI target brings reviews and a project tree beside a prominent active session, with clear status labels and visible keyboard actions. Implementation should work toward this composition from the first usable UI slice. The product name is still undecided.
 
 ![Terminal dashboard showing reviews, projects, worktrees, and an active coding-agent session](docs/images/conductor-dashboard-v3.jpg)
 
-> Visual inspiration. Branding, layout details, keybindings, and example commands are illustrative.
+> UI target. Preserve the overall composition and visual direction, adapting to terminal size and supported behavior. Raise feasibility problems and material deviations explicitly. Branding, exact keybindings, and example content remain illustrative; confirmed product behavior governs conflicts in the image.
 
 ## Reviews ready for your judgment
 
