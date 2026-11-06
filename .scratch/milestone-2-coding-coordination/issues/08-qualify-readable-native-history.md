@@ -1,7 +1,7 @@
 # 08: Qualify readable native session history
 
 Status: ready-for-agent
-Resolved: yes
+Resolved: no
 Blocked by: 03, 05
 
 **What to build:** Open retained history as useful readable text with stable passage locations, independently of native resume and automatic naming.
@@ -26,3 +26,11 @@ public readable pages and history/raw dashboard captures are archived with hashe
 Ticket 06 final source was merged; focused checks pass. Aggregate integration/PTY
 gates and the later reboot/release workload remain with the integration runner
 and ticket 19, respectively.
+
+Reopened after the combined 06/08 aggregate at `610c723febb759dc76c23bee0f783f96ee679825`:
+ownership checks report 61 passed, 12 failed and 2 ignored. Existing raw-view
+expectations need verification against the explicit raw action, while pagination,
+deletion and recovery failures require separate compatibility corrections.
+Native corpus qualification remains limited to its recorded source and versions;
+it does not establish a passing aggregate. See [integration evidence](../../../docs/proofs/m2-06-08-integration-gate.md).
+Close again only after corrections and the required full compatibility gate pass.
