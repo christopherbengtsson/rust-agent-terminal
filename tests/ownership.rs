@@ -4820,10 +4820,24 @@ fn full_storage_input_receipt_measurement17() {
     let mut control = Controller::connect(&fixture);
     let identity = control.greeting["identity"].clone();
     fixture.assert_one_owner_and_child();
-    let shutdown = measurement_shutdown(&mut control);
-    assert_eq!(shutdown["accepted_bytes"], shutdown["durable_bytes"]);
+    control.request(serde_json::json!("Stop"));
+    cleanup_wait15(&mut control, |state| {
+        state["lifecycle"] == "Stopped"
+            && state["metadata_pending"] == false
+            && state["capture_pending_bytes"] == 0
+            && state["accepted_bytes"] == state["durable_bytes"]
+    });
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while cleanup_page15(&mut control)["cleanup"]["entries"][0]["eligible"] != true {
+        assert!(
+            Instant::now() < deadline,
+            "final capture must seal before retained History checks"
+        );
+    }
+    let ready = control.request(serde_json::json!("Screen"));
+    assert_eq!(ready["accepted_bytes"], ready["durable_bytes"]);
     let mut last = 0;
-    for commit in shutdown["durable_commits"].as_array().unwrap() {
+    for commit in ready["durable_commits"].as_array().unwrap() {
         let seq = commit["sequence"].as_u64().unwrap();
         assert_eq!(seq, last + 1);
         last = seq;
@@ -4831,7 +4845,7 @@ fn full_storage_input_receipt_measurement17() {
     }
     for offset in [
         0,
-        shutdown["durable_bytes"]
+        ready["durable_bytes"]
             .as_u64()
             .unwrap()
             .saturating_sub(1024),
@@ -4847,6 +4861,8 @@ fn full_storage_input_receipt_measurement17() {
             assert!(Instant::now() < deadline);
         }
     }
+    let shutdown = measurement_shutdown(&mut control);
+    assert_eq!(shutdown["accepted_bytes"], shutdown["durable_bytes"]);
     drop(control);
     measurement_wait_endpoint_exit(&fixture);
     for entry in std::fs::read_dir(fixture.state()).unwrap() {
