@@ -6,11 +6,11 @@ Blocked by: None
 
 **What to build:** Discovery, refresh and adoption resolve actual checkouts without blocking navigation or shared session controls.
 
-- [ ] Concentrate existing discovery and adoption Git/path interpretation in execution-owned workers. Preserve original Unix path bytes, NUL-safe parsing and canonical worktree identity.
-- [ ] A slow or failed Git process is bounded/cancellable, leaves prior successful discovery visible, and cannot block Stop, session polling or dashboard exit.
-- [ ] Route results by request/project/checkout identity so late refresh/adoption replies cannot retarget the current selection. Keep discovery read-only and adoption explicit.
+- [x] Concentrate existing discovery and adoption Git/path interpretation in execution-owned workers. Preserve original Unix path bytes, NUL-safe parsing and canonical worktree identity.
+- [x] A slow or failed Git process is bounded/cancellable, leaves prior successful discovery visible, and cannot block Stop, session polling or dashboard exit.
+- [x] Route results by request/project/checkout identity so late refresh/adoption replies cannot retarget the current selection. Keep discovery read-only and adoption explicit.
 - [ ] Verify actual temporary linked, aliased, detached, bare, locked, missing and prunable worktrees, including non-UTF-8 paths and saturated dispatch.
-- [ ] Establish a concrete per-repository mutation execution discipline for subsequent creation/archive work without holding exclusion for whole agent sessions or creating a generic job engine.
+- [x] Establish a concrete per-repository mutation execution discipline for subsequent creation/archive work without holding exclusion for whole agent sessions or creating a generic job engine.
 
 ## Comments
 
@@ -43,3 +43,11 @@ Implementation prepared on `ticket/04-worktree-jobs`:
   and exercises byte-exact parser/wire round trips. A real non-UTF-8 checkout on a
   filesystem supporting those names remains unverified here. No new Claude/Codex
   native compatibility claim is made.
+
+Merged integration prerequisite `2b2a255` into the ticket branch and adapted the
+asynchronous adoption save to `Obligations::send`, preserving exact operation
+attribution and transient metadata exclusions. Post-merge warnings-denied Clippy,
+32 bin tests, locked build/formatting and focused slow/saturated Git plus
+refused-dashboard discovery tests pass. The final all-target run is coordinated
+serially on the integration branch; this ticket intentionally remains unresolved
+until that evidence is recorded.

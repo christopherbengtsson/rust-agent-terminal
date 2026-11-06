@@ -456,13 +456,17 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             state.adoption_pending = false;
             let result = result.and_then(|identity| {
                 let path = identity.root.clone();
-                if (child.is_some() || stopping.is_some() || !eof || capture_done.is_some() || storage.progress.lock().unwrap().pending_bytes > 0) && checkout.as_ref() != Some(&path) {
+                let same_checkout = state.checkout_identity.as_ref().map_or_else(
+                    || checkout.as_ref() == Some(&path),
+                    |previous| previous.git_dir == identity.git_dir && previous.common_dir == identity.common_dir,
+                );
+                if (child.is_some() || stopping.is_some() || !eof || capture_done.is_some() || storage.progress.lock().unwrap().pending_bytes > 0) && !same_checkout {
                     return Err("Stop the existing session before adopting another checkout".into());
                 }
-                if state.execution.is_some() && child.is_none() && checkout.as_ref() != Some(&path) {
+                if state.execution.is_some() && child.is_none() && !same_checkout {
                     return Err("Interrupted execution is uncertain; inspect history before changing adoption".into());
                 }
-                if checkout.as_ref() != Some(&path) {
+                if !same_checkout {
                     state.identity = None;
                     state.session_identity = None;
                     state.process_exit = None;
@@ -479,17 +483,22 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             if let Err(error) = result {
                 state.error = Some(error);
             }
-            match storage.commands.try_send(crate::persistence::Command::Save(
-                crate::persistence::Snapshot::new(&state, checkout.as_deref(), &task_identity),
-            )) {
-                Ok(()) => {
-                    save_pending += 1;
+            match writes.send(
+                &storage.commands,
+                crate::persistence::Command::Save(crate::persistence::Snapshot::new(
+                    &state,
+                    checkout.as_deref(),
+                    &task_identity,
+                )),
+            ) {
+                Ok(_) => {
                     state.metadata_pending = true;
                 }
                 Err(error) => {
                     metadata_failed = true;
                     state.metadata_pending = true;
                     state.error = Some(format!("Metadata not saved: {error}; retry"));
+                    metadata_error = state.error.clone();
                 }
             }
         }
