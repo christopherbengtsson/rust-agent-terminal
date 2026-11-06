@@ -221,8 +221,33 @@ bounded per-session capture/durability accounting behind one writer. Each live
 stream has its own queue, transcript handle, accepted/written/durable counters,
 backpressure and error. Rotating streams does not force a commit. Final flush
 waits only for its owned EOF's accepted prefix; another producer neither permits
-nor delays that completion. Search/indexing must also interleave finite work with
-capture. Mutation/fetch work remains execution-owned and bounded. See
+nor delays that completion. Retained search now shares these finite turns with capture. Schema 7 stores
+versioned full projection checkpoints and ordinal passages alongside an exact-word
+posting index. One worker pass indexes at most 512 committed raw bytes for one
+round-robin retained session, including at most one bounded 2048-cell unfinished
+line; checkpoint, emitted passages and postings commit atomically. Indexing follows
+capture and due flushes and never delays raw durable acknowledgement until an
+entire transcript is indexed. A changed projection version prunes old passages in
+bounded slices before rebuilding from committed raw; startup does not replay all
+history synchronously.
+
+One supervisor-owned browse/query identity is independent of runtime selection.
+Queries inspect at most 32 keyset candidates per turn and return at most 32 rows,
+with a fixed highest passage/record rowid per request. Exact-word lookups seek
+postings instead of scanning raw prefixes. Opening a hit validates stable
+session/version/ordinal/raw-range identity and reads that persisted passage, not a
+raw page guessed from its beginning. Search editing, mode changes and close cancel
+older work; late replies cannot replace the current query. Metadata Find and
+retained-session browsing likewise yield between 32-row slices. Tombstones hide
+text immediately, cancel pending searches and invalidate displayed/cache/editor
+history; derivative cleanup removes one bounded passage per retained-row turn.
+Native identities and launch outcomes remain independent of transcript deletion.
+
+`workspace_history_facts(workspace,archived)` is the minimal retained archive-state
+contract for the later archive implementation; it has no placeholder action.
+`checkout_branch_facts(path,branch)` contains only actual Git discovery facts and
+is presented as last observed. Unknown legacy facts and missing/inaccessible
+checkout paths remain distinct. See [the search evidence](proofs/m2-11-retained-search.md). Mutation/fetch work remains execution-owned and bounded. See
 the [Milestone 1 implementation audit](../.scratch/milestone-2-coding-coordination/interview.md#milestone-1-implementation-audit-prerequisites-within-milestone-2).
 
 The Milestone 2 interview retains one active coding session per worktree and

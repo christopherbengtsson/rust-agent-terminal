@@ -1,0 +1,40 @@
+┌ Reviews ───────────────────────────────────────────┐┌ History · retained work · reading only ────────────────────────────────────────────────────────────────┐
+│Unavailable · milestone 1                           ││Committed passage v1 · raw 91–128 / 186                                                                 │
+└────────────────────────────────────────────────────┘│fixture> received: keyboardneedle11                                                                     │
+┌ Agent terminal · Worktrees ────────────────────────┐│                                                                                                        │
+│Repository: /private/tmp/.tmpboUGFu/checkout with   ││                                                                                                        │
+└────────────────────────────────────────────────────┘│                                                                                                        │
+┌ Project / worktrees (1) ───────────────────────────┐│                                                                                                        │
+│> └ main  /private/tmp/.tmpboUGFu/checkout with spac││                                                                                                        │
+│    └ managed session · unknown                     ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+└────────────────────────────────────────────────────┘│                                                                                                        │
+┌ Selection ─────────────────────────────────────────┐│                                                                                                        │
+│Path: /private/tmp/.tmpboUGFu/checkout with spaces  ││                                                                                                        │
+│Branch: main  HEAD:                                 ││                                                                                                        │
+│0000000000000000000000000000000000000000            ││                                                                                                        │
+│                                                    ││                                                                                                        │
+└────────────────────────────────────────────────────┘└────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌ Status · semantic status: unknown · execution not running ───────────────────────────────────────────────────────────────────────────────────────────────────┐
+│Adopted: /private/tmp/.tmpboUGFu/checkout with spaces · task=03d576f4-0692-4877-9757-eeecadf5ac74 session=6e4e5496-38f0-48a7-b706-52cf199577fb                │
+│request=0ee88ccc-cc36-4013-bbe8-00d4dc7cf3ac                                                                                                                  │
+│History: metadata committed · durable bytes 186                                                                                                               │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+Enter search/open · ↑/↓ select · Tab mode · Esc back · n next · Ctrl-R refresh · / edit                                                                         
