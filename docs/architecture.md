@@ -441,3 +441,18 @@ reconciled Interrupted records across restart. The Linux fallback
 uses `/proc` boot/start fields for fixtures; it establishes no native macOS
 compatibility. See [the crash-window proof](proofs/09-launch-reconciliation.md)
 for the exact boundaries, simulated boot evidence and limitations.
+
+### Partial Claude semantic observations (ticket 10, gate open)
+
+`native_status` owns a bounded passive command-hook channel and pending main-agent
+tool intervals. Only invocation-local settings are added; user policy, hooks and
+credentials remain native. Correlated AskUserQuestion/Bash permission events plus
+the current demonstrated 2.1.318 modal can establish input/approval. A generic
+notification does not end the pending tool interval. Every other native semantic
+outcome remains unknown pending proof, independently of process lifecycle and
+transport ownership. Wrong-generation, invalid, stale or ambiguous evidence
+revokes confidence. Native input requires a later parsed output boundary before
+reestablishing modal confidence. Status is cleared for persistence and restored
+as unknown, rather than reviving an old current-state claim. Monitoring failure
+does not prevent ordinary native launch. See the [partial proof and remaining
+gates](proofs/10-claude-status.md); this does not resolve the status support gate.

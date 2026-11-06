@@ -1,0 +1,52 @@
+{
+  "state": "Approval",
+  "evidence": "matched permission request + current Claude 2.1.318 Bash modal",
+  "reason": "30s bounded evidence; native support gate remains open",
+  "recent": [
+    "SessionStart::",
+    "UserPromptSubmit::",
+    "PreToolUse:AskUserQuestion:toolu_01K2mzjPX8wmzASAy4aQt7am",
+    "PermissionRequest:AskUserQuestion:",
+    "Notification::",
+    "PostToolUse:AskUserQuestion:toolu_01K2mzjPX8wmzASAy4aQt7am",
+    "PostToolBatch::",
+    "Stop::",
+    "UserPromptSubmit::",
+    "PreToolUse:Bash:toolu_018RaPHmsn7YivbPe5RM7svG",
+    "PermissionRequest:Bash:",
+    "Notification::"
+  ]
+}
+
+
+
+❯ Use AskUserQuestion to ask whether the proof marker should be alpha or beta. Do not write files or
+  run commands.
+
+⏺ User answered Claude's questions:
+  ⎿  · Should the proof marker be alpha or beta? → Alpha
+
+⏺ You chose alpha for the proof marker. I haven't written any files or run any commands.
+
+✻ Baked for 2s · done 2:16 PM
+
+❯ Run exactly printf status-final > status-final-marker in this temporary proof checkout. Do not write
+  outside it or run other commands.
+
+  Writing status-final to status-final-marker in the proof checkout
+  ⎿  $ printf status-final > status-final-marker
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Bash command
+ Tip: auto mode handles these prompts for you — choose "switch to auto mode" below
+ Write status-final to status-final-marker in the proof checkout
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ printf status-final > status-final-marker
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ Do you want to proceed?
+ ❯ 1. Yes
+   2. Yes, and always allow access to /private/tmp/rat-claude-proof-checkout from this project
+   3. Yes, and switch to auto mode · auto mode handles these prompts for you
+   4. No
+
+ Esc to cancel · Tab to amend

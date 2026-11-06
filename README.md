@@ -136,6 +136,14 @@ experimental: see [the native proof](docs/proofs/05-claude-native.md) for the ex
 version and unresolved scenarios. Native tool usage can consume your account's
 allowance. No credential copying or product authentication store is used.
 
+Native status is separate from process lifecycle. A passive per-invocation monitor
+can show native input and Bash approval for the demonstrated canonical Claude
+2.1.318 installation, using correlated tool events and the live modal. Other
+versions/layouts, missing or stale signals, working/completion/interruption gaps
+remain explicitly unknown. No user hooks, permissions or persistent settings are
+replaced. See [the partial status proof](docs/proofs/10-claude-status.md); the
+required native status support gate is still open.
+
 Codex CLI launch uses `codex --no-daemon` from the supervisor's inherited PATH,
 keeping the managed interactive runtime outside Codex's shared daemon. It reuses
 existing native authentication; run `codex login` in your usual terminal if

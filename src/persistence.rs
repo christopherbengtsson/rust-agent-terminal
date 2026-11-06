@@ -42,6 +42,7 @@ pub fn metadata(state: &Observation) -> Box<Observation> {
     saved.formatted = String::new();
     saved.decoded = None;
     saved.history = None;
+    saved.status = crate::native_status::Status::default();
     Box::new(saved)
 }
 pub enum Command {
@@ -237,6 +238,7 @@ impl Store {
         };
         let mut state: Observation = serde_json::from_str(&json)?;
         state.stopped = false;
+        state.status = crate::native_status::Status::default();
         state.metadata_pending = false;
         if let Some(identity) = &state.identity {
             self.total = self.db.query_row(

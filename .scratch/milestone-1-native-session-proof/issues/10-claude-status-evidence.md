@@ -11,3 +11,16 @@ Blocked by: 05
 - [ ] Drive visible indicators with fixture evidence and deterministic state/event tests, including missing or invalid signals and a failing test while the agent continues working.
 - [ ] Record real macOS scenarios for every required signal and compare visible attention/unknown states with the image’s readable-label direction. Signals available only in another integration mode do not establish native PTY compatibility.
 - [ ] If dependable required signals cannot be demonstrated, retain an explicit support-gate failure and proposed resolution rather than substituting unsupported inference. Update tested-version documentation.
+
+## Comments
+
+2026-11-06 — Partial implementation and native 2.1.318 evidence recorded in
+[the status proof](../../../docs/proofs/10-claude-status.md). Correlated native
+question and Bash approval receipts/current modals produce Input/Approval.
+Working, completed-turn and interruption classifier/negative-proof gates remain
+open; neither Stop, a live process, failing command, quiet PTY nor forwarded
+Ctrl-C substitutes. Native interrupted acknowledgement was reproduced, but a
+current-generation/quoted-marker classifier has not been validated. No claim
+that the remaining gates are infeasible is made. Fixture/state/PTY checks pass.
+The ticket intentionally remains unresolved pending the documented concrete
+signal and negative-case work.

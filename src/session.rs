@@ -92,6 +92,8 @@ pub struct Observation {
     #[serde(default)]
     pub agent: Option<String>,
     pub identity: Option<String>,
+    #[serde(default)]
+    pub status: crate::native_status::Status,
     pub screen: String,
     pub formatted: String,
     pub rows: u16,
@@ -384,6 +386,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let (write_errors, input_errors) = mpsc::sync_channel(1);
     let mut process_group = 0;
     let mut stopping: Option<Receiver<crate::lifecycle::Outcome>> = None;
+    let mut monitor: Option<crate::native_status::Monitor> = None;
     let mut shutdown = false;
     let mut native_exit = false;
     let screen = Arc::new(Mutex::new(ScreenState {
@@ -614,6 +617,13 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             fs::remove_file(&socket)?;
             return Ok(());
         }
+        if let Some(monitor) = monitor.as_mut() {
+            state.status = monitor.poll(
+                state.lifecycle == Lifecycle::Running,
+                &state.screen,
+                state.output_bytes,
+            );
+        }
         // Accept/reject independently of the active client's commands or output.
         for _ in 0..if pending_launch.is_some() || gate_receipt.is_some() || outcome_reply {
             0
@@ -818,8 +828,15 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     gate_listener.set_nonblocking(true)?;
                     fs::set_permissions(&gate_path, fs::Permissions::from_mode(0o600))?;
                     let nonce = uuid::Uuid::new_v4().to_string();
+                    let claude_executable = if claude {
+                        std::env::var_os("PATH").and_then(|paths| std::env::split_paths(&paths).find_map(|directory| {
+                            let directory = if directory.is_absolute() { directory } else { path.join(directory) };
+                            let candidate = directory.join("claude");
+                            candidate.is_file().then(|| candidate.canonicalize().ok()).flatten()
+                        }))
+                    } else { None };
                     let mut command = if claude {
-                        CommandBuilder::new("claude")
+                        CommandBuilder::new(claude_executable.as_deref().unwrap_or_else(|| Path::new("claude")))
                     } else if codex {
                         let mut command = CommandBuilder::new("codex");
                         command.arg("--no-daemon");
@@ -829,6 +846,18 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                         command.arg("--scripted-child");
                         command
                     };
+                    monitor = None;
+                    state.status = crate::native_status::Status::default();
+                    if !codex {
+                        match crate::native_status::Monitor::start(directory, !claude) {
+                            Ok(mut status_monitor) => {
+                                status_monitor.native_executable(claude_executable.as_deref());
+                                status_monitor.configure(&mut command);
+                                monitor = Some(status_monitor);
+                            }
+                            Err(_) => state.status.reason = "status monitor unavailable".into(),
+                        }
+                    }
                     command.env("TERM", "xterm-256color");
                     command.cwd(path);
                     crate::recovery::wrap(&mut command, &gate_path, &nonce)?;
@@ -933,6 +962,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     child = Some(launched);
                 }
                 Request::Input(bytes) => {
+                    if let Some(monitor) = monitor.as_mut() { monitor.input(screen.lock().unwrap().output_bytes); }
                     if bytes.len() > 4096 {
                         return Err("Input exceeds prototype 4096-byte limit".into());
                     }
@@ -943,6 +973,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                         .map_err(|e| format!("Native input queue unavailable: {e}; retry"))?;
                 }
                 Request::Key(key) => {
+                    if let Some(monitor) = monitor.as_mut() { monitor.input(screen.lock().unwrap().output_bytes); }
                     let application_cursor =
                         screen.lock().unwrap().parser.screen().application_cursor();
                     let bytes = crate::native_input::encode(key, application_cursor)?;
@@ -953,6 +984,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                         .map_err(|e| format!("Native input queue unavailable: {e}; retry"))?;
                 }
                 Request::Paste(text) => {
+                    if let Some(monitor) = monitor.as_mut() { monitor.input(screen.lock().unwrap().output_bytes); }
                     if text.len() > 4084 {
                         return Err("Paste exceeds 4084-byte limit".into());
                     }
@@ -1058,6 +1090,13 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         screen.lock().unwrap().snapshot(&mut state);
+        if let Some(monitor) = monitor.as_mut() {
+            state.status = monitor.poll(
+                state.lifecycle == Lifecycle::Running,
+                &state.screen,
+                state.output_bytes,
+            );
+        }
         if !deferred
             && !outcome_reply
             && let Some(stream) = controller.as_mut()
@@ -1132,6 +1171,35 @@ pub fn scripted_child() -> io::Result<()> {
                 } else if line == b"size" {
                     let (cols, rows) = crossterm::terminal::size()?;
                     print!("size: {cols}x{rows}\r\nfixture> ");
+                } else if line == b"fixture-failed-test" {
+                    println!("test result: FAILED; agent continues\r");
+                } else if line == b"status-native-post" {
+                    crate::native_status::fixture("PostToolUse");
+                    println!("question answered; old dialog text is retained\r");
+                } else if line == b"status-native-approval" {
+                    crate::native_status::fixture("PostToolUse");
+                    crate::native_status::fixture("FixtureNativeBashPre");
+                    crate::native_status::fixture("FixtureNativeBashPermission");
+                    print!(
+                        "\x1b[2J\x1b[H────────────────────────────────────────\r\n Bash command\r\n Do you want to proceed?\r\n ❯ 1. Yes\r\n   2. No\r\n Esc to cancel · Tab to amend"
+                    );
+                } else if line == b"status-native-question" {
+                    crate::native_status::fixture("PreToolUse");
+                    print!(
+                        "\x1b[2J\x1b[H────────────────────────────────────────\r\n ☐ Proof marker\r\nShould the proof marker be alpha or beta?\r\n❯ 1. Alpha\r\n  2. Beta\r\n────────────────────────────────────────\r\nEnter to select · ↑/↓ to navigate · Esc to cancel"
+                    );
+                } else if line.starts_with(b"status-") {
+                    let event = match line.as_slice() {
+                        b"status-working" => "FixtureWorking",
+                        b"status-input" => "FixtureInput",
+                        b"status-approval" => "FixtureApproval",
+                        b"status-completed" => "FixtureCompleted",
+                        b"status-interrupted" => "FixtureInterrupted",
+                        b"status-wrong-session" => "FixtureWrongSession",
+                        _ => "FixtureInvalid",
+                    };
+                    crate::native_status::fixture(event);
+                    println!("fixture status evidence emitted\r");
                 } else if line == b"screen" {
                     print!("\x1b[2J\x1b[H\x1b[1;31mstyled ");
                     io::stdout().flush()?;

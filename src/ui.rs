@@ -81,9 +81,10 @@ impl Ui {
             )
         } else {
             format!(
-                " {} · Focus: {focus} · Process: {:?} · semantic status: unknown ",
+                " {} · Focus: {focus} · Process: {:?} · semantic status: {} ",
                 app.session.agent.as_deref().unwrap_or("Session"),
-                app.session.lifecycle
+                app.session.lifecycle,
+                app.session.status.state.label()
             )
         };
         frame.render_widget(
@@ -157,9 +158,9 @@ impl Ui {
                     == Some(worktree.path.display().to_string().as_str())
                 {
                     lines.push(Line::from(if app.session.identity.is_some() {
-                        "  └ managed session · status unknown"
+                        format!("  └ managed session · {}", app.session.status.state.label())
                     } else {
-                        "  └ adopted · c Claude / x Codex / l fixture"
+                        "  └ adopted · c Claude / x Codex / l fixture".into()
                     }));
                 }
                 ListItem::new(lines)
@@ -269,14 +270,26 @@ impl Ui {
             message
         };
         frame.render_widget(
-            Paragraph::new(message)
-                .style(Style::default().fg(color))
-                .block(
-                    Block::bordered()
-                        .border_style(Style::default().fg(Color::Cyan))
-                        .title(" Status "),
-                )
-                .wrap(Wrap { trim: false }),
+            Paragraph::new(format!(
+                "{message}\nEvidence: {} · {}",
+                app.session
+                    .status
+                    .evidence
+                    .as_deref()
+                    .unwrap_or("unavailable"),
+                app.session.status.reason
+            ))
+            .style(Style::default().fg(color))
+            .block(
+                Block::bordered()
+                    .border_style(Style::default().fg(Color::Cyan))
+                    .title(format!(
+                        " Status · semantic status: {} · {} ",
+                        app.session.status.state.label(),
+                        app.session.status.reason
+                    )),
+            )
+            .wrap(Wrap { trim: false }),
             status,
         );
         let compact_help;
@@ -288,14 +301,16 @@ impl Ui {
         } else if frame.area().width < 80 || frame.area().height < 22 {
             if app.attached {
                 compact_help = format!(
-                    "Ctrl-C interrupt · Ctrl-] dashboard\nProcess: {:?} · status: unknown",
-                    app.session.lifecycle
+                    "Ctrl-C interrupt · Ctrl-] dashboard\nProcess: {:?} · status: {}",
+                    app.session.lifecycle,
+                    app.session.status.state.label()
                 );
                 &compact_help
             } else {
                 compact_help = format!(
-                    "a adopt · c Claude · x Codex · l fixture · Enter attach · s stop · u reconcile · d detach\nq quit/stop · Process: {:?} · status: unknown",
-                    app.session.lifecycle
+                    "a adopt · c Claude · x Codex · l fixture · Enter attach · s stop · d detach\nq quit/stop · Process: {:?} · status: {}",
+                    app.session.lifecycle,
+                    app.session.status.state.label()
                 );
                 &compact_help
             }
