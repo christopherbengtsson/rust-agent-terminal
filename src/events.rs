@@ -56,6 +56,11 @@ pub enum NativeAgent {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Request {
+    InspectWorking {
+        request: String,
+        workspace: String,
+        selected: Option<Vec<u8>>,
+    },
     Discover {
         request: u64,
         repository: Vec<u8>,
@@ -123,6 +128,10 @@ pub struct LaunchResult {
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Observation {
+    #[serde(default)]
+    pub diff_protocol: u32,
+    #[serde(default)]
+    pub working_diff: Option<crate::working_diff::Response>,
     #[serde(default)]
     pub registry_protocol: u32,
     #[serde(default)]

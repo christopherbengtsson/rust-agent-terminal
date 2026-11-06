@@ -999,3 +999,29 @@ folder, branch or workspace/native-session identity. No native title is guessed
 from screen text and no extra naming turn/provider is used. See the
 [versioned first-prompt/naming proof](proofs/m2-07-prompt-naming.md) for actual
 Claude 2.1.319 / Codex 0.167.0 results and remaining qualification boundaries.
+
+### Working inspection (Milestone 2 ticket 13)
+
+Working inspection is a workspace-owned request, independent of the selected
+coding runtime. The supervisor resolves its stable workspace ID through the
+retained registry and admits at most one cancellable comparison job. That worker
+rechecks canonical checkout identity, reads NUL-delimited status and generates
+separate HEAD-to-index and index-to-working-file patches; new files are read
+without staging. It shares the existing bounded Git subprocess runner (two seconds
+and 256 KiB per command, owned process-group cleanup), disables optional index
+locks, fsmonitor, external diff and textconv, and never takes mutation authority.
+Stop/Shutdown cancel it without waiting in the control loop; shutdown retains the
+worker’s cleanup obligation. Whole workspace and revision-pinned Review remain
+separate comparisons.
+
+Snapshots retain workspace/request IDs, canonical checkout identity, capture time,
+raw file paths, staged/unstaged/new/conflict state and selected content. One
+snapshot presents at most 1,024 files and 64 KiB per patch/new file, with explicit
+omission/oversize labels; the Git output cap produces an explicit unavailable
+comparison when status itself exceeds the bound. Submodule nested content is
+outside this comparison and is labelled. Safe printable text escapes terminal and
+bidi controls. The dashboard discards stale workspace/request responses, preserves
+file/context across refresh when possible and labels snapshots as not live.
+Status changes during capture get an additional warning; matching status does not
+claim atomic file contents. Each new inspection starts Working. See the
+[ticket evidence](proofs/m2-13-working-diff.md).

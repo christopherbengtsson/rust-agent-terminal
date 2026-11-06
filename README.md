@@ -53,6 +53,7 @@ terminals; normal navigation retains Reviews above the worktree sidebar.
 | `j` / Down | Select next worktree |
 | `k` / Up | Select previous worktree |
 | `r` | Refresh worktrees in the background |
+| `f` | Inspect the selected retained workspace’s Working diff; in the worktree list, adopt an unknown checkout first |
 | `w` | Open retained projects/workspaces; available in small terminals |
 | `A` | Enter an existing local repository path and register it without adopting or starting coding |
 | `j` / `k`, `[` / `]` in workspace picker | Select a workspace or jump between projects |
@@ -72,6 +73,17 @@ terminals; normal navigation retains Reviews above the worktree sidebar.
 | `y` | Retry history storage after repair; the sole writer retains pending bytes |
 | `d` | In dashboard focus, detach and exit while preserving execution |
 | `q` / Esc / Ctrl-C | In dashboard focus, request supervisor shutdown and quit after confirmed stop |
+
+Working inspection always opens a fresh read-only snapshot of staged, unstaged
+and new files. `j`/`k` selects changed files; arrows scroll content, Page Up/Down
+moves eight lines, and Home returns to the start. `r` refreshes while preserving
+the selected file/context where available; `f` or Esc returns. Workspace,
+checkout, request and capture time identify the snapshot: it is not a live or
+atomic view of files an agent can still change. Stop, quit and detach remain
+available. Binary, conflict, submodule, missing/unsupported and oversized content
+have explicit explanations. Inspection neither changes the index nor runs
+repository-defined external diff, text conversion or fsmonitor programs. Whole
+workspace comparison and external-editor inspection follow in separate tickets.
 
 In attached focus, UTF-8 characters, Ctrl-C, legacy control/Alt shortcuts,
 arrows, navigation keys, F1–F12 and Shift-Tab reach the native/fixture PTY. The pane and
