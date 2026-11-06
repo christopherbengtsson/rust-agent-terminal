@@ -983,8 +983,8 @@ the original failure and the final fix/retest boundary when available.
 
 `events` defines the canonical dashboard effects, session requests, observations,
 launch results and lifecycle vocabulary. `App` accepts usable dimensions from
-`Ui`, remembers successful resize dispatch for the exact control target, native
-conversation, execution readiness and dimensions, and retries a saturated bounded
+`Ui`, remembers successful resize dispatch for the exact control target, managed
+session UUID, execution readiness and dimensions, and retries a saturated bounded
 queue on the next frame. A previous owner cannot satisfy a new owner's resize;
 the adopted parser receives its viewport before launch, and a newly running PTY
 receives it again if preparation already accepted that geometry. `main` only
