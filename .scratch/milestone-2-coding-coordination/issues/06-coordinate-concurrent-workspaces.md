@@ -1,7 +1,7 @@
 # 06: Run independent workspaces without mixed controls or history
 
 Status: ready-for-agent
-Resolved: yes
+Resolved: no
 Blocked by: 03, 05
 
 **What to build:** Launch coding agents in separate workspaces and switch between them while each retains its own input, screen, status, lifecycle and captured history.
@@ -28,3 +28,10 @@ meaningful launch/storage/cleanup representatives pass; final build/fmt/Clippy
 pass. The full all-target aggregate remains assigned to the fresh integration
 merger after 06/08. Native concurrency and complete milestone qualification remain
 ticket 19; no new native support claim is made by this ticket.
+
+Reopened after the combined 06/08 aggregate at `610c723febb759dc76c23bee0f783f96ee679825`:
+ownership checks report 61 passed, 12 failed and 2 ignored. Preservation failures
+include launch-result replay, retained workspace identity, capture accounting,
+history pagination and recovery. Focused concurrency passes do not resolve these
+compatibility failures. See [integration evidence](../../../docs/proofs/m2-06-08-integration-gate.md).
+Close again only after corrections and the required full compatibility gate pass.
