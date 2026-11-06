@@ -673,3 +673,30 @@ fresh native retests, final source checks and live-tracker resource revalidation
 all passed. This concrete default-native behavior is distinct from
 arbitrary processes deliberately escaping ownership. The record preserves both
 the original failure and the final fix/retest boundary when available.
+
+### Final review interaction and lifecycle boundaries
+
+`events` defines the canonical dashboard effects, session requests, observations,
+launch results and lifecycle vocabulary. `App` accepts usable dimensions from
+`Ui`, remembers successful resize dispatch and retries a saturated bounded queue
+on the next frame. `main` only dispatches that effect and returns its result.
+The launch-intent helper shares request identity policy across explicit fixture,
+Claude, Codex and resume actions. Persistence commands retain their separate
+prepare/authorize/save meanings while carrying one named metadata snapshot.
+
+New observations and durable JSON carry a typed task/session/request identity.
+Session UUIDs key capture, history sealing and cleanup; the existing wire display
+label remains derived for compatibility. Old durable JSON is converted explicitly
+at the persistence read boundary with bounded task/request/label lengths and UUID
+validation. Opaque task and request strings remain valid, including request spaces;
+malformed legacy identities fail visibly without deleting records or history.
+
+A native leader's original exit code/signal is retained before owned-descendant
+cleanup. Confirmed cleanup produces `Exited` for success or `Failed` for nonzero
+exit/signal; explicit Stop/quit of a running process remains `Stopped`. Cleanup
+failure remains `StopFailed` and retryable without discarding an already observed
+native outcome. Semantic turn status remains separate. Failed final executions
+follow the same bounded drain, final flush, seal and explicit-next-launch barriers
+as successful exits. The original reason is persisted independently of transient
+control/storage errors and returned with readable history; reload never turns a
+fully cleaned failed session into uncertain execution or restarts coding.

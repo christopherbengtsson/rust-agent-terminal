@@ -1,6 +1,5 @@
 //! Thin scripted-session proof. All blocking transport and PTY operations live here.
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
-use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, VecDeque},
     fs::{self, File, OpenOptions},
@@ -27,128 +26,7 @@ pub const COLS: u16 = 100;
 pub const MAX_ROWS: u16 = 80;
 pub const MAX_COLS: u16 = 200;
 const MAX_FRAME: usize = 4 * 1024 * 1024;
-#[derive(Debug, Serialize, Deserialize)]
-pub enum Request {
-    Adopt(Vec<u8>),
-    Launch(String),
-    LaunchClaude(String),
-    LaunchCodex(String),
-    Resume(String),
-    QueryLaunch(String),
-    Reconcile,
-    History { index: usize, offset: u64 },
-    Input(Vec<u8>),
-    Key(crossterm::event::KeyEvent),
-    Paste(String),
-    Screen,
-    Stop,
-    RetryStorage,
-    Cleanup { page: usize },
-    DeleteHistory { id: String },
-    Resize { rows: u16, cols: u16 },
-    Shutdown,
-}
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Lifecycle {
-    #[default]
-    Idle,
-    Running,
-    Stopping,
-    Exited,
-    Stopped,
-    StopFailed,
-    Interrupted,
-}
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct LaunchResult {
-    pub request: String,
-    pub identity: Option<String>,
-    pub error: Option<String>,
-}
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
-pub struct Observation {
-    #[serde(default)]
-    pub connection_lost: bool,
-    #[serde(default)]
-    pub capacity: crate::cleanup::Capacity,
-    #[serde(default)]
-    pub cleanup: Option<crate::cleanup::Page>,
-    #[serde(default)]
-    pub cleanup_message: Option<String>,
-    #[serde(default)]
-    pub capture_pending_bytes: usize,
-    #[serde(default)]
-    /// Owner-lifetime bytes read from PTY, including the producer block waiting
-    /// for queue space. Baseline at launch before comparing current-session durable bytes.
-    pub accepted_bytes: u64,
-    #[serde(default)]
-    pub written_bytes: u64,
-    #[serde(default)]
-    pub storage_wait_millis: u64,
-    #[serde(default)]
-    pub producer_wait_millis: u64,
-    #[serde(default)]
-    pub storage_error: Option<String>,
-    #[serde(default)]
-    pub capture_loss_possible: bool,
-    #[serde(default)]
-    pub capture_high_water: usize,
-    #[serde(default)]
-    pub capture_backpressure_count: u64,
-    #[serde(default)]
-    pub capture_backpressure_micros: u64,
-    #[serde(default)]
-    pub subscriber_frame_high_water: usize,
-    #[serde(default)]
-    pub execution: Option<crate::recovery::Execution>,
-    #[serde(default)]
-    pub reconciled: bool,
-    #[serde(default)]
-    pub history: Option<crate::persistence::HistoryPage>,
-    #[serde(default)]
-    pub history_index: usize,
-    #[serde(default)]
-    /// Durable raw prefix for the current session; output_bytes is owner-lifetime.
-    /// Baseline output_bytes at each launch before comparing these counters.
-    pub durable_bytes: u64,
-    #[serde(default)]
-    pub metadata_pending: bool,
-    #[serde(default)]
-    pub durable_flush_count: u64,
-    #[serde(default)]
-    pub durable_commits: std::collections::VecDeque<crate::persistence::DurableCommit>,
-    #[serde(default)]
-    pub durable_completed_millis: u64,
-    #[serde(default)]
-    pub sync_commit_micros: u64,
-    #[serde(default)]
-    pub accepted_to_durable_millis: u64,
-    #[serde(default)]
-    pub launch_request: String,
-    #[serde(default)]
-    pub launch_result: Option<LaunchResult>,
-    pub adopted: Option<String>,
-    #[serde(default)]
-    pub agent: Option<String>,
-    #[serde(default)]
-    pub native_conversation: Option<String>,
-    pub identity: Option<String>,
-    #[serde(default)]
-    pub status: crate::native_status::Status,
-    pub screen: String,
-    pub formatted: String,
-    pub rows: u16,
-    pub cols: u16,
-    /// All bytes through this boundary have been applied exactly once to the screen.
-    pub output_bytes: u64,
-    #[serde(skip)]
-    pub decoded: Option<vt100::Screen>,
-    pub error: Option<String>,
-    pub stopped: bool,
-    #[serde(default)]
-    pub lifecycle: Lifecycle,
-    pub control_denied: bool,
-}
+pub use crate::events::{LaunchResult, Lifecycle, Observation, Request};
 pub struct Client {
     pub requests: SyncSender<Request>,
     pub events: Receiver<Observation>,
@@ -454,9 +332,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
     storage
         .commands
         .try_send(crate::persistence::Command::Save(
-            crate::persistence::metadata(&state),
-            checkout.as_ref().map(|p| path_bytes(p)),
-            task_identity.clone(),
+            crate::persistence::Snapshot::new(&state, checkout.as_deref(), &task_identity),
         ))?;
     let mut save_pending = 1usize;
     let mut pending_launch: Option<Request> = None;
@@ -482,7 +358,6 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let mut monitor: Option<crate::native_status::Monitor> = None;
     let mut codex_monitor: Option<crate::codex_status::Monitor> = None;
     let mut shutdown = false;
-    let mut native_exit = false;
     let mut retry_requested = false;
     let screen = Arc::new(Mutex::new(ScreenState {
         parser: vt100::Parser::new(ROWS.try_into().unwrap(), COLS.try_into().unwrap(), 0),
@@ -625,9 +500,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             launches.insert(result.request.clone(), result.clone());
             state.launch_result = Some(result);
             match storage.commands.try_send(crate::persistence::Command::Save(
-                crate::persistence::metadata(&state),
-                checkout.as_ref().map(|p| path_bytes(p)),
-                task_identity.clone(),
+                crate::persistence::Snapshot::new(&state, checkout.as_deref(), &task_identity),
             )) {
                 Ok(()) => {
                     save_pending += 1;
@@ -655,11 +528,11 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
         }
         if retry_requested {
             let command = if metadata_failed {
-                crate::persistence::Command::Save(
-                    crate::persistence::metadata(&state),
-                    checkout.as_ref().map(|p| path_bytes(p)),
-                    task_identity.clone(),
-                )
+                crate::persistence::Command::Save(crate::persistence::Snapshot::new(
+                    &state,
+                    checkout.as_deref(),
+                    &task_identity,
+                ))
             } else {
                 crate::persistence::Command::Retry
             };
@@ -697,7 +570,11 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             || pending_launch.is_some()
             || gate_receipt.is_some()
             || outcome_reply;
-        if (shutdown || matches!(state.lifecycle, Lifecycle::Exited | Lifecycle::Stopped))
+        if (shutdown
+            || matches!(
+                state.lifecycle,
+                Lifecycle::Exited | Lifecycle::Stopped | Lifecycle::Failed
+            ))
             && child.is_none()
             && stopping.is_none()
             && eof
@@ -719,11 +596,14 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             && eof
             && capture_done.is_none()
             && progress.pending_bytes == 0
-            && matches!(state.lifecycle, Lifecycle::Stopped | Lifecycle::Exited)
+            && matches!(
+                state.lifecycle,
+                Lifecycle::Stopped | Lifecycle::Exited | Lifecycle::Failed
+            )
             && let Some(id) = state
-                .identity
-                .as_deref()
-                .and_then(|identity| crate::persistence::session_id(identity).ok())
+                .session_identity
+                .as_ref()
+                .map(|identity| identity.session.clone())
             && storage
                 .commands
                 .try_send(crate::persistence::Command::Seal(id))
@@ -746,8 +626,11 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             && let Some(active) = child.as_mut()
         {
             match active.try_wait() {
-                Ok(Some(_)) => {
-                    native_exit = true;
+                Ok(Some(status)) => {
+                    state.process_exit = Some(crate::events::ProcessExit {
+                        code: status.exit_code(),
+                        signal: status.signal().map(str::to_owned),
+                    });
                     writer = None;
                     state.lifecycle = Lifecycle::Stopping;
                     stop_drain.store(true, Ordering::Release);
@@ -775,19 +658,21 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                 shutdown = false;
             } else {
                 owned_scope = None;
-                state.lifecycle = if native_exit {
-                    Lifecycle::Exited
-                } else {
-                    Lifecycle::Stopped
+                state.lifecycle = match state.process_exit.as_ref() {
+                    Some(outcome) if outcome.failed() => Lifecycle::Failed,
+                    Some(_) => Lifecycle::Exited,
+                    None => Lifecycle::Stopped,
                 };
                 state.execution = None;
                 final_flush = false;
                 if storage
                     .commands
                     .try_send(crate::persistence::Command::Save(
-                        crate::persistence::metadata(&state),
-                        checkout.as_ref().map(|p| path_bytes(p)),
-                        task_identity.clone(),
+                        crate::persistence::Snapshot::new(
+                            &state,
+                            checkout.as_deref(),
+                            &task_identity,
+                        ),
                     ))
                     .is_ok()
                 {
@@ -834,9 +719,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             if storage
                 .commands
                 .try_send(crate::persistence::Command::Save(
-                    crate::persistence::metadata(&saved),
-                    checkout.as_ref().map(|p| path_bytes(p)),
-                    task_identity.clone(),
+                    crate::persistence::Snapshot::new(&saved, checkout.as_deref(), &task_identity),
                 ))
                 .is_ok()
             {
@@ -1041,6 +924,8 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     }
                     if checkout.as_ref() != Some(&path) {
                         state.identity = None;
+                        state.session_identity = None;
+                        state.process_exit = None;
                         state.lifecycle = Lifecycle::Idle;
                         state.native_conversation = None;
                         state.agent = None;
@@ -1058,7 +943,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                 }
                 Request::QueryLaunch(_) => return Err("Launch request unknown to this supervisor; do not replay uncertain activity after supervisor loss".into()),
                 Request::Launch(request) | Request::LaunchClaude(request) | Request::LaunchCodex(request) | Request::Resume(request) => {
-                    if !continuing && child.is_none() && stopping.is_none() && (!eof || capture_done.is_some() || flush_pending || storage.progress.lock().unwrap().pending_bytes > 0 || metadata_failed || (matches!(state.lifecycle, Lifecycle::Stopped | Lifecycle::Exited) && !final_flush)) {
+                    if !continuing && child.is_none() && stopping.is_none() && (!eof || capture_done.is_some() || flush_pending || storage.progress.lock().unwrap().pending_bytes > 0 || metadata_failed || (matches!(state.lifecycle, Lifecycle::Stopped | Lifecycle::Exited | Lifecycle::Failed) && !final_flush)) {
                         return Err("Previous session history is still pending; repair storage and press y to retry before starting another session".into());
                     }
                     if state.execution.is_some() && !continuing && child.is_none() { return Err("Interrupted execution is uncertain; u reconciles process evidence. Verified reboot resolves unknown descendants; no automatic coding restart.".into()); }
@@ -1084,10 +969,13 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                         state.execution = Some(crate::recovery::Execution::prepared()?);
                         state.reconciled = false;
                         let session = uuid::Uuid::new_v4().to_string();
-                        state.identity = Some(format!("task={} session={} request={request}", task_identity, session));
+                        let identity = crate::events::SessionIdentity { task: task_identity.clone(), session, request: request.clone() };
+                        state.identity = Some(identity.label());
+                        state.session_identity = Some(identity);
+                        state.process_exit = None;
                         state.launch_result = None;
                         state.lifecycle = Lifecycle::Interrupted;
-                        storage.commands.try_send(crate::persistence::Command::Prepare(crate::persistence::metadata(&state), Some(path_bytes(path)), task_identity.clone()))?;
+                        storage.commands.try_send(crate::persistence::Command::Prepare(crate::persistence::Snapshot::new(&state, Some(path), &task_identity)))?;
                         save_pending += 1;
                         pending_launch = Some(if resume { Request::Resume(request) } else if claude { Request::LaunchClaude(request) } else if codex { Request::LaunchCodex(request) } else { Request::Launch(request) });
                         deferred = true;
@@ -1233,7 +1121,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                         let _ = proof_receipt_pause;
                         let _ = receipt.send(result);
                     });
-                    storage.commands.try_send(crate::persistence::Command::Authorize(crate::persistence::metadata(&state), Some(path_bytes(path)), task_identity.clone()))?;
+                    storage.commands.try_send(crate::persistence::Command::Authorize(crate::persistence::Snapshot::new(&state, Some(path), &task_identity)))?;
                     save_pending += 1;
                     deferred = true;
                     let mut sink = pty.master.take_writer()?;
@@ -1250,11 +1138,10 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     writer = Some(input);
                     state.lifecycle = Lifecycle::Running;
                     state.stopped = false;
-                    native_exit = false;
                     state.history_index = 0;
                     history_sealed = false;
                     capture_started_here = true;
-                    let session = crate::persistence::session_id(state.identity.as_ref().ok_or("Missing prepared identity")?).map_err(|e| e.to_string())?;
+                    let session = state.session_identity.as_ref().ok_or("Missing prepared identity")?.session.clone();
                     let capture = storage.output.clone();
                     let (finished, done) = mpsc::sync_channel(1);
                     capture_done = Some(done);
@@ -1380,7 +1267,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     storage.commands.try_send(crate::persistence::Command::Cleanup(page)).map_err(|e| format!("Cleanup busy: {e}; retry"))?;
                 }
                 Request::DeleteHistory { id } => {
-                    if state.identity.as_deref().and_then(|identity| crate::persistence::session_id(identity).ok()).as_deref() == Some(&id)
+                    if state.session_identity.as_ref().map(|identity| identity.session.as_str()) == Some(&id)
                         && (child.is_some() || stopping.is_some() || !eof || capture_done.is_some() || !final_flush || state.metadata_pending || progress.pending_bytes > 0)
                     { return Err("Selected history still has active, uncertain or unflushed capture".into()); }
                     state.cleanup_message = Some(format!("Deleting explicitly selected history {id}; completion pending"));
@@ -1411,8 +1298,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     if stopping.is_none() {
                         if let Some(active) = child.take() {
                             writer = None;
-                            native_exit = false;
-                            state.lifecycle = Lifecycle::Stopping;
+                                    state.lifecycle = Lifecycle::Stopping;
                             stop_drain.store(true, Ordering::Release);
                             stopping = Some(crate::lifecycle::stop(active, owned_scope.as_ref().unwrap().clone()));
                         } else {
@@ -1448,9 +1334,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
         }
         if save && !deferred {
             match storage.commands.try_send(crate::persistence::Command::Save(
-                crate::persistence::metadata(&state),
-                checkout.as_ref().map(|p| path_bytes(p)),
-                task_identity.clone(),
+                crate::persistence::Snapshot::new(&state, checkout.as_deref(), &task_identity),
             )) {
                 Ok(()) => {
                     save_pending += 1;

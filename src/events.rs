@@ -1,4 +1,5 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use serde::{Deserialize, Serialize};
 
 use crate::git::Worktree;
 
@@ -33,5 +34,173 @@ pub fn action_for_key(key: KeyEvent) -> Option<Action> {
         KeyCode::Char('r') => Some(Action::Refresh),
         KeyCode::Char('q') | KeyCode::Esc => Some(Action::Quit),
         _ => None,
+    }
+}
+
+pub enum Effect {
+    Refresh,
+    Detach,
+    Session(Request),
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub enum Request {
+    Adopt(Vec<u8>),
+    Launch(String),
+    LaunchClaude(String),
+    LaunchCodex(String),
+    Resume(String),
+    QueryLaunch(String),
+    Reconcile,
+    History { index: usize, offset: u64 },
+    Input(Vec<u8>),
+    Key(crossterm::event::KeyEvent),
+    Paste(String),
+    Screen,
+    Stop,
+    RetryStorage,
+    Cleanup { page: usize },
+    DeleteHistory { id: String },
+    Resize { rows: u16, cols: u16 },
+    Shutdown,
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Lifecycle {
+    #[default]
+    Idle,
+    Running,
+    Stopping,
+    Exited,
+    Failed,
+    Stopped,
+    StopFailed,
+    Interrupted,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct LaunchResult {
+    pub request: String,
+    pub identity: Option<String>,
+    pub error: Option<String>,
+}
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct Observation {
+    #[serde(default)]
+    pub connection_lost: bool,
+    #[serde(default)]
+    pub capacity: crate::cleanup::Capacity,
+    #[serde(default)]
+    pub cleanup: Option<crate::cleanup::Page>,
+    #[serde(default)]
+    pub cleanup_message: Option<String>,
+    #[serde(default)]
+    pub capture_pending_bytes: usize,
+    #[serde(default)]
+    /// Owner-lifetime bytes read from PTY, including the producer block waiting
+    /// for queue space. Baseline at launch before comparing current-session durable bytes.
+    pub accepted_bytes: u64,
+    #[serde(default)]
+    pub written_bytes: u64,
+    #[serde(default)]
+    pub storage_wait_millis: u64,
+    #[serde(default)]
+    pub producer_wait_millis: u64,
+    #[serde(default)]
+    pub storage_error: Option<String>,
+    #[serde(default)]
+    pub capture_loss_possible: bool,
+    #[serde(default)]
+    pub capture_high_water: usize,
+    #[serde(default)]
+    pub capture_backpressure_count: u64,
+    #[serde(default)]
+    pub capture_backpressure_micros: u64,
+    #[serde(default)]
+    pub subscriber_frame_high_water: usize,
+    #[serde(default)]
+    pub execution: Option<crate::recovery::Execution>,
+    #[serde(default)]
+    pub reconciled: bool,
+    #[serde(default)]
+    pub history: Option<crate::persistence::HistoryPage>,
+    #[serde(default)]
+    pub history_index: usize,
+    #[serde(default)]
+    /// Durable raw prefix for the current session; output_bytes is owner-lifetime.
+    /// Baseline output_bytes at each launch before comparing these counters.
+    pub durable_bytes: u64,
+    #[serde(default)]
+    pub metadata_pending: bool,
+    #[serde(default)]
+    pub durable_flush_count: u64,
+    #[serde(default)]
+    pub durable_commits: std::collections::VecDeque<crate::persistence::DurableCommit>,
+    #[serde(default)]
+    pub durable_completed_millis: u64,
+    #[serde(default)]
+    pub sync_commit_micros: u64,
+    #[serde(default)]
+    pub accepted_to_durable_millis: u64,
+    #[serde(default)]
+    pub launch_request: String,
+    #[serde(default)]
+    pub launch_result: Option<LaunchResult>,
+    pub adopted: Option<String>,
+    #[serde(default)]
+    pub agent: Option<String>,
+    #[serde(default)]
+    pub native_conversation: Option<String>,
+    pub identity: Option<String>,
+    #[serde(default)]
+    pub session_identity: Option<SessionIdentity>,
+    #[serde(default)]
+    pub process_exit: Option<ProcessExit>,
+    #[serde(default)]
+    pub status: crate::native_status::Status,
+    pub screen: String,
+    pub formatted: String,
+    pub rows: u16,
+    pub cols: u16,
+    /// All bytes through this boundary have been applied exactly once to the screen.
+    pub output_bytes: u64,
+    #[serde(skip)]
+    pub decoded: Option<vt100::Screen>,
+    pub error: Option<String>,
+    pub stopped: bool,
+    #[serde(default)]
+    pub lifecycle: Lifecycle,
+    pub control_denied: bool,
+}
+
+/// Runtime and durable identity; the wire label remains a derived compatibility field.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SessionIdentity {
+    pub task: String,
+    pub session: String,
+    pub request: String,
+}
+impl SessionIdentity {
+    pub fn label(&self) -> String {
+        format!(
+            "task={} session={} request={}",
+            self.task, self.session, self.request
+        )
+    }
+}
+
+/// Original native leader outcome, retained independently of cleanup/storage errors.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ProcessExit {
+    pub code: u32,
+    pub signal: Option<String>,
+}
+impl ProcessExit {
+    pub fn failed(&self) -> bool {
+        self.code != 0 || self.signal.is_some()
+    }
+    pub fn reason(&self) -> String {
+        match &self.signal {
+            Some(signal) => format!("signal {signal}"),
+            None => format!("exit code {}", self.code),
+        }
     }
 }

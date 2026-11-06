@@ -1,20 +1,15 @@
 use std::path::PathBuf;
 
 use crate::{
-    events::{Action, Event},
+    events::{Action, Event, Observation, Request},
     git::Worktree,
-    session::{Observation, Request},
 };
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
-pub enum Effect {
-    Refresh,
-    Detach,
-    Session(Request),
-}
+pub use crate::events::Effect;
 
 pub struct App {
-    pub session: crate::session::Observation,
+    pub session: Observation,
     pub attached: bool,
     pub history_open: bool,
     pub cleanup_open: bool,
@@ -31,11 +26,15 @@ pub struct App {
     pub selected: Option<usize>,
     pub loading: bool,
     pub error: Option<String>,
+    sent_viewport: Option<(u16, u16)>,
+    pending_viewport: Option<(u16, u16)>,
 }
 
 impl App {
     pub fn new(repository: PathBuf) -> Self {
         Self {
+            sent_viewport: None,
+            pending_viewport: None,
             session: Default::default(),
             attached: false,
             history_open: false,
@@ -54,6 +53,38 @@ impl App {
             loading: false,
             error: None,
         }
+    }
+
+    /// Ui computes geometry; App decides whether a new usable size needs dispatch.
+    pub fn viewport(&mut self, dimensions: Option<(u16, u16)>) -> Option<Effect> {
+        let dimensions = dimensions?;
+        if self.sent_viewport == Some(dimensions) {
+            return None;
+        }
+        self.pending_viewport = Some(dimensions);
+        Some(Effect::Session(Request::Resize {
+            rows: dimensions.0,
+            cols: dimensions.1,
+        }))
+    }
+
+    pub fn viewport_dispatched(&mut self, result: Result<(), String>) {
+        match result {
+            Ok(()) => self.sent_viewport = self.pending_viewport.take(),
+            Err(error) => {
+                self.pending_viewport = None;
+                self.error = Some(error);
+            }
+        }
+    }
+
+    fn launch_intent(&mut self, request: fn(String) -> Request) -> Effect {
+        if self.session.launch_result.is_some()
+            || self.session.lifecycle == crate::session::Lifecycle::Running
+        {
+            self.launch_request = uuid::Uuid::new_v4().to_string();
+        }
+        Effect::Session(request(self.launch_request.clone()))
     }
 
     pub fn observe_session(&mut self, mut observation: Observation) {
@@ -258,45 +289,16 @@ impl App {
                 ))));
             }
             KeyCode::Char('v') if key.modifiers.is_empty() => {
-                if self.session.launch_result.is_some()
-                    || self.session.lifecycle == crate::session::Lifecycle::Running
-                {
-                    self.launch_request = uuid::Uuid::new_v4().to_string();
-                }
-                return Some(Effect::Session(Request::Resume(
-                    self.launch_request.clone(),
-                )));
+                return Some(self.launch_intent(Request::Resume));
             }
             KeyCode::Char('c') if key.modifiers.is_empty() => {
-                if self.session.launch_result.is_some()
-                    || self.session.lifecycle == crate::session::Lifecycle::Running
-                {
-                    self.launch_request = uuid::Uuid::new_v4().to_string();
-                }
-                return Some(Effect::Session(Request::LaunchClaude(
-                    self.launch_request.clone(),
-                )));
+                return Some(self.launch_intent(Request::LaunchClaude));
             }
             KeyCode::Char('x') if key.modifiers.is_empty() => {
-                if self.session.launch_result.is_some()
-                    || self.session.lifecycle == crate::session::Lifecycle::Running
-                {
-                    self.launch_request = uuid::Uuid::new_v4().to_string();
-                }
-                return Some(Effect::Session(Request::LaunchCodex(
-                    self.launch_request.clone(),
-                )));
+                return Some(self.launch_intent(Request::LaunchCodex));
             }
             KeyCode::Char('l') if key.modifiers.is_empty() => {
-                if self.session.launch_result.is_some()
-                    || self.session.lifecycle == crate::session::Lifecycle::Running
-                {
-                    // An explicit new launch after a known result is a new intent.
-                    self.launch_request = uuid::Uuid::new_v4().to_string();
-                }
-                return Some(Effect::Session(Request::Launch(
-                    self.launch_request.clone(),
-                )));
+                return Some(self.launch_intent(Request::Launch));
             }
             KeyCode::Enter if key.modifiers.is_empty() && self.session.identity.is_some() => {
                 self.history_open = false;
@@ -400,6 +402,35 @@ mod tests {
             path: PathBuf::from(path),
             ..Worktree::default()
         }
+    }
+
+    #[test]
+    fn viewport_changes_retry_after_saturation_and_ignore_unusable_geometry() {
+        let mut app = App::new(PathBuf::from("."));
+        assert!(matches!(
+            app.viewport(Some((24, 100))),
+            Some(Effect::Session(Request::Resize {
+                rows: 24,
+                cols: 100
+            }))
+        ));
+        app.viewport_dispatched(Err("bounded session queue full".into()));
+        assert!(app.error.as_deref().unwrap().contains("queue full"));
+        assert!(matches!(
+            app.viewport(Some((24, 100))),
+            Some(Effect::Session(Request::Resize { .. }))
+        ));
+        app.viewport_dispatched(Ok(()));
+        assert!(app.viewport(Some((24, 100))).is_none());
+        assert!(app.viewport(None).is_none());
+        assert!(app.viewport(Some((24, 100))).is_none());
+        assert!(matches!(
+            app.viewport(Some((32, 104))),
+            Some(Effect::Session(Request::Resize {
+                rows: 32,
+                cols: 104
+            }))
+        ));
     }
 
     #[test]

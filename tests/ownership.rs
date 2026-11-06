@@ -2543,8 +2543,8 @@ fn prior_boot_native_record_stays_interrupted_until_explicit_reconcile_then_resu
     let db = rusqlite::Connection::open(fixture.state().join("history.sqlite3")).unwrap();
     db.execute_batch("CREATE TABLE app (id INTEGER PRIMARY KEY CHECK(id=1), state TEXT NOT NULL, checkout BLOB, task TEXT NOT NULL); CREATE TABLE sessions (id TEXT PRIMARY KEY, identity TEXT NOT NULL, state TEXT NOT NULL, durable INTEGER NOT NULL DEFAULT 0); PRAGMA user_version=1;").unwrap();
     let identity =
-        "task=task16 session=33333333-4444-4555-8666-777777777777 request=prior-native-16";
-    let old = serde_json::json!({"adopted":fixture.repository.display().to_string(),"identity":identity,"agent":"Claude Code","native_conversation":"11111111-2222-4333-8444-555555555555","screen":"","formatted":"","rows":24,"cols":100,"output_bytes":0,"error":null,"stopped":false,"lifecycle":"Running","control_denied":false,"launch_request":"prior-native-16","execution":{"boot":"injected-prior-boot-16","pid":null,"start":null,"released":true}});
+        "task=task16 session=33333333-4444-4555-8666-777777777777 request=prior native16 λ";
+    let old = serde_json::json!({"adopted":fixture.repository.display().to_string(),"identity":identity,"agent":"Claude Code","native_conversation":"11111111-2222-4333-8444-555555555555","screen":"","formatted":"","rows":24,"cols":100,"output_bytes":0,"error":null,"stopped":false,"lifecycle":"Running","control_denied":false,"launch_request":"prior native16 λ","execution":{"boot":"injected-prior-boot-16","pid":null,"start":null,"released":true}});
     db.execute(
         "INSERT INTO app VALUES(1,?1,?2,'task16')",
         rusqlite::params![old.to_string(), fixture.repository.as_os_str().as_bytes()],
@@ -2566,6 +2566,16 @@ fn prior_boot_native_record_stays_interrupted_until_explicit_reconcile_then_resu
     dashboard.kill();
     let mut control = Controller::connect(&fixture);
     assert_no_owned_coding(&fixture);
+    assert_eq!(control.greeting["identity"], identity);
+    assert_eq!(control.greeting["session_identity"]["task"], "task16");
+    assert_eq!(
+        control.greeting["session_identity"]["session"],
+        "33333333-4444-4555-8666-777777777777"
+    );
+    assert_eq!(
+        control.greeting["session_identity"]["request"],
+        "prior native16 λ"
+    );
     let blocked = control.request(serde_json::json!({"Resume":"before-reconciliation-16"}));
     assert!(blocked["error"].as_str().unwrap().contains("uncertain"));
     wait_reconciled(&mut control);
@@ -4954,4 +4964,122 @@ fn full_storage_input_receipt_measurement17() {
     }
     log(serde_json::json!({"kind":"finished","failures":[],"identity":identity,"final":shutdown}));
     eprintln!("fault supplement evidence {}", evidence.display());
+}
+
+#[test]
+fn native_process_outcomes_survive_cleanup_reload_and_explicit_resume() {
+    use std::os::unix::fs::PermissionsExt;
+    for (command, lifecycle, code, signal) in [
+        ("fail", "Failed", Some(7), false),
+        ("exit", "Exited", Some(0), false),
+        ("signal", "Failed", None, true),
+    ] {
+        let fixture = Fixture::new();
+        let tools = fixture.temp.path().join("native-tools");
+        std::fs::create_dir(&tools).unwrap();
+        let wrapper = tools.join("claude");
+        std::fs::write(&wrapper, "#!/bin/sh\nprintf 'native-outcome-ready\\n'\nwhile IFS= read -r command; do\ncase \"$command\" in\nintermediate) false; printf 'intermediate command failed; still alive\\n';;\nexit) printf 'final-native-output\\n'; exit 0;;\nfail) printf 'final-native-output\\n'; exit 7;;\nsignal) printf 'final-native-output\\n'; kill -TERM $$;;\nesac\ndone\n").unwrap();
+        std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let path = std::env::join_paths(
+            std::iter::once(tools).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+        )
+        .unwrap();
+        let mut dashboard =
+            Dashboard::open_with_path(&fixture.repository, &fixture.state(), Some(&path));
+        dashboard.wait("Discovery complete");
+        dashboard.send(b"a");
+        dashboard.wait("Adopted");
+        dashboard.send(b"c");
+        dashboard.wait("native-outcome-ready");
+        dashboard.send(b"intermediate\r");
+        dashboard.wait("intermediate command failed; still alive");
+        dashboard.kill();
+        let mut control = Controller::connect(&fixture);
+        assert_eq!(control.greeting["lifecycle"], "Running");
+        assert!(
+            control.greeting["process_exit"].is_null(),
+            "intermediate command is not a native process failure"
+        );
+        let identity = control.greeting["identity"].clone();
+        let native = control.greeting["native_conversation"].clone();
+        if command == "fail" {
+            std::fs::write(fixture.state().join("proof-storage-sync"), "error").unwrap();
+        }
+        control.request(serde_json::json!({"Input":format!("{command}\r").as_bytes()}));
+        let finished = cleanup_wait15(&mut control, |state| {
+            state["lifecycle"] != "Running"
+                && state["lifecycle"] != "Stopping"
+                && state["metadata_pending"] == false
+        });
+        assert_eq!(
+            finished["lifecycle"], lifecycle,
+            "original native outcome must survive descendant cleanup"
+        );
+        assert!(finished["execution"].is_null());
+        if let Some(code) = code {
+            assert_eq!(finished["process_exit"]["code"], code);
+        }
+        assert_eq!(finished["process_exit"]["signal"].is_string(), signal);
+        if command == "fail" {
+            let fault = cleanup_wait15(&mut control, |state| state["storage_error"].is_string());
+            assert_eq!(fault["process_exit"], finished["process_exit"]);
+            let blocked = control.request(serde_json::json!({"Resume":"blocked-until-final-sync"}));
+            assert!(
+                blocked["launch_result"]["error"]
+                    .as_str()
+                    .unwrap()
+                    .contains("history is still pending"),
+                "blocked state: {blocked}"
+            );
+            assert_eq!(blocked["identity"], identity);
+            assert_eq!(blocked["lifecycle"], "Failed");
+            assert_eq!(blocked["process_exit"], finished["process_exit"]);
+            std::fs::remove_file(fixture.state().join("proof-storage-sync")).unwrap();
+            control.request(serde_json::json!("RetryStorage"));
+        }
+        let deadline = Instant::now() + Duration::from_secs(8);
+        loop {
+            if cleanup_page15(&mut control)["cleanup"]["entries"][0]["eligible"] == true {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "finished history must flush and seal"
+            );
+        }
+        control.request(serde_json::json!({"History":{"index":0,"offset":0}}));
+        let history = cleanup_wait15(&mut control, |state| state["history"].is_object());
+        assert!(
+            history["history"]["text"]
+                .as_str()
+                .unwrap()
+                .contains("final-native-output")
+        );
+        assert_eq!(history["history"]["process_exit"], finished["process_exit"]);
+        kill_owner(&fixture);
+        drop(control);
+        let mut dashboard =
+            fixture.reopen_with_path_after_release(&format!("Process: {lifecycle}"), Some(&path));
+        if lifecycle == "Failed" {
+            dashboard.wait("Native process failed:");
+        }
+        dashboard.kill();
+        let mut control = Controller::connect(&fixture);
+        assert_eq!(control.greeting["identity"], identity);
+        assert_eq!(control.greeting["native_conversation"], native);
+        assert_eq!(control.greeting["process_exit"], finished["process_exit"]);
+        assert_no_owned_coding(&fixture);
+        let resumed =
+            control.request(serde_json::json!({"Resume":format!("explicit-after-{command}")}));
+        assert_ne!(resumed["identity"], identity);
+        assert_eq!(resumed["native_conversation"], native);
+        cleanup_wait15(&mut control, |state| state["lifecycle"] == "Running");
+        control.request(serde_json::json!("Stop"));
+        let stopped = cleanup_wait15(&mut control, |state| state["lifecycle"] == "Stopped");
+        assert!(
+            stopped["process_exit"].is_null(),
+            "explicit Stop is not spontaneous process failure"
+        );
+        control.request(serde_json::json!("Shutdown"));
+    }
 }
