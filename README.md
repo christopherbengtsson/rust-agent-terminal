@@ -94,7 +94,43 @@ branch. Ref movement uses the new local tip and labels the original selection;
 branch, HEAD, actual base tip and common ancestor identify the snapshot. No fetch
 runs during inspection. Missing bases, unrelated history and multiple common
 ancestors require an explicit related base choice. Every new inspection still
-opens Working. External-editor handoff follows in a separate ticket.
+opens Working.
+
+Inside either comparison, `e` opens a fresh **full comparison inspection** in the
+configured editor. The owner generates bounded content for every inventoried
+file, identifies HEAD/base/common ancestor where applicable, and labels binary,
+conflict, oversized or omitted content. The dashboard materializes a private,
+read-only `.diff` outside the checkout. That artifact stays unchanged while open;
+`e` again captures fresh content. The current selected file is positioned in the
+artifact where supported.
+
+`o` opens the selected **live source file** for editing; `E` opens the live
+workspace directory from dashboard navigation or inspection. These files are
+shared with the active agent: saving changes the workspace. The owner checks the
+retained checkout identity and returns only an existing regular source file within
+it. Deleted/missing files remain inspectable through `e`; source editing never
+substitutes a fabricated filename. Vim positions source at the new-side hunk
+nearest the visible diff line. This is a local-host source editing capability;
+remote source editing is not implemented.
+
+Vim is the default. Configure an executable and literal argument list with
+`RAT_EDITOR_JSON`, for example:
+
+```sh
+RAT_EDITOR_JSON='{"executable":"/usr/bin/vim","arguments":["-u","NONE"],"position":"vim"}' cargo run --locked -- /path/to/repository
+RAT_EDITOR_JSON='{"executable":"/usr/bin/pico","arguments":[],"position":"plus"}' cargo run --locked -- /path/to/repository
+```
+
+`position` is `vim` (line position and read-only inspection options), `plus`
+(`+line`), or `none` (the default for custom configurations). Paths are absolute
+argv operands; no shell parses executable, arguments, or paths. GUI editors must
+have a wait argument configured so dashboard ownership returns after editing,
+for example `arguments: ["--wait"]` for an editor supporting that option.
+Terminal ownership is released while the editor runs and reacquired after success,
+nonzero exit, or spawn failure. Selection, focus, history and diff context remain
+in memory, the dashboard redraws at the actual terminal size, and agents continue
+in the supervisor. Editor errors appear in the footer; the next key restores the
+usual keyboard help.
 
 In attached focus, UTF-8 characters, Ctrl-C, legacy control/Alt shortcuts,
 arrows, navigation keys, F1–F12 and Shift-Tab reach the native/fixture PTY. The pane and

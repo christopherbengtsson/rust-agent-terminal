@@ -560,6 +560,7 @@ impl Sessions {
                         | Request::RenameWorkspace { .. }
                         | Request::Discover { .. }
                         | Request::InspectWorking { .. }
+                        | Request::EditorSource { .. }
                 ) {
                     self.report_error("Invalid targeted session command".into());
                     return;
@@ -725,6 +726,8 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let mut discovery: Option<crate::git::GitWorker> = None;
     let mut pending_discovery: Option<(u64, PathBuf)> = None;
     let mut discovery_result = None;
+    let mut source_job: Option<crate::editor::SourceJob> = None;
+    let mut source_result = None;
     let mut diff_job: Option<crate::working_diff::Job> = None;
     let mut diff_result = None;
     let mut diff_save: Option<(uuid::Uuid, crate::working_diff::Response)> = None;
@@ -735,6 +738,11 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let mut delivery: Option<Delivery> = None;
     let mut pending = Vec::new();
     loop {
+        if source_job.as_ref().is_some_and(|job| job.is_finished())
+            && let Some(job) = source_job.take()
+        {
+            source_result = job.result.try_recv().ok();
+        }
         if diff_job.as_ref().is_some_and(|job| job.is_finished())
             && let Some(job) = diff_job.take()
             && let Ok(mut response) = job.result.try_recv()
@@ -876,6 +884,8 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
         let mut state = session.observation();
         state.subscriber_frame_high_water = subscriber_frame_high_water;
         state.diff_protocol = 2;
+        state.editor_protocol = 1;
+        state.editor_source = source_result.clone();
         state.working_diff = diff_result.clone();
         state.git_jobs_protocol = 1;
         state.registry_protocol = 1;
@@ -889,6 +899,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             && quitting
             && adoption.is_none()
             && discovery.is_none()
+            && source_job.is_none()
             && diff_job.is_none()
             && diff_save.is_none()
             && registry_operation.is_none();
@@ -904,6 +915,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     if controller.is_some() {
                         let refusal = Observation {
                             diff_protocol: 2,
+                            editor_protocol: 1,
                             git_jobs_protocol: 1,
                             registry_protocol: 1,
                             sessions_protocol: 1,
@@ -994,9 +1006,61 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
         {
             job.cancel();
         }
+        if matches!(&request, Request::Session {command, ..} if matches!(**command, Request::Stop))
+            && let Some(job) = &source_job
+        {
+            job.cancel();
+        }
+
         match request {
+            Request::EditorSource {
+                request,
+                workspace,
+                path,
+                line,
+            } => {
+                let result = (|| -> Result<(), String> {
+                    if request.len() > 128
+                        || workspace.len() > 256
+                        || path
+                            .as_ref()
+                            .is_some_and(|p| p.len() > 32768 || p.contains(&0))
+                    {
+                        return Err("Invalid source location identity/path".into());
+                    }
+                    if source_job.is_some() {
+                        return Err("Source location worker busy; retry".into());
+                    }
+                    let checkout = registry
+                        .workspaces
+                        .iter()
+                        .find(|w| w.id == workspace)
+                        .and_then(|w| w.checkout.clone())
+                        .ok_or("No retained checkout identity; adopt an existing checkout first")?;
+                    source_job = Some(
+                        crate::editor::SourceJob::start(
+                            checkout,
+                            request.clone(),
+                            workspace.clone(),
+                            path,
+                            line,
+                        )
+                        .map_err(|e| e.to_string())?,
+                    );
+                    source_result = None;
+                    Ok(())
+                })();
+                if let Err(error) = result {
+                    source_result = Some(crate::editor::SourceResponse {
+                        request,
+                        workspace,
+                        result: Err(error),
+                    });
+                }
+            }
             Request::InspectWorking {
                 whole,
+                editor,
                 base,
                 request,
                 workspace,
@@ -1029,9 +1093,12 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                             workspace.clone(),
                             request.clone(),
                             selected,
-                            whole,
-                            registry.comparison_bases.get(&workspace).cloned(),
-                            base,
+                            crate::working_diff::ComparisonOptions {
+                                whole,
+                                editor,
+                                retained: registry.comparison_bases.get(&workspace).cloned(),
+                                selected_ref: base,
+                            },
                         )
                         .map_err(|error| error.to_string())?,
                     );
@@ -1140,6 +1207,9 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             Request::Stop | Request::Shutdown => {
+                if let Some(job) = &source_job {
+                    job.cancel();
+                }
                 if let Some(job) = &diff_job {
                     job.cancel();
                 }
@@ -1166,6 +1236,8 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
         let mut state = session.observation();
         state.subscriber_frame_high_water = subscriber_frame_high_water;
         state.diff_protocol = 2;
+        state.editor_protocol = 1;
+        state.editor_source = source_result.clone();
         state.working_diff = diff_result.clone();
         state.git_jobs_protocol = 1;
         state.registry_protocol = 1;
@@ -1179,6 +1251,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             && quitting
             && adoption.is_none()
             && discovery.is_none()
+            && source_job.is_none()
             && diff_job.is_none()
             && diff_save.is_none()
             && registry_operation.is_none();

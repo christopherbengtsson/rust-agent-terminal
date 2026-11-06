@@ -2,6 +2,7 @@ mod app;
 mod child_scope;
 mod cleanup;
 mod codex_status;
+mod editor;
 mod events;
 mod git;
 mod history;
@@ -103,14 +104,76 @@ fn main() -> Result<(), Box<dyn Error>> {
         return Err("The dashboard needs an interactive terminal. Use --help for usage.".into());
     }
 
+    let editor_config = editor::Config::from_environment()?;
+    let mut editor_job = None;
+    let mut editor_running: Option<(
+        std::sync::mpsc::Receiver<io::Result<std::process::ExitStatus>>,
+        bool,
+        app::EditorContext,
+    )> = None;
     let mut app = App::new(repository);
     let client = session::Client::start(state_directory)?;
 
     refresh(&mut app, &client);
-    let (_guard, mut terminal) = TerminalGuard::enter()?;
+    let (mut guard, mut terminal) = TerminalGuard::enter()?;
     let mut ui = Ui::default();
 
     loop {
+        if let Some((result, inspection, _context)) = &editor_running {
+            let result = match result.try_recv() {
+                Ok(result) => Some(result),
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    Some(Err(io::Error::other("Editor worker disconnected")))
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => None,
+            };
+            if let Some(result) = result {
+                let inspection = *inspection;
+                guard.reacquire_editor(&mut terminal)?;
+                let (_, _, context) = editor_running.take().unwrap();
+                if let Ok(observation) = client.events.try_recv() {
+                    app.observe_session(observation);
+                }
+                app.editor_returned(context);
+                app.editor_message = Some(editor_result(result, inspection));
+            } else {
+                // Deliberate handoff coordination: editor owns stdin/stdout; no drawing/input.
+                std::thread::sleep(Duration::from_millis(20));
+                continue;
+            }
+        }
+        if let Some(target) = app.editor_ready.take()
+            && editor_job.is_none()
+        {
+            match editor::start(target) {
+                Ok(job) => editor_job = Some(job),
+                Err(e) => app.editor_message = Some(format!("Editor preparation failed: {e}")),
+            }
+        }
+        if let Some(result) = editor_job.as_ref().and_then(
+            |job: &std::sync::mpsc::Receiver<Result<editor::Prepared, String>>| job.try_recv().ok(),
+        ) {
+            editor_job = None;
+            match result {
+                Err(error) => app.editor_message = Some(error),
+                Ok(prepared) => {
+                    let inspection = prepared.inspection;
+                    let context = app.editor_context();
+                    guard.release_editor(&mut terminal)?;
+                    match editor::launch(editor_config.clone(), prepared) {
+                        Ok(result) => {
+                            editor_running = Some((result, inspection, context));
+                            continue;
+                        }
+                        Err(error) => {
+                            guard.reacquire_editor(&mut terminal)?;
+                            app.editor_returned(context);
+                            app.editor_message = Some(editor_result(Err(error), inspection));
+                        }
+                    }
+                }
+            }
+        }
         if let Ok(observation) = client.events.try_recv() {
             app.observe_session(observation);
         }
@@ -130,6 +193,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     Some(Effect::Session(request)) => {
                         if let Err(error) = client.send(request) {
                             app.shutdown_pending = false;
+                            app.editor_source_request = None;
                             app.error = Some(error);
                         }
                     }
@@ -158,5 +222,21 @@ fn refresh(app: &mut App, client: &session::Client) {
         })
     {
         app.apply(Event::WorktreesLoaded(Err(error)));
+    }
+}
+
+fn editor_result(result: io::Result<std::process::ExitStatus>, inspection: bool) -> String {
+    match result {
+        Ok(status) if status.success() => {
+            if inspection {
+                "Returned from inspection snapshot; e reopens with fresh data".into()
+            } else {
+                "Returned from LIVE source editing; source is shared with the active agent. r refreshes comparison".into()
+            }
+        }
+        Ok(status) => format!("Editor exited {status}; dashboard context restored"),
+        Err(error) => format!(
+            "Editor failed to start/wait: {error}; check RAT_EDITOR_JSON executable and arguments"
+        ),
     }
 }
