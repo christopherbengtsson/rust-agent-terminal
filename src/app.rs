@@ -64,7 +64,11 @@ impl App {
         if !observation.launch_request.is_empty() {
             self.launch_request = observation.launch_request.clone();
         }
-        if observation.identity.is_some() && observation.identity != self.session.identity {
+        if observation.lifecycle == crate::session::Lifecycle::Running
+            && observation.identity.is_some()
+            && (observation.identity != self.session.identity
+                || self.session.lifecycle != crate::session::Lifecycle::Running)
+        {
             self.attached = true;
         }
         if observation.stopped
@@ -154,6 +158,9 @@ impl App {
             }
             KeyCode::Char('u') if key.modifiers.is_empty() => {
                 return Some(Effect::Session(Request::Reconcile));
+            }
+            KeyCode::Char('y') if key.modifiers.is_empty() => {
+                return Some(Effect::Session(Request::RetryStorage));
             }
             KeyCode::Char('s') if key.modifiers.is_empty() => {
                 return Some(Effect::Session(Request::Stop));

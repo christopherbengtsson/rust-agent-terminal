@@ -48,7 +48,7 @@ impl Dashboard {
         drop(pty.slave);
         let mut reader = pty.master.try_clone_reader().unwrap();
         let writer = pty.master.take_writer().unwrap();
-        let (tx, output) = mpsc::channel();
+        let (tx, output) = mpsc::sync_channel(8);
         std::thread::spawn(move || {
             let _master = pty.master;
             let mut bytes = [0; 4096];
@@ -677,6 +677,27 @@ impl Controller {
         self.stream.write_all(b"\n").unwrap();
     }
     fn request(&mut self, value: serde_json::Value) -> serde_json::Value {
+        let launch = value.as_object().is_some_and(|object| {
+            object.keys().any(|key| {
+                matches!(
+                    key.as_str(),
+                    "Launch" | "LaunchClaude" | "LaunchCodex" | "Resume" | "QueryLaunch"
+                )
+            })
+        });
+        let mut state = self.request_now(value);
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while launch && state["metadata_pending"] == true && state["launch_result"].is_null() {
+            assert!(
+                Instant::now() < deadline,
+                "launch metadata still pending: {state}"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+            state = self.request_now(serde_json::json!("Screen"));
+        }
+        state
+    }
+    fn request_now(&mut self, value: serde_json::Value) -> serde_json::Value {
         use std::io::BufRead;
         self.send(value);
         let mut line = String::new();
@@ -2266,4 +2287,532 @@ fn oversized_osc_is_captured_without_growing_live_screen_history() {
             .starts_with("\\u{1b}]2;qqqqqq")
     );
     control.request(serde_json::json!("Shutdown"));
+}
+
+#[test]
+fn storage_stalled_prepare_keeps_stop_control_and_never_launches_after_cancel() {
+    let fixture = Fixture::new();
+    let mut dashboard = fixture.open();
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted");
+    dashboard.kill();
+    let mut controller = Controller::connect(&fixture);
+    std::fs::write(fixture.state().join("proof-storage-prepare"), "stall").unwrap();
+    let started = Instant::now();
+    let launch = controller.request_now(serde_json::json!({"Launch":"cancel-stalled-14"}));
+    assert!(started.elapsed() < Duration::from_secs(1));
+    assert_eq!(launch["metadata_pending"], true);
+    assert!(launch["launch_result"].is_null());
+    let stopped = controller.request(serde_json::json!("Stop"));
+    assert_ne!(stopped["lifecycle"], "Running");
+    std::fs::remove_file(fixture.state().join("proof-storage-prepare")).unwrap();
+    for _ in 0..30 {
+        std::thread::sleep(Duration::from_millis(20));
+        let state = controller.request(serde_json::json!("Screen"));
+        assert_ne!(
+            state["lifecycle"], "Running",
+            "late save must not resurrect launch"
+        );
+    }
+    controller.request(serde_json::json!("Shutdown"));
+}
+
+fn transcript_bytes14(fixture: &Fixture) -> Vec<u8> {
+    let mut paths: Vec<_> = std::fs::read_dir(fixture.state())
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "transcript")
+        })
+        .collect();
+    paths.sort();
+    paths
+        .into_iter()
+        .flat_map(|path| std::fs::read(path).unwrap())
+        .collect()
+}
+
+#[test]
+fn storage_partial_enospc_retains_exact_capture_and_retry_removes_error_after_durability() {
+    let fixture = Fixture::new();
+    let mut dashboard = fixture.open();
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted");
+    dashboard.send(b"l");
+    dashboard.wait("fixture>");
+    dashboard.kill();
+    let mut controller = Controller::connect(&fixture);
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let before = loop {
+        let state = controller.request(serde_json::json!("Screen"));
+        if state["durable_bytes"] == state["output_bytes"] {
+            break state;
+        }
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    // Land six bytes before chunk rotation; the injected seven-byte write is
+    // clamped to that real file boundary and must not advance the durable prefix.
+    let padding = 65530 - before["durable_bytes"].as_u64().unwrap() - 9;
+    controller.request(serde_json::json!({"Input":format!("pad14 {padding}\r").into_bytes()}));
+    let deadline = Instant::now() + Duration::from_secs(4);
+    let before = loop {
+        let state = controller.request(serde_json::json!("Screen"));
+        if state["durable_bytes"] == 65530 {
+            break state;
+        }
+        assert!(Instant::now() < deadline, "padding not durable: {state}");
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    let prefix = transcript_bytes14(&fixture);
+    std::fs::write(fixture.state().join("proof-storage-partial"), "7").unwrap();
+    controller.request(serde_json::json!({"Input":b"partial14\r".to_vec()}));
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let failed = loop {
+        let state = controller.request(serde_json::json!("Screen"));
+        if state["storage_error"]
+            .as_str()
+            .is_some_and(|error| error.contains("No space"))
+        {
+            break state;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "missing real partial write error: {state}"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert_eq!(failed["durable_bytes"], before["durable_bytes"]);
+    assert!(
+        transcript_bytes14(&fixture).len() > prefix.len(),
+        "fault must really write a prefix"
+    );
+    assert!(failed["capture_pending_bytes"].as_u64().unwrap() > 0);
+    std::fs::remove_file(fixture.state().join("proof-storage-partial")).unwrap();
+    controller.request(serde_json::json!("RetryStorage"));
+    let deadline = Instant::now() + Duration::from_secs(4);
+    let recovered = loop {
+        let state = controller.request(serde_json::json!("Screen"));
+        if state["durable_bytes"] == state["accepted_bytes"] && state["storage_error"].is_null() {
+            break state;
+        }
+        assert!(Instant::now() < deadline, "retry not durable: {state}");
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    let mut expected = prefix;
+    expected.extend_from_slice(b"received: partial14\r\nbytes: 7061727469616c3134\r\nfixture> ");
+    assert_eq!(transcript_bytes14(&fixture), expected);
+    assert_eq!(recovered["capture_pending_bytes"], 0);
+    controller.request(serde_json::json!("Shutdown"));
+}
+
+#[test]
+fn storage_authorization_and_result_stalls_allow_stop_without_late_execution() {
+    for boundary in ["authorize", "save"] {
+        let fixture = Fixture::new();
+        let mut dashboard = fixture.open();
+        dashboard.wait("Discovery complete");
+        dashboard.send(b"a");
+        dashboard.wait("Adopted");
+        dashboard.kill();
+        let mut controller = Controller::connect(&fixture);
+        // Drain adoption before targeting the launch outcome Save.
+        while controller.request(serde_json::json!("Screen"))["metadata_pending"] == true {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let fault = fixture.state().join(format!("proof-storage-{boundary}"));
+        std::fs::write(&fault, "stall").unwrap();
+        let launch =
+            controller.request_now(serde_json::json!({"Launch":format!("stall-{boundary}-14")}));
+        assert_eq!(launch["metadata_pending"], true);
+        assert!(launch["launch_result"].is_null());
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            let state = controller.request(serde_json::json!("Screen"));
+            if state["storage_wait_millis"].as_u64().unwrap_or(0) >= 100 {
+                break;
+            }
+            assert!(Instant::now() < deadline, "writer never stalled: {state}");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let start = Instant::now();
+        controller.request(serde_json::json!("Stop"));
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            let state = controller.request(serde_json::json!("Screen"));
+            if state["lifecycle"] == "Stopped" {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "Stop blocked by {boundary}: {state}"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(start.elapsed() < Duration::from_secs(2));
+        assert_no_owned_coding(&fixture);
+        std::fs::remove_file(fault).unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+        assert_ne!(
+            controller.request(serde_json::json!("Screen"))["lifecycle"],
+            "Running"
+        );
+        assert_no_owned_coding(&fixture);
+        controller.request(serde_json::json!("Shutdown"));
+    }
+}
+
+#[test]
+fn storage_saturation_keeps_navigation_retry_stop_and_exact_retained_bytes() {
+    let fixture = Fixture::new();
+    assert!(
+        Command::new("git")
+            .arg("-C")
+            .arg(&fixture.repository)
+            .args([
+                "-c",
+                "user.name=Proof",
+                "-c",
+                "user.email=proof@example.invalid",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "storage14"
+            ])
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    assert!(
+        Command::new("git")
+            .arg("-C")
+            .arg(&fixture.repository)
+            .args(["worktree", "add", "-b", "other14"])
+            .arg(fixture.temp.path().join("other14"))
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    std::fs::create_dir_all(fixture.state()).unwrap();
+    std::fs::set_permissions(
+        fixture.state(),
+        std::os::unix::fs::PermissionsExt::from_mode(0o700),
+    )
+    .unwrap();
+    std::fs::write(fixture.state().join("proof-storage-ledger"), "enabled").unwrap();
+    let mut dashboard = fixture.open();
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted");
+    dashboard.send(b"l");
+    dashboard.wait("fixture>");
+    // Allow the initial small output prefix to reach the declared durable boundary.
+    std::thread::sleep(Duration::from_millis(400));
+    let prefix = transcript_bytes14(&fixture);
+    let fault = fixture.state().join("proof-storage-write");
+    std::fs::write(&fault, "stall").unwrap();
+    dashboard.send(b"flood13\r");
+    dashboard.send(&[0x1d]);
+    dashboard.wait("Focus: dashboard");
+    dashboard.wait("History storage pending");
+    let navigation = Instant::now();
+    dashboard.send(b"j");
+    dashboard.wait("Branch: other14");
+    let navigation_us = navigation.elapsed().as_micros();
+    dashboard.kill();
+    let mut controller = Controller::connect(&fixture);
+    let deadline = Instant::now() + Duration::from_secs(4);
+    let saturated = loop {
+        let state = controller.request(serde_json::json!("Screen"));
+        if state["producer_wait_millis"].as_u64().unwrap_or(0) >= 500 {
+            break state;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "capture never saturated: {state}"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert!(saturated["capture_pending_bytes"].as_u64().unwrap() <= 270336);
+    let owner = owner_pid(&fixture);
+    let child = saturated["execution"]["pid"].as_u64().unwrap();
+    let mut memory = Vec::new();
+    for _ in 0..10 {
+        let sample = Command::new("ps")
+            .args([
+                "-p",
+                &format!("{owner},{child}"),
+                "-o",
+                "pid=,ppid=,rss=,stat=",
+            ])
+            .output()
+            .unwrap();
+        let state = controller.request(serde_json::json!("Screen"));
+        memory.push(serde_json::json!({"rss_rows":String::from_utf8_lossy(&sample.stdout),"pending":state["capture_pending_bytes"],"accepted":state["accepted_bytes"],"producer_wait_ms":state["producer_wait_millis"],"storage_wait_ms":state["storage_wait_millis"]}));
+        assert!(state["capture_pending_bytes"].as_u64().unwrap() <= 270336);
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    let retry = Instant::now();
+    controller.request(serde_json::json!("RetryStorage"));
+    let retry_us = retry.elapsed().as_micros();
+    let stop = Instant::now();
+    controller.request(serde_json::json!("Stop"));
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let stopped = loop {
+        let state = controller.request(serde_json::json!("Screen"));
+        if state["lifecycle"] == "Stopped" {
+            break state;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "Stop blocked by saturated storage: {state}"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    let stop_us = stop.elapsed().as_micros();
+    assert!(stopped["capture_pending_bytes"].as_u64().unwrap() > 0);
+    assert_eq!(stopped["capture_loss_possible"], true);
+    assert_eq!(stopped["stopped"], false);
+    assert_no_owned_coding(&fixture);
+    let blocked_launch =
+        controller.request_now(serde_json::json!({"Launch":"replacement-before-drain-14"}));
+    assert!(
+        blocked_launch["error"]
+            .as_str()
+            .unwrap()
+            .contains("history is still pending")
+    );
+    assert_eq!(blocked_launch["identity"], stopped["identity"]);
+    assert_no_owned_coding(&fixture);
+    // Persistent ENOSPC after a stalled syscall must remain visible and reject quit.
+    std::fs::write(&fault, "error").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        let state = controller.request(serde_json::json!("Screen"));
+        if !state["storage_error"].is_null() {
+            break;
+        }
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let failed_quit = controller.request(serde_json::json!("Shutdown"));
+    assert_eq!(failed_quit["stopped"], false);
+    std::thread::sleep(Duration::from_millis(300));
+    let persistent = controller.request(serde_json::json!("Screen"));
+    assert!(!persistent["storage_error"].is_null());
+    std::fs::remove_file(fault).unwrap();
+    controller.request(serde_json::json!("RetryStorage"));
+    let deadline = Instant::now() + Duration::from_secs(6);
+    let final_state = loop {
+        let state = controller.request(serde_json::json!("Screen"));
+        if state["accepted_bytes"] == state["durable_bytes"]
+            && state["capture_pending_bytes"] == 0
+            && state["storage_error"].is_null()
+        {
+            break state;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "repair lost retained bytes: {state}"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    let bytes = transcript_bytes14(&fixture);
+    assert_eq!(
+        bytes.len() as u64,
+        final_state["accepted_bytes"].as_u64().unwrap()
+    );
+    assert_eq!(&bytes[..prefix.len()], &prefix);
+    let expected: Vec<u8> = (0..32768)
+        .flat_map(|n| format!("flood13:{n:06}:{}\r\n", "X".repeat(111)).into_bytes())
+        .collect();
+    assert_eq!(
+        &bytes[prefix.len()..],
+        &expected[..bytes.len() - prefix.len()]
+    );
+    let emitted_ledger =
+        std::fs::read_to_string(fixture.state().join("proof-emitted.jsonl")).unwrap();
+    let emitted: Vec<serde_json::Value> = emitted_ledger
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let emitted_bytes: u64 = emitted
+        .iter()
+        .map(|entry| entry["bytes"].as_u64().unwrap())
+        .sum();
+    assert!(
+        bytes.len() - prefix.len() <= emitted_bytes as usize,
+        "capture must not exceed completed emission writes"
+    );
+    let evidence = serde_json::json!({"emitted_records":emitted.len(),"emitted_payload_bytes":emitted_bytes,"emitted_not_captured":emitted_bytes-(bytes.len()-prefix.len()) as u64,"producer_completed_write_max_us":emitted.iter().map(|entry| entry["write_us"].as_u64().unwrap()).max(),"memory":memory,"navigation_us":navigation_us,"retry_us":retry_us,"stop_us":stop_us,"saturated":saturated,"stopped":stopped,"persistent":persistent,"repaired":final_state,"retained_bytes":bytes.len(),"cap":270336,"workload":"4MiB flood; stalled write; ENOSPC; stop; repair"});
+    eprintln!("storage14 evidence: {evidence}");
+    if let Some(path) = std::env::var_os("RAT_STORAGE_EVIDENCE") {
+        let path = PathBuf::from(path);
+        std::fs::write(path.with_extension("emitted.jsonl"), emitted_ledger).unwrap();
+        std::fs::write(path, format!("{evidence}\n")).unwrap();
+    }
+    if final_state["stopped"] != true {
+        controller.request(serde_json::json!("Shutdown"));
+    }
+}
+
+#[test]
+fn storage_delayed_writes_and_sync_keep_control_and_defer_saved_boundary() {
+    for (boundary, millis) in [("write", 250), ("sync", 1500), ("directory-sync", 0)] {
+        let fixture = Fixture::new();
+        let mut dashboard = fixture.open();
+        dashboard.wait("Discovery complete");
+        dashboard.send(b"a");
+        dashboard.wait("Adopted");
+        // Before first transcript creation so failed directory sync is retried
+        // even though the empty file exists on the subsequent attempt.
+        let fault = fixture.state().join(format!("proof-storage-{boundary}"));
+        std::fs::write(
+            &fault,
+            if millis == 0 {
+                "error".into()
+            } else {
+                millis.to_string()
+            },
+        )
+        .unwrap();
+        dashboard.send(b"l");
+        dashboard.wait("fixture>");
+        dashboard.kill();
+        let mut controller = Controller::connect(&fixture);
+        let started = Instant::now();
+        let state = controller.request(serde_json::json!("Screen"));
+        assert!(started.elapsed() < Duration::from_secs(1));
+        // Delay is on the real writer/sync boundary; accepted output is not saved.
+        if boundary != "write" {
+            assert_eq!(state["durable_bytes"], 0);
+        }
+        if millis == 0 {
+            let deadline = Instant::now() + Duration::from_secs(3);
+            loop {
+                let state = controller.request(serde_json::json!("Screen"));
+                if state["storage_error"]
+                    .as_str()
+                    .is_some_and(|e| e.contains("No space"))
+                {
+                    break;
+                }
+                assert!(Instant::now() < deadline);
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+        std::fs::remove_file(fault).unwrap();
+        controller.request(serde_json::json!("RetryStorage"));
+        let deadline = Instant::now() + Duration::from_secs(4);
+        loop {
+            let state = controller.request(serde_json::json!("Screen"));
+            if state["durable_bytes"] == state["accepted_bytes"]
+                && state["durable_bytes"].as_u64().unwrap() > 0
+                && state["storage_error"].is_null()
+            {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "{boundary} retry never durable: {state}"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        controller.request(serde_json::json!("Shutdown"));
+    }
+}
+
+#[test]
+fn storage_abrupt_loss_preserves_durable_prefix_and_excludes_unsynced_tail() {
+    let fixture = Fixture::new();
+    let mut dashboard = fixture.open();
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted");
+    dashboard.send(b"l");
+    dashboard.wait("fixture>");
+    dashboard.kill();
+    let mut controller = Controller::connect(&fixture);
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let baseline = loop {
+        let state = controller.request(serde_json::json!("Screen"));
+        if state["durable_bytes"] == state["accepted_bytes"] {
+            break state;
+        }
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    let prefix = transcript_bytes14(&fixture);
+    std::fs::write(fixture.state().join("proof-storage-sync"), "stall").unwrap();
+    controller.request(serde_json::json!({"Input":b"unsynced-tail14\r".to_vec()}));
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let unflushed = loop {
+        let state = controller.request(serde_json::json!("Screen"));
+        if state["written_bytes"].as_u64().unwrap() > baseline["durable_bytes"].as_u64().unwrap()
+            && state["storage_wait_millis"].as_u64().unwrap() >= 100
+        {
+            break state;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "tail never reached real unsynced file: {state}"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    let child = unflushed["execution"]["pid"].as_i64().unwrap();
+    let owner = owner_pid(&fixture);
+    assert!(
+        Command::new("kill")
+            .args(["-KILL", &owner.to_string()])
+            .status()
+            .unwrap()
+            .success()
+    );
+    // This is cleanup of a directly observed fixture child, not reconciliation.
+    let _ = Command::new("kill")
+        .args(["-KILL", &child.to_string()])
+        .status();
+    drop(controller);
+    std::fs::remove_file(fixture.state().join("proof-storage-sync")).unwrap();
+    let mut restored = fixture.open();
+    restored.wait("Process: Interrupted");
+    restored.send(b"h");
+    restored.wait("Scripted PTY");
+    restored.kill();
+    let mut controller = Controller::connect(&fixture);
+    assert_eq!(controller.greeting["identity"], baseline["identity"]);
+    assert_eq!(
+        controller.greeting["durable_bytes"],
+        baseline["durable_bytes"]
+    );
+    assert_no_owned_coding(&fixture);
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let page = loop {
+        let state = controller.request(serde_json::json!({"History":{"index":0,"offset":0}}));
+        if state["history"]["text"].is_string() {
+            break state["history"].clone();
+        }
+        assert!(Instant::now() < deadline);
+    };
+    assert!(!page["text"].as_str().unwrap().contains("unsynced-tail14"));
+    let raw = transcript_bytes14(&fixture);
+    assert_eq!(&raw[..prefix.len()], &prefix);
+    assert!(
+        raw.len() > prefix.len(),
+        "preserve the uncertain raw tail without acknowledging it"
+    );
+    eprintln!(
+        "storage14 abrupt: durable={} accepted={} written={} restored_prefix={} surviving_unacknowledged_file_bytes={}",
+        baseline["durable_bytes"],
+        unflushed["accepted_bytes"],
+        unflushed["written_bytes"],
+        controller.greeting["durable_bytes"],
+        raw.len() - prefix.len()
+    );
 }

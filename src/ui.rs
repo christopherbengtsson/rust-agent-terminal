@@ -272,6 +272,39 @@ impl Ui {
                 app.session.durable_bytes
             )
         };
+        let message = if app.session.capture_pending_bytes > 0 {
+            format!(
+                "{message}\nCapture: accepted {} · written {} · pending {} · storage wait {} ms · producer wait {} ms · y retry / s stop{}",
+                app.session.accepted_bytes,
+                app.session.written_bytes,
+                app.session.capture_pending_bytes,
+                app.session.storage_wait_millis,
+                app.session.producer_wait_millis,
+                app.session
+                    .storage_error
+                    .as_ref()
+                    .map_or(String::new(), |e| format!("\n{e}"))
+            )
+        } else {
+            message
+        };
+        let message = if let Some(error) = &app.session.storage_error {
+            format!(
+                "{error}\nPending {} bytes · y retry / s stop\n{message}",
+                app.session.capture_pending_bytes
+            )
+        } else if app.session.storage_wait_millis >= 250 {
+            format!(
+                "History storage pending {} ms · {} bytes retained · y retry / s stop\n{message}",
+                app.session.storage_wait_millis, app.session.capture_pending_bytes
+            )
+        } else if app.session.capture_loss_possible {
+            format!(
+                "Stopped during history capture trouble: accepted bytes retained; unread agent output may have been lost.\n{message}"
+            )
+        } else {
+            message
+        };
         let message = if app.session.error.is_some() && !app.session.connection_lost {
             format!(
                 "{message}\n{}",

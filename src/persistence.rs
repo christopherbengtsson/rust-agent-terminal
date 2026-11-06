@@ -29,6 +29,10 @@ pub struct HistoryPage {
 }
 #[derive(Clone, Debug, Default)]
 pub struct Progress {
+    pub accepted: u64,
+    pub written: u64,
+    pub operation: Option<(&'static str, Instant)>,
+    pub producer_wait: Option<Instant>,
     pub pending_bytes: usize,
     pub pending_high_water: usize,
     pub backpressure_count: u64,
@@ -50,6 +54,7 @@ impl Capture {
         let size = block.1.len();
         {
             let mut p = self.progress.lock().unwrap();
+            p.accepted += size as u64;
             p.pending_bytes += size;
             p.pending_high_water = p.pending_high_water.max(p.pending_bytes);
         }
@@ -58,10 +63,17 @@ impl Capture {
             Err(mpsc::TrySendError::Disconnected(_)) => Err(()),
             Err(mpsc::TrySendError::Full(block)) => {
                 let since = Instant::now();
-                self.progress.lock().unwrap().backpressure_count += 1;
+                {
+                    let mut p = self.progress.lock().unwrap();
+                    p.backpressure_count += 1;
+                    p.producer_wait = Some(since);
+                }
                 let result = self.sender.send(block).map_err(|_| ());
-                self.progress.lock().unwrap().backpressure_micros +=
-                    since.elapsed().as_micros() as u64;
+                {
+                    let mut p = self.progress.lock().unwrap();
+                    p.backpressure_micros += since.elapsed().as_micros() as u64;
+                    p.producer_wait = None;
+                }
                 result
             }
         }
@@ -81,11 +93,13 @@ pub enum Command {
     Authorize(Box<Observation>, Option<Vec<u8>>, String),
     Save(Box<Observation>, Option<Vec<u8>>, String),
     History(usize, u64),
+    Retry,
     Flush,
 }
 pub enum Completion {
-    Prepared,
-    Authorized,
+    Retried,
+    Prepared(String),
+    Authorized(String),
     Saved,
     History(HistoryPage),
     Flushed,
@@ -125,11 +139,13 @@ impl Worker {
             loop {
                 // Reserve control capacity independently from capture traffic.
                 if let Ok(command) = control.try_recv() {
-                    let kind = match &command { Command::Save(..) | Command::Prepare(..) | Command::Authorize(..) => "metadata", Command::History(..) => "history", Command::Flush => "flush" };
+                    let kind = match &command { Command::Save(..) | Command::Prepare(..) | Command::Authorize(..) => "metadata", Command::History(..) => "history", Command::Retry => "retry", Command::Flush => "flush" };
+                    status.lock().unwrap().operation = Some((kind, Instant::now()));
                     let result = match command {
-                        Command::Prepare(state, checkout, task) => store.save(&state, checkout, task).map(|_| Completion::Prepared),
-                        Command::Authorize(state, checkout, task) => store.save(&state, checkout, task).map(|_| Completion::Authorized),
-                        Command::Save(state, checkout, task) => store.save(&state, checkout, task).map(|_| Completion::Saved),
+                        Command::Retry => { since = Instant::now() - FLUSH; Ok(Completion::Retried) },
+                        Command::Prepare(state, checkout, task) => store.fault("prepare").and_then(|_| store.save(&state, checkout, task)).map(|_| Completion::Prepared(state.launch_request.clone())),
+                        Command::Authorize(state, checkout, task) => store.fault("authorize").and_then(|_| store.save(&state, checkout, task)).map(|_| Completion::Authorized(state.launch_request.clone())),
+                        Command::Save(state, checkout, task) => store.fault("save").and_then(|_| store.save(&state, checkout, task)).map(|_| Completion::Saved),
                         Command::History(index, offset) => store.history(index, offset).map(Completion::History),
                         Command::Flush => {
                             // Called only after PTY EOF: drain everything already transferred.
@@ -138,7 +154,7 @@ impl Worker {
                                     if pending.is_none() { pending = capture.try_recv().ok(); }
                                     let Some((id, bytes, accepted)) = &mut pending else { break; };
                                     let count = store.append(id, bytes, *accepted)?;
-                                    status.lock().unwrap().pending_bytes -= count;
+                                    { let mut p = status.lock().unwrap(); p.pending_bytes -= count; p.written = store.active.as_ref().map_or(0, |(_, _, offset)| *offset); }
                                     bytes.drain(..count);
                                     if bytes.is_empty() { pending = None; }
                                 }
@@ -147,6 +163,7 @@ impl Worker {
                             })()
                         }
                     };
+                    status.lock().unwrap().operation = None;
                     let event = result.unwrap_or_else(|e: Box<dyn std::error::Error + Send + Sync>| Completion::Error(kind, e.to_string()));
                     if tx.send(event).is_err() { break; }
                 }
@@ -158,19 +175,24 @@ impl Worker {
                     }
                 }
                 if let Some((id, bytes, accepted)) = &mut pending {
+                    status.lock().unwrap().operation = Some(("write", Instant::now()));
                     match store.append(id, bytes, *accepted) {
-                        Ok(count) => { status.lock().unwrap().pending_bytes -= count; bytes.drain(..count); if bytes.is_empty() { pending = None; } }
-                        Err(error) => status.lock().unwrap().error = Some(format!("History capture blocked: {error}; output retained with backpressure")),
+                        Ok(count) => { { let mut p = status.lock().unwrap(); p.pending_bytes -= count; p.written = store.active.as_ref().map_or(0, |(_, _, offset)| *offset); } bytes.drain(..count); if bytes.is_empty() { pending = None; } }
+                        Err(error) => { status.lock().unwrap().error = Some(format!("History capture blocked: {error}; output retained; repair storage then press y to retry or s to stop")); thread::sleep(Duration::from_millis(100)); },
                     }
                 }
+                status.lock().unwrap().operation = None;
                 if since.elapsed() >= FLUSH {
+                    status.lock().unwrap().operation = Some(("sync", Instant::now()));
                     match store.flush() {
                         Ok(()) => { if pending.is_none() { status.lock().unwrap().error = None; } }
                         Err(error) => status.lock().unwrap().error = Some(format!("History sync failed: {error}; quit requires successful flush")),
                     }
+                    status.lock().unwrap().operation = None;
                     since = Instant::now();
                 }
                 let mut p = status.lock().unwrap();
+                p.written = store.active.as_ref().map_or(0, |(_, _, offset)| *offset);
                 p.durable = store.total;
                 p.last_flush_micros = store.sync_micros;
                 p.flush_count = store.completions;
@@ -319,6 +341,37 @@ impl Store {
             launches,
         })
     }
+    // Isolated debug proof boundary: all file inspection and injected waits run on
+    // this sole storage worker, never the UI or supervisor control loop.
+    fn fault(&self, boundary: &str) -> Result<()> {
+        #[cfg(debug_assertions)]
+        {
+            let path = self.directory.join(format!("proof-storage-{boundary}"));
+            while let Ok(value) = std::fs::read_to_string(&path) {
+                if value.trim() == "stall" {
+                    thread::sleep(Duration::from_millis(10));
+                    continue;
+                }
+                if value.trim() == "error" {
+                    return Err(io::Error::from_raw_os_error(libc::ENOSPC).into());
+                }
+                if let Ok(millis) = value.trim().parse::<u64>() {
+                    thread::sleep(Duration::from_millis(millis.min(60_000)));
+                }
+                break;
+            }
+        }
+        let _ = boundary;
+        Ok(())
+    }
+    fn partial_fault(&self) -> Option<usize> {
+        #[cfg(debug_assertions)]
+        return std::fs::read_to_string(self.directory.join("proof-storage-partial"))
+            .ok()
+            .and_then(|value| value.trim().parse().ok());
+        #[cfg(not(debug_assertions))]
+        None
+    }
     fn save(&mut self, state: &Observation, path: Option<Vec<u8>>, task: String) -> Result<()> {
         let mut state = state.clone();
         state.screen.clear();
@@ -363,7 +416,7 @@ impl Store {
                         r.get(0)
                     })?;
             let path = self.file(id, offset / CHUNK);
-            let existed = path.exists();
+
             let file = OpenOptions::new()
                 .create(true)
                 .truncate(false)
@@ -376,16 +429,22 @@ impl Store {
             if file.metadata()?.len() != offset % CHUNK {
                 return Err("Uncommitted transcript tail requires explicit recovery".into());
             }
-            if !existed {
-                File::open(&self.directory)?.sync_all()?;
-            }
+            // Retry directory durability even when a previous creation attempt failed.
+            self.fault("directory-sync")?;
+            File::open(&self.directory)?.sync_all()?;
             self.active = Some((id.to_owned(), file, offset));
         }
         self.oldest.get_or_insert(accepted);
         let offset = self.active.as_ref().unwrap().2;
         let count = bytes.len().min((CHUNK - offset % CHUNK) as usize);
+        self.fault("write")?;
+        let partial = self.partial_fault();
         let (_, file, offset) = self.active.as_mut().unwrap();
         file.seek(SeekFrom::Start(*offset % CHUNK))?;
+        if let Some(prefix) = partial {
+            file.write_all(&bytes[..count.min(prefix)])?;
+            return Err(io::Error::from_raw_os_error(libc::ENOSPC).into());
+        }
         file.write_all(&bytes[..count])?;
         *offset += count as u64;
         Ok(count)
@@ -394,6 +453,7 @@ impl Store {
         if self.oldest.is_none() {
             return Ok(());
         }
+        self.fault("sync")?;
         if let Some((id, file, offset)) = &self.active {
             let started = Instant::now();
             file.sync_all()?;
