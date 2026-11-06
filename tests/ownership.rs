@@ -1308,12 +1308,16 @@ fn healthy_output_reports_real_durable_boundaries_within_one_second() {
     dashboard.wait("fixture>");
     dashboard.kill();
     let mut control = Controller::connect(&fixture);
+    // Three finite streams: 200 fourteen-byte records and one nine-byte prompt each.
+    // Real per-record sleeps can outlast the nominal three seconds. Observe the
+    // complete producer before comparing accepted output with its durable prefix.
+    let expected_output = control.greeting["output_bytes"].as_u64().unwrap() + 3 * (200 * 14 + 9);
     control.request(serde_json::json!({"Input":b"stream\rstream\rstream\r".to_vec()}));
     let started = Instant::now();
+    let mut completed = None;
     let mut samples = Vec::new();
     let mut previous_count = 0;
-    let mut last = serde_json::Value::Null;
-    while started.elapsed() < Duration::from_secs(4) {
+    let last = loop {
         let state = control.request(serde_json::json!("Screen"));
         let count = state["durable_flush_count"].as_u64().unwrap();
         if count > previous_count {
@@ -1324,9 +1328,32 @@ fn healthy_output_reports_real_durable_boundaries_within_one_second() {
             ));
             previous_count = count;
         }
-        last = state;
+        let output = state["output_bytes"].as_u64().unwrap();
+        assert!(
+            output <= expected_output,
+            "duplicated fixture output: {state}"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "finite fixture did not complete: expected {expected_output} bytes, observed {state}"
+        );
+        if output == expected_output {
+            let finished = *completed.get_or_insert_with(Instant::now);
+            assert!(
+                finished.elapsed() < Duration::from_secs(1),
+                "complete output did not become durable within one second: {state}"
+            );
+            if state["durable_bytes"].as_u64() == Some(expected_output) {
+                eprintln!(
+                    "complete fixture output: {output} bytes at {:?}; durable catch-up {:?}",
+                    finished.duration_since(started),
+                    finished.elapsed()
+                );
+                break state;
+            }
+        }
         std::thread::sleep(Duration::from_millis(10));
-    }
+    };
     eprintln!(
         "durable samples (completion ms, accepted age ms, file sync + SQLite commit us): {samples:?}"
     );
@@ -1356,7 +1383,20 @@ fn healthy_output_reports_real_durable_boundaries_within_one_second() {
     );
     for (index, commit) in commits.iter().enumerate() {
         assert_eq!(commit["sequence"].as_u64(), Some(index as u64 + 1));
+        assert!(
+            commit["oldest_accepted_micros"].as_u64().unwrap() < 1_000_000,
+            "healthy per-commit accepted age exceeded target: {commit}"
+        );
     }
+    for pair in commits.windows(2) {
+        assert!(
+            pair[1]["completed_micros"].as_u64().unwrap()
+                - pair[0]["completed_micros"].as_u64().unwrap()
+                < 1_000_000,
+            "healthy per-commit interval exceeded target: {pair:?}"
+        );
+    }
+    assert_eq!(last["output_bytes"].as_u64(), Some(expected_output));
     assert_eq!(last["durable_bytes"], last["output_bytes"]);
     control.request(serde_json::json!("Shutdown"));
 }
