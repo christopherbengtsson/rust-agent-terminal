@@ -124,7 +124,7 @@ impl AgentSession {
         state.metadata_pending = false;
         state.control_target = uuid::Uuid::new_v4().to_string();
         let (write_errors, input_errors) = mpsc::sync_channel(1);
-        let endpoint_directory = std::env::temp_dir().join(format!(
+        let endpoint_directory = PathBuf::from("/tmp").join(format!(
             "rat-{}-{}",
             unsafe { libc::geteuid() },
             &uuid::Uuid::new_v4().simple().to_string()[..12]
@@ -1411,5 +1411,14 @@ impl AgentSession {
                 self.metadata_error = self.state.error.clone();
             }
         }
+    }
+}
+
+impl Drop for AgentSession {
+    fn drop(&mut self) {
+        self.execution.monitor.take();
+        self.execution.codex_monitor.take();
+        let _ = fs::remove_file(self.endpoint_directory.join("launch-gate.sock"));
+        let _ = fs::remove_dir(&self.endpoint_directory);
     }
 }

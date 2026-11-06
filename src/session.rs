@@ -414,6 +414,8 @@ impl Sessions {
         for (target, owner) in &mut self.entries {
             let state = owner.observation();
             summaries.push(crate::events::SessionSummary {
+                status: state.status.clone(),
+                reserved: owner.reserved(),
                 target: target.clone(),
                 task: owner.task().to_owned(),
                 session: state.session_identity.map(|id| id.session),
@@ -438,12 +440,22 @@ impl Sessions {
         task: String,
         storage: &crate::persistence::Worker,
     ) -> Result<(), String> {
-        if let Some(index) = self.entries.iter_mut().position(|(_, owner)| {
+        let matching = |owner: &mut agent_session::AgentSession| {
             let state = owner.observation();
             state.checkout_identity.as_ref().is_some_and(|known| {
                 known.git_dir == identity.git_dir && known.common_dir == identity.common_dir
             }) || owner.checkout() == Some(identity.root.as_path())
-        }) {
+        };
+        let index = self
+            .entries
+            .iter_mut()
+            .position(|(_, owner)| owner.reserved() && matching(owner))
+            .or_else(|| {
+                self.entries
+                    .iter_mut()
+                    .position(|(_, owner)| matching(owner))
+            });
+        if let Some(index) = index {
             self.selected = index;
             self.entries[index]
                 .1

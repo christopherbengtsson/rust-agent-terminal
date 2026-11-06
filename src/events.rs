@@ -259,6 +259,10 @@ impl ProcessExit {
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct SessionSummary {
+    #[serde(default)]
+    pub status: crate::native_status::Status,
+    #[serde(default)]
+    pub reserved: bool,
     pub target: String,
     pub task: String,
     pub session: Option<String>,

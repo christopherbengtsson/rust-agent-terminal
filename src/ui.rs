@@ -127,17 +127,30 @@ impl Ui {
                                 .to_string()
                         })
                         .unwrap_or_else(|| "checkout unknown · retained legacy history".into());
+                    let runtime = app
+                        .session
+                        .sessions
+                        .iter()
+                        .filter(|entry| entry.task == workspace.task)
+                        .max_by_key(|entry| entry.reserved);
+                    let context = runtime.map_or_else(
+                        || format!("{} sessions", workspace.sessions.len()),
+                        |runtime| {
+                            format!(
+                                "{:?} · {} · {} sessions",
+                                runtime.lifecycle,
+                                runtime.status.state.label(),
+                                workspace.sessions.len()
+                            )
+                        },
+                    );
                     ListItem::new(vec![
                         Line::from(format!(
                             "{} / {}",
                             visible(project),
                             visible(&workspace.name)
                         )),
-                        Line::from(format!(
-                            "{} · {} sessions",
-                            visible(&path),
-                            workspace.sessions.len()
-                        )),
+                        Line::from(format!("{} · {}", context, visible(&path))),
                     ])
                 })
                 .collect::<Vec<_>>();
@@ -153,7 +166,7 @@ impl Ui {
             } else if app.session.registry_pending {
                 " Registering project… ".into()
             } else {
-                " Projects / retained workspaces · A add · j/k select · Enter discover · a adopt "
+                " Projects / retained workspaces · A add · j/k select · Enter open · a adopt "
                     .into()
             };
             frame.render_stateful_widget(

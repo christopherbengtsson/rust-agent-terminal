@@ -14,6 +14,7 @@ pub struct App {
     pub project_input: Option<String>,
     pub session: Observation,
     selected_target: String,
+    selecting_checkout: bool,
     pub attached: bool,
     pub history_open: bool,
     pub cleanup_open: bool,
@@ -46,6 +47,7 @@ impl App {
             pending_viewport: None,
             session: Default::default(),
             selected_target: String::new(),
+            selecting_checkout: false,
             attached: false,
             history_open: false,
             cleanup_open: false,
@@ -137,11 +139,18 @@ impl App {
             && !self.selected_target.is_empty()
             && !observation.control_target.is_empty()
             && observation.control_target != self.selected_target
+            && !self.selecting_checkout
         {
             return;
         }
-        if self.selected_target.is_empty() {
+        if self.selected_target.is_empty() || self.selecting_checkout {
             self.selected_target = observation.control_target.clone();
+        }
+        if self.selecting_checkout
+            && !observation.adoption_pending
+            && (self.session.adoption_pending || observation.error.is_some())
+        {
+            self.selecting_checkout = false;
         }
         if observation.connection_lost {
             let error = observation.error.take();
@@ -324,6 +333,7 @@ impl App {
                     use std::os::unix::ffi::OsStringExt;
                     if key.code == KeyCode::Char('a') {
                         self.selected_target.clear();
+                        self.selecting_checkout = true;
                         self.sent_viewport = None;
                         return Some(self.session_effect(Request::Adopt(path.clone())));
                     }
@@ -331,7 +341,8 @@ impl App {
                         .session
                         .sessions
                         .iter()
-                        .find(|entry| entry.task == workspace.task)
+                        .filter(|entry| entry.task == workspace.task)
+                        .max_by_key(|entry| entry.reserved)
                         .map(|entry| entry.target.clone())
                     {
                         self.selected_target = target.clone();
@@ -530,6 +541,7 @@ impl App {
                 }
                 let path = crate::session::path_bytes(&tree.path);
                 self.selected_target.clear();
+                self.selecting_checkout = true;
                 self.sent_viewport = None;
                 return Some(self.session_effect(Request::Adopt(path)));
             }
@@ -569,7 +581,7 @@ impl App {
         if self.project_input.is_some() {
             "Add project: existing local path · Enter register without launch · Esc cancel"
         } else if self.workspaces_open {
-            "Workspaces: j/k select · [/] project · Enter discover · a adopt · h latest history · A add project · w/Esc back · d detach · q quit"
+            "Workspaces: j/k select · [/] project · Enter open · a adopt · h latest history · A add project · w/Esc back · d detach · q quit"
         } else if self.attached {
             "Native input · Ctrl-C interrupt · Ctrl-] / Ctrl-5 dashboard (keeps session running)"
         } else if self.cleanup_open {
@@ -670,6 +682,35 @@ mod tests {
             path: PathBuf::from(path),
             ..Worktree::default()
         }
+    }
+
+    #[test]
+    fn explicit_adoption_accepts_new_owner_after_pending_old_owner_reply() {
+        let mut app = App::new("repo".into());
+        app.apply(Event::WorktreesLoaded(Ok(vec![worktree("other")])));
+        app.observe_session(Observation {
+            control_target: "old-owner".into(),
+            ..Observation::default()
+        });
+        assert!(matches!(
+            app.input(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE)),
+            Some(Effect::Session(Request::Adopt(_)))
+        ));
+        app.observe_session(Observation {
+            control_target: "old-owner".into(),
+            adoption_pending: true,
+            ..Observation::default()
+        });
+        app.observe_session(Observation {
+            control_target: "new-owner".into(),
+            adopted: Some("other".into()),
+            ..Observation::default()
+        });
+        assert_eq!(app.session.control_target, "new-owner");
+        assert_eq!(app.session.adopted.as_deref(), Some("other"));
+        assert!(
+            matches!(app.viewport(Some((24,100))), Some(Effect::Session(Request::Session { target, .. })) if target == "new-owner")
+        );
     }
 
     #[test]
