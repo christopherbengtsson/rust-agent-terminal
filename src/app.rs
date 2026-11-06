@@ -430,17 +430,19 @@ impl App {
                 KeyCode::Char(c)
                     if !key.modifiers.intersects(
                         KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER,
-                    ) =>
+                    ) && command.len() + c.len_utf8() <= 4096 =>
                 {
-                    if command.len() + c.len_utf8() <= 4096 {
-                        command.push(c);
-                    }
+                    command.push(c);
                 }
                 _ => {}
             }
             return None;
         }
         if self.create_form.is_none()
+            && self.project_input.is_none()
+            && self.first_prompt.is_none()
+            && self.rename_workspace.is_none()
+            && !self.diff.as_ref().is_some_and(|v| v.base_entry.is_some())
             && key.code == KeyCode::Char('U')
             && !key
                 .modifiers
@@ -505,7 +507,11 @@ impl App {
             self.creation_open = false;
             return None;
         }
-        if key.code == KeyCode::Char('O') && self.create_form.is_none() && key.modifiers.is_empty()
+        if key.code == KeyCode::Char('O')
+            && self.create_form.is_none()
+            && !key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER)
         {
             self.creation_open = !self.creation_open;
             return None;
@@ -2330,5 +2336,34 @@ mod tests {
                     && app.editor_message.is_none()
             );
         }
+    }
+    #[test]
+    fn setup_command_consumes_shortcuts_paths_and_mixed_case_as_literal_text() {
+        let mut app = App::new("repo".into());
+        app.setup_input = Some(("project".into(), String::new()));
+        let command = "ECXRNOU/SBcamelCase='x'; echo \"$PWD\"";
+        for c in command.chars() {
+            assert!(
+                app.input(KeyEvent::new(
+                    KeyCode::Char(c),
+                    if c.is_ascii_uppercase() {
+                        KeyModifiers::SHIFT
+                    } else {
+                        KeyModifiers::NONE
+                    }
+                ))
+                .is_none()
+            );
+        }
+        assert_eq!(app.setup_input.as_ref().unwrap().1, command);
+        assert!(
+            app.create_form.is_none()
+                && app.first_prompt.is_none()
+                && app.rename_workspace.is_none()
+                && app.editor_source_request.is_none()
+        );
+        assert!(
+            matches!(app.input(KeyEvent::new(KeyCode::Enter,KeyModifiers::NONE)),Some(Effect::Session(Request::ConfigureSetup{project,command:Some(saved)})) if project=="project" && saved==command)
+        );
     }
 }

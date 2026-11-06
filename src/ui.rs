@@ -157,17 +157,32 @@ impl Ui {
                         .iter()
                         .filter(|entry| entry.task == workspace.task)
                         .max_by_key(|entry| entry.reserved);
-                    let context = runtime.map_or_else(
-                        || format!("{} sessions", workspace.sessions.len()),
-                        |runtime| {
-                            format!(
-                                "{:?} · {} · {} sessions",
-                                runtime.lifecycle,
-                                runtime.status.state.label(),
-                                workspace.sessions.len()
-                            )
-                        },
-                    );
+                    let context = if let Some(setup) = app
+                        .session
+                        .setup
+                        .records
+                        .iter()
+                        .rev()
+                        .find(|r| r.creation.intent.request == workspace.task)
+                    {
+                        format!(
+                            "Setup {:?} · {} sessions",
+                            setup.phase,
+                            workspace.sessions.len()
+                        )
+                    } else {
+                        runtime.map_or_else(
+                            || format!("{} sessions", workspace.sessions.len()),
+                            |runtime| {
+                                format!(
+                                    "{:?} · {} · {} sessions",
+                                    runtime.lifecycle,
+                                    runtime.status.state.label(),
+                                    workspace.sessions.len()
+                                )
+                            },
+                        )
+                    };
                     ListItem::new(vec![
                         Line::from(format!(
                             "{} / {}",
@@ -703,7 +718,15 @@ impl Ui {
             );
         }
         if app.create_form.is_none()
+            && app.setup_input.is_none()
             && (app.creation_open
+                || app.session.setup.pending
+                || app.setup_record().is_some_and(|r| {
+                    matches!(
+                        r.phase,
+                        crate::setup::Phase::Failed | crate::setup::Phase::Uncertain
+                    )
+                })
                 || app.session.creation.pending
                 || app.session.creation.error.is_some()
                 || app
@@ -744,7 +767,7 @@ Esc cancel · registration never starts an agent"
             && (frame.area().width < 80 || frame.area().height < 22)
         {
             "N create  j/k select  [/] project  a adopt  E LIVE  R rename
-A add · h history · w/Esc back · d detach · q quit"
+A add · U setup · h history · w/Esc back · d detach · q quit"
         } else if app.cleanup_open
             && !app.attached
             && (frame.area().width < 80 || frame.area().height < 22)
@@ -774,7 +797,7 @@ A add · h history · w/Esc back · d detach · q quit"
                 &compact_help
             } else {
                 compact_help = format!(
-                    "q quit  s stop  h history  g cleanup  y retry  {}\nN create  O receipt  w workspaces  f diff  E LIVE  d detach",
+                    "q quit  s stop  h history  g cleanup  y retry  {}\nN create  O receipt  U setup  w workspaces  f diff  E LIVE  d detach",
                     if app.session.lifecycle == crate::session::Lifecycle::Running {
                         "Enter attach"
                     } else {

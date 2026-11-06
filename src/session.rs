@@ -463,7 +463,12 @@ impl Sessions {
             }
             summaries.push(crate::events::SessionSummary {
                 status: state.status.clone(),
-                reserved: owner.reserved(),
+                reserved: owner.reserved()
+                    || state.checkout_identity.as_ref().is_some_and(|c| {
+                        self.setup_reservations
+                            .iter()
+                            .any(|r| r.common_dir == c.common_dir && r.git_dir == c.git_dir)
+                    }),
                 target: target.clone(),
                 task: owner.task().to_owned(),
                 session: state.session_identity.map(|id| id.session),
@@ -982,7 +987,20 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         creation.advance(&storage);
-        if let Some(handoff) = creation.launch.take() {
+        if let Some(mut handoff) = creation.launch.take() {
+            if let Some(checkout) = handoff.record.checkout.clone()
+                && let Err(error) = session.adopt_checkout_at(
+                    checkout,
+                    handoff.record.intent.request.clone(),
+                    &storage,
+                    false,
+                )
+            {
+                handoff.authorized_start = false;
+                creation.view.error = Some(format!(
+                    "Workspace retained; owner unavailable: {error}. Setup remains separate; adopt explicitly before Start"
+                ));
+            }
             let command = registry
                 .projects
                 .iter()
@@ -1002,7 +1020,12 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     .filter(|c| setup.reserved(c))
                     .cloned()
             })
-            .collect();
+            .fold(Vec::new(), |mut found, c| {
+                if !found.contains(&c) {
+                    found.push(c);
+                }
+                found
+            });
         session.setup_ready = setup.ready();
         if let Some(crate::creation::LaunchHandoff {
             record,
@@ -1406,7 +1429,11 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             | Request::CreateWorkspace(_)
             | Request::RecoverCreation { .. }) => {
                 if matches!(request, Request::CreateWorkspace(_))
-                    && (setup.admission_busy() || !setup.capacity())
+                    && (setup.admission_busy()
+                        || !setup.capacity()
+                        || session.entries.iter().filter(|(_, o)| o.reserved()).count()
+                            + session.setup_reservations.len()
+                            >= 32)
                 {
                     creation.view.error=Some("Project setup is still pending; workspace creation waits for setup outcome".into());
                 } else {

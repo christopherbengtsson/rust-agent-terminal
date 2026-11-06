@@ -1398,9 +1398,14 @@ impl Store {
     }
     fn save_setup(&mut self, record: &crate::setup::Record) -> Result<()> {
         crate::setup::validate_command(&Some(record.command.clone()))?;
+        uuid::Uuid::parse_str(&record.attempt)?;
+        if serde_json::to_vec(record)?.len() > 65536 {
+            return Err("Setup receipt exceeds 64 KiB; retained outcome requires repair".into());
+        }
         self.fault(match record.phase {
             crate::setup::Phase::Prepared => "setup-prepare",
             crate::setup::Phase::Authorized => "setup-authorize",
+            crate::setup::Phase::Running => "setup-running",
             _ => "setup-result",
         })?;
         let tx = self.db.transaction()?;
@@ -1420,7 +1425,7 @@ impl Store {
             }
         } else if tx.query_row("SELECT count(*) FROM workspace_setup", [], |r| {
             r.get::<_, usize>(0)
-        })? >= 256
+        })? >= 32
         {
             return Err("Setup receipt capacity reached".into());
         }

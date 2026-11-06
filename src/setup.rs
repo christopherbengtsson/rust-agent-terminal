@@ -258,6 +258,12 @@ impl Coordinator {
         }
     }
     pub fn retry_storage(&mut self, storage: &Worker) {
+        if !self.loaded {
+            if let Err(e) = storage.commands.try_send(Command::SetupLoad) {
+                self.view.error = Some(format!("Setup receipts not loaded: {e}"));
+            }
+            return;
+        }
         if self.pending.is_none()
             && let Some(record) = self.unsaved.take()
         {
