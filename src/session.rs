@@ -32,6 +32,7 @@ pub enum Request {
     Launch(String),
     LaunchClaude(String),
     LaunchCodex(String),
+    Resume(String),
     QueryLaunch(String),
     Reconcile,
     History { index: usize, offset: u64 },
@@ -103,6 +104,8 @@ pub struct Observation {
     pub adopted: Option<String>,
     #[serde(default)]
     pub agent: Option<String>,
+    #[serde(default)]
+    pub native_conversation: Option<String>,
     pub identity: Option<String>,
     #[serde(default)]
     pub status: crate::native_status::Status,
@@ -699,6 +702,26 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                 state.output_bytes,
             );
         }
+        if let Some(id) = codex_monitor.as_ref().and_then(|m| m.native_session())
+            && state.native_conversation.as_deref() != Some(id)
+            && uuid::Uuid::parse_str(id).is_ok()
+        {
+            let mut saved = state.clone();
+            saved.native_conversation = Some(id.to_owned());
+            if storage
+                .commands
+                .try_send(crate::persistence::Command::Save(
+                    crate::persistence::metadata(&saved),
+                    checkout.as_ref().map(|p| path_bytes(p)),
+                    task_identity.clone(),
+                ))
+                .is_ok()
+            {
+                state.native_conversation = saved.native_conversation;
+                save_pending += 1;
+                state.metadata_pending = true;
+            }
+        }
         // Accept/reject independently of the active client's commands or output.
         for _ in 0..if pending_launch.is_some() || gate_receipt.is_some() || outcome_reply {
             0
@@ -820,21 +843,27 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     | Request::LaunchClaude(_)
                     | Request::Reconcile
                     | Request::LaunchCodex(_)
+                    | Request::Resume(_)
                     | Request::Stop
                     | Request::Shutdown
             );
-        let claude = matches!(&request, Request::LaunchClaude(_));
-        let codex = matches!(&request, Request::LaunchCodex(_));
+        let resume = matches!(&request, Request::Resume(_));
+        let claude = matches!(&request, Request::LaunchClaude(_))
+            || (resume && state.agent.as_deref() == Some("Claude Code"));
+        let codex = matches!(&request, Request::LaunchCodex(_))
+            || (resume && state.agent.as_deref() == Some("Codex CLI"));
         let launch_request = match &request {
-            Request::Launch(id) | Request::LaunchClaude(id) | Request::LaunchCodex(id) => {
-                Some(id.clone())
-            }
+            Request::Launch(id)
+            | Request::LaunchClaude(id)
+            | Request::LaunchCodex(id)
+            | Request::Resume(id) => Some(id.clone()),
             _ => None,
         };
         let recorded = match &request {
             Request::Launch(id)
             | Request::LaunchClaude(id)
             | Request::LaunchCodex(id)
+            | Request::Resume(id)
             | Request::QueryLaunch(id) => launches.get(id).cloned(),
             _ => None,
         };
@@ -851,6 +880,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                         | Request::Launch(_)
                         | Request::LaunchClaude(_)
                         | Request::LaunchCodex(_)
+                        | Request::Resume(_)
                 )
             {
                 return Err("Launch reconciliation pending; wait for durable outcome".into());
@@ -883,6 +913,8 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     if checkout.as_ref() != Some(&path) {
                         state.identity = None;
                         state.lifecycle = Lifecycle::Idle;
+                        state.native_conversation = None;
+                        state.agent = None;
                         task_identity = uuid::Uuid::new_v4().to_string();
                     }
                     state.adopted = Some(path.display().to_string());
@@ -893,10 +925,10 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     if let Some(evidence) = &state.execution { evidence.reconcile()?; }
                     state.execution = None;
                     state.reconciled = true;
-                    state.error = Some("Reconciled: no released coding execution survives; history retained. Explicitly launch a new conversation when ready.".into());
+                    state.error = Some("Reconciled: no released coding execution survives; history retained. Explicitly resume with v or launch a new conversation with c/x when ready.".into());
                 }
                 Request::QueryLaunch(_) => return Err("Launch request unknown to this supervisor; do not replay uncertain activity after supervisor loss".into()),
-                Request::Launch(request) | Request::LaunchClaude(request) | Request::LaunchCodex(request) => {
+                Request::Launch(request) | Request::LaunchClaude(request) | Request::LaunchCodex(request) | Request::Resume(request) => {
                     if state.execution.is_some() && !continuing && child.is_none() { return Err("Interrupted execution is uncertain; u reconciles process evidence. Verified reboot resolves unknown descendants; no automatic coding restart.".into()); }
                     if request.is_empty() || request.len() > 128 {
                         return Err("Launch request must contain 1–128 bytes".into());
@@ -909,7 +941,12 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                         return Err("A session already exists; attach to it".into());
                     }
                     let path = checkout.as_ref().ok_or("Adopt a checkout before launch")?;
+                    if !path.is_dir() { return Err("Checkout unavailable: cannot continue in place; h opens retained history. Restore the checkout before explicitly resuming.".into()); }
+                    if resume && (!claude && !codex || state.native_conversation.as_deref().and_then(|id| uuid::Uuid::parse_str(id).ok()).is_none()) {
+                        return Err("Native resume unavailable: no supported saved conversation identity. h opens retained history; c Claude / x Codex explicitly starts a new conversation.".into());
+                    }
                     if !continuing {
+                        if !resume { state.native_conversation = None; }
                         state.execution = Some(crate::recovery::Execution::prepared()?);
                         state.reconciled = false;
                         let session = uuid::Uuid::new_v4().to_string();
@@ -918,7 +955,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                         state.lifecycle = Lifecycle::Interrupted;
                         storage.commands.try_send(crate::persistence::Command::Prepare(crate::persistence::metadata(&state), Some(path_bytes(path)), task_identity.clone()))?;
                         save_pending += 1;
-                        pending_launch = Some(if claude { Request::LaunchClaude(request) } else if codex { Request::LaunchCodex(request) } else { Request::Launch(request) });
+                        pending_launch = Some(if resume { Request::Resume(request) } else if claude { Request::LaunchClaude(request) } else if codex { Request::LaunchCodex(request) } else { Request::Launch(request) });
                         deferred = true;
                         return Ok(());
                     }
@@ -947,6 +984,10 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                         CommandBuilder::new(claude_executable.as_deref().unwrap_or_else(|| Path::new("claude")))
                     } else if codex {
                         let mut command = CommandBuilder::new("codex");
+                        if resume {
+                            command.arg("resume");
+                            command.arg(state.native_conversation.as_ref().unwrap());
+                        }
                         command.arg("--no-daemon");
                         command
                     } else {
@@ -954,22 +995,41 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                         command.arg("--scripted-child");
                         command
                     };
+                    if claude && resume {
+                        command.arg("--resume");
+                        command.arg(state.native_conversation.as_ref().unwrap());
+                    }
+                    if !resume { state.native_conversation = None; }
                     monitor = None;
                     codex_monitor = None;
                     state.status = crate::native_status::Status::default();
                     if codex {
                         match crate::codex_status::Monitor::start(directory) {
-                            Ok(status_monitor) if status_monitor.configure(&mut command).is_ok() => codex_monitor = Some(status_monitor),
-                            _ => state.status.reason = "Codex status monitor unavailable".into(),
+                            Ok(mut status_monitor) => {
+                                if resume { status_monitor.expect_session(state.native_conversation.as_ref().unwrap()); }
+                                if status_monitor.configure(&mut command).is_ok() { codex_monitor = Some(status_monitor); }
+                                else { state.status.reason = "Codex status monitor unavailable".into(); }
+                            }
+                            Err(_) => state.status.reason = "Codex status monitor unavailable".into(),
                         }
                     } else {
-                        match crate::native_status::Monitor::start(directory, !claude) {
+                        match crate::native_status::Monitor::start(directory, !claude, if resume { state.native_conversation.as_deref() } else { None }) {
+
                             Ok(mut status_monitor) => {
                                 status_monitor.native_executable(claude_executable.as_deref());
-                                status_monitor.configure(&mut command);
+                                status_monitor.configure(&mut command, resume);
+                                if claude { state.native_conversation = Some(status_monitor.native_session().to_owned()); }
                                 monitor = Some(status_monitor);
                             }
-                            Err(_) => state.status.reason = "status monitor unavailable".into(),
+                            Err(_) => {
+                                state.status.reason = "status monitor unavailable".into();
+                                if claude && !resume {
+                                    let id = uuid::Uuid::new_v4().to_string();
+                                    command.arg("--session-id");
+                                    command.arg(&id);
+                                    state.native_conversation = Some(id);
+                                }
+                            },
                         }
 
                     }

@@ -8,8 +8,9 @@ A Rust terminal workspace for coding agents. The product name is undecided;
 The dashboard discovers real Git worktrees, explicitly adopts a checkout, and
 launches Claude Code (`c`), Codex CLI (`x`), or a scripted PTY fixture (`l`). Native
 launch is experimental; see the recorded version-specific proofs below. Durable
-readable history and supervisor reconnect are implemented; full crash
-reconciliation, semantic status and GitHub workflows remain later gates. The first
+readable history, supervisor reconnect, conservative launch reconciliation and
+explicit native recovery are implemented. Remaining native status and GitHub
+workflows have separate gates. The first
 release targets macOS; fixture tests do not establish native-agent compatibility.
 
 ## Run
@@ -32,8 +33,9 @@ Errors appear in the dashboard, where you can retry or quit.
 | `k` / Up | Select previous worktree |
 | `r` | Refresh worktrees in the background |
 | `a` | Explicitly adopt the selected usable checkout |
-| `c` | Launch installed Claude Code directly in the adopted checkout (experimental) |
-| `x` | Launch installed Codex CLI with `--no-daemon` in the adopted checkout (experimental) |
+| `c` | Start a new Claude Code conversation in the adopted checkout (experimental) |
+| `x` | Start a new Codex CLI conversation with `--no-daemon` (experimental) |
+| `v` | Explicitly resume the latest managed native conversation using its saved native ID |
 | `l` | Launch the scripted PTY fixture in the adopted checkout |
 | Enter | Attach to the existing managed session |
 | Ctrl-] | Return from attached focus to dashboard navigation |
@@ -185,8 +187,7 @@ preliminary healthy-storage observations.
 After supervisor loss, the dashboard restores **Interrupted** execution and
 retained history without starting coding. Press `u` to reconcile, `h` for history,
 or `d` to detach. A successful reconciliation retains the interrupted record;
-choose `c`, `x` or `l` explicitly to start a new conversation. This is separate
-from native conversation resume.
+choose `v` explicitly for native resume, or `c`, `x` or `l` for a new conversation.
 
 A verified surviving process blocks replacement; recovery does not kill a
 restored PID. If native execution was authorized and its leader has disappeared,
@@ -196,3 +197,23 @@ blocked. `s` and `q` do not falsely confirm that uncertain unmanaged execution
 stopped. Launch requests and their known results survive supervisor restart;
 retrying the same request does not start another agent. See the
 [launch recovery proof](docs/proofs/09-launch-reconciliation.md).
+
+
+### Explicit native conversation recovery
+
+In dashboard focus, `v` resumes the latest managed native conversation using its
+saved tool and conversation ID: Claude `--resume <id>` or Codex `resume <id>
+--no-daemon`. It supplies no coding prompt. Native folder/hook trust prompts stay
+in the native pane. `c` and `x` explicitly start new conversations; unavailable
+resume explains the reason and never silently starts a replacement. Live sessions
+must stop first, and interrupted execution must pass `u` reconciliation before
+resume or a new launch. Opening the dashboard never starts coding.
+
+History (`h`) remains available when no native ID was captured or the checkout
+is missing. A missing checkout prevents continuing in place; restore its path
+before resuming. Native records remain owned by the original tool, which can
+reject an unavailable ID through its captured native UI. This proof-level path
+covers the most recent managed conversation, without history search or arbitrary
+resume selection. See [both original-conversation proofs](docs/proofs/16-native-recovery.md)
+for exact versions, marker recall, supervisor restart and separate injected
+reboot-style checks; no physical reboot is claimed.
