@@ -1,0 +1,22 @@
+[
+  {
+    "kind": "claude",
+    "owner_pid": 90750,
+    "before": "  PID   UID STARTED                      COMMAND\n90750   501 Fri Nov  6 17:48:42 2026     /private/tmp/rat-ticket-18/target/debug/agent-terminal --supervisor /private/tmp/rat18-claude-state\n",
+    "shutdown_stopped": false,
+    "shutdown_error": "Interrupted execution remains uncertain; u reconciles evidence, d detaches. A missing native leader may require verified reboot before replacement or confirmed shutdown.",
+    "identity": "task=c5253df5-8fb2-42f3-942d-39d1b8c7d889 session=c245a2dc-c26f-49e8-86eb-81c738a829bc request=13b656e9-fcd5-413d-a9b0-e77e5c2e3f79",
+    "harness_only_disposal": "SIGTERM exact verified proof-only owner, not reconciliation",
+    "after": "  PID STARTED                      COMMAND\n"
+  },
+  {
+    "kind": "codex",
+    "owner_pid": 90759,
+    "before": "  PID   UID STARTED                      COMMAND\n90759   501 Fri Nov  6 17:48:46 2026     /private/tmp/rat-ticket-18/target/debug/agent-terminal --supervisor /private/tmp/rat18-codex-state\n",
+    "shutdown_stopped": false,
+    "shutdown_error": "Interrupted execution remains uncertain; u reconciles evidence, d detaches. A missing native leader may require verified reboot before replacement or confirmed shutdown.",
+    "identity": "task=7d871851-3b11-4be8-a85e-f0d9fc8315c3 session=646896de-fa1c-4462-9652-25fa606088ed request=971beee0-37e5-4345-a73c-5581bf7bc0ed",
+    "harness_only_disposal": "SIGTERM exact verified proof-only owner, not reconciliation",
+    "after": "  PID STARTED                      COMMAND\n"
+  }
+]

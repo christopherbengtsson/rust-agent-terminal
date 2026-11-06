@@ -187,3 +187,9 @@ presented as controls. A first cleanup driver attempted `d` while still inside
 the cleanup pane and timed out; the corrected driver uses Escape back then
 detaches. No history deletion occurred. A Swift module-cache sandbox denial was
 rerun with authorized cache access; rasterization then passed.
+
+[Initial proof-process disposal](18-initial-process-cleanup.json) records exact
+UID/start/argv for both restored owners and their honest refused Shutdown
+(stopped=false) before task-harness-only SIGTERM. Both owners and all known
+native/heartbeat PIDs were then absent. This disposal is not product
+reconciliation, and preserved uncertainty was not cleared or history deleted.

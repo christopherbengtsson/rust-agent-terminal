@@ -127,8 +127,9 @@ conversation in the current adopted task.
 
 The native recovery implementation was exercised before the final independent
 status/subscriber merges. Final integration retains its flags and identities and
-is checked at the scripted native-style PTY seam. Claude semantic-status gates
-remain separately open; successful resume does not establish them. The dashboard
+is checked at the scripted native-style PTY seam. At this initial recovery checkpoint Claude semantic-status gates were separate;
+[the completed versioned status proof](10-claude-status.md) now records their
+bounded evidence. Successful resume itself does not establish status. The dashboard
 keeps the existing native pane and one-active-session layout, with `v resume`
 and explicit new-conversation choices in normal/small keyboard help.
 
