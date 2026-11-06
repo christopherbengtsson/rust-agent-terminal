@@ -1,0 +1,47 @@
+{
+  "status": {
+    "state": "Completed",
+    "evidence": "current-turn Stop + new Claude 2.1.318 done marker and idle composer",
+    "reason": "30s bounded native completion evidence",
+    "recent": [
+      "SessionStart::",
+      "UserPromptSubmit::",
+      "Stop::",
+      "Stop::"
+    ]
+  },
+  "output_bytes": 5420
+}
+
+
+ ▐▛███▛█   Claude Code v2.1.318
+▝▜██████▀  Haiku 5.5 with medium effort · API Usage Billing
+ ▝▝   ▝▝   /private/tmp/rat10c-checkout
+
+
+❯ Reply exactly first-stop-ten. Do not use tools.
+
+⏺ first-stop-ten
+
+⏺ Ran 6 stop hooks
+  ⎿  Stop hook error: Proof-only one-shot continuation: reply exactly continued-stop-ten. Do not
+  use tools.
+
+⏺ continued-stop-ten
+
+✻ Cooked for 4s · done 3:10 PM
+
+
+
+
+
+
+
+
+
+
+                                                                ✔ Update installed · Restart to update
+────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ auto mode on (shift+tab to cycle)

@@ -442,20 +442,24 @@ uses `/proc` boot/start fields for fixtures; it establishes no native macOS
 compatibility. See [the crash-window proof](proofs/09-launch-reconciliation.md)
 for the exact boundaries, simulated boot evidence and limitations.
 
-### Partial Claude semantic observations (ticket 10, gate open)
+### Claude semantic observations (ticket 10)
 
-`native_status` owns a bounded passive command-hook channel and pending main-agent
-tool intervals. Only invocation-local settings are added; user policy, hooks and
-credentials remain native. Correlated AskUserQuestion/Bash permission events plus
-the current demonstrated 2.1.318 modal can establish input/approval. A generic
-notification does not end the pending tool interval. Every other native semantic
-outcome remains unknown pending proof, independently of process lifecycle and
-transport ownership. Wrong-generation, invalid, stale or ambiguous evidence
-revokes confidence. Native input requires a later parsed output boundary before
-reestablishing modal confidence. Status is cleared for persistence and restored
-as unknown, rather than reviving an old current-state claim. Monitoring failure
-does not prevent ordinary native launch. See the [partial proof and remaining
-gates](proofs/10-claude-status.md); this does not resolve the status support gate.
+`native_status` owns a bounded passive invocation-local hook channel. Correlated
+AskUserQuestion/Bash permission events plus the demonstrated 2.1.318 native modal
+establish attention. Working requires submitted-turn evidence, a new native
+response header, current active footer, fresh output and no pending tool interval.
+It does not classify pre-output thinking or a blocked submission/tool as work.
+Completion requires current-turn Stop, a later parsed boundary, a new native done
+marker and the idle bordered composer after hook resolution. A one-shot Stop
+continuation remains unknown until the final Stop/native idle structure agrees.
+Interruption requires an active native screen at a real Ctrl-C request and a
+newly observed native acknowledgment/idle composer within five seconds. Existing
+quoted/native-looking acknowledgment text and question/approval cancellation do
+not establish interruption. Conservative layout, marker and expiry checks can
+leave genuine outcomes unknown. Missing/invalid/stale/wrong-invocation evidence
+revokes confidence; status is persisted/restored as unknown. Native monitoring
+stays separate from process ownership, resume identity and transcript capture.
+See [the exact version/scenario proof](proofs/10-claude-status.md).
 
 ### Slow-subscriber isolation (ticket 13)
 

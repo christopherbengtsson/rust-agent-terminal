@@ -1412,6 +1412,7 @@ pub fn scripted_child() -> io::Result<()> {
                         b"status-interrupted" => "FixtureInterrupted",
                         b"status-wrong-session" => "FixtureWrongSession",
                         b"status-old-stop" => "FixtureOldStop",
+                        b"status-prior-turn-stop" => "FixturePreviousTurnStop",
                         _ => "FixtureInvalid",
                     };
                     crate::native_status::fixture(event);

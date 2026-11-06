@@ -233,6 +233,14 @@ impl Monitor {
                                 && millis().saturating_sub(receipt.at) <= 30_000
                                 && (receipt.event == "SessionStart"
                                     || receipt.at >= self.barrier)
+                                && (matches!(
+                                    receipt.event.as_str(),
+                                    "SessionStart" | "UserPromptSubmit"
+                                ) || receipt.at >= self.turn_at)
+                                && (receipt.event == "UserPromptSubmit"
+                                    || receipt.prompt_id.is_empty()
+                                    || self.prompt.is_empty()
+                                    || receipt.prompt_id == self.prompt)
                                 && matches!(
                                     receipt.event.as_str(),
                                     "SessionStart"
@@ -387,7 +395,7 @@ impl Monitor {
                             self.status.reason = if self.fixture {
                                 "fixture evidence"
                             } else {
-                                "native status support gate open"
+                                "native observation unclassified"
                             }
                             .into();
                         }
@@ -479,8 +487,7 @@ impl Monitor {
                     self.status.state = State::Input;
                     self.status.evidence =
                         Some("open question tool + current Claude 2.1.318 modal".into());
-                    self.status.reason =
-                        "30s bounded evidence; native support gate remains open".into();
+                    self.status.reason = "30s bounded native tool/modal evidence".into();
                 }
                 if tool.tool == "Bash"
                     && tool.permission
@@ -493,8 +500,7 @@ impl Monitor {
                     self.status.evidence = Some(
                         "matched permission request + current Claude 2.1.318 Bash modal".into(),
                     );
-                    self.status.reason =
-                        "30s bounded evidence; native support gate remains open".into();
+                    self.status.reason = "30s bounded native tool/modal evidence".into();
                 }
             }
         }
@@ -715,7 +721,7 @@ pub fn fixture(event: &str) {
         event: match event {
             "FixtureNativeBashPre" => "PreToolUse",
             "FixtureNativeBashPermission" => "PermissionRequest",
-            "FixtureOldStop" => "Stop",
+            "FixtureOldStop" | "FixturePreviousTurnStop" => "Stop",
             _ => event,
         }
         .into(),
@@ -729,6 +735,8 @@ pub fn fixture(event: &str) {
         main_agent: true,
         at: if event == "FixtureOldStop" {
             millis().saturating_sub(31_000)
+        } else if event == "FixturePreviousTurnStop" {
+            millis().saturating_sub(1_000)
         } else {
             millis()
         },

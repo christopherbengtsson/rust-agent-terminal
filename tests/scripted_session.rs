@@ -148,6 +148,10 @@ fn dashboard_adopts_launches_and_interacts_without_discovery_mutation() {
     wait("semantic status: unknown");
     writer.write_all(&[3]).unwrap();
     wait("semantic status: interrupted");
+    writer.write_all(b"status-native-submit\r").unwrap();
+    wait("❯ proof");
+    writer.write_all(b"status-prior-turn-stop\r").unwrap();
+    wait("invalid or unattributed evidence");
     writer.write_all(b"status-old-stop\r").unwrap();
     wait("invalid or unattributed evidence");
     wait("semantic status: unknown");
