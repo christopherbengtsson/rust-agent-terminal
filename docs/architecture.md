@@ -91,6 +91,65 @@ agent work or background commands have stopped. See [the history and cleanup
 decision](adr/0004-preserve-history-with-explicit-cleanup.md).
 The foundation writes no product state; selection lasts only for this run.
 
+## Native-session interaction baseline (planned)
+
+This is the design baseline for Milestone 1, not a description of implemented
+session support. Build it with the PTY/supervisor proof rather than performing
+a behavior-preserving foundation refactor first.
+
+**Deepen `app`, rather than add an interaction module.** Its interface accepts
+terminal input, worker observations, and session viewport changes, updates local
+interaction state, and returns explicit effect requests. It performs no blocking
+work. Focus-sensitive interpretation belongs here, including paste and native
+shortcuts; a global key-to-action mapping must not discard attached input before
+focus is considered. Keep `events` as the vocabulary for inputs, observations,
+and effects, rather than a second owner of interaction decisions. Internal
+helpers need no adapter traits.
+
+`App` owns selection, input focus, pending user requests, local errors, and the
+latest observed session state. The supervisor owns adoption records, stable
+identities, worktree exclusivity, launch outcomes, process lifecycle, and history.
+A launch effect carries a stable request identity; reconnect queries that same
+outcome. Dashboard state never decides that a disconnected or quiet session has
+stopped, that an uncertain launch is safe to repeat, or that metadata is saved
+before durable acknowledgement. This preserves the ownership and recovery
+decisions in ADRs 0001 and 0005.
+
+**Keep `main` mechanical.** It polls input, delivers worker observations, dispatches
+effects without waiting, and renders. Workers return typed success, failure,
+and connection observations to the same application interface. Effects include
+Git refresh, session input/resize, launch/attach, stop, detach, and shutdown;
+only expose actions once their execution works. Bounded dispatch must report
+queue saturation or failure rather than silently discard input. Bound event
+processing by payload and time as well as count; never enqueue an entire growing
+transcript as one event. Busy output cannot starve input, stop, or recovery.
+
+**Make exit a state transition with an outcome.** Returning to dashboard focus
+changes only input ownership. Explicit detach closes the dashboard connection
+and preserves execution. Ordinary quit enters pending shutdown and exits only
+after confirmed stop and history flush. A failed or uncertain shutdown remains
+visible and retryable; it is not a successful quit. Unexpected client loss does
+not request shutdown. In attached focus, Ctrl-C goes to the native session;
+dashboard quit bindings do not intercept native input. Choose the reserved
+escape chord through the native proof, not through an untested key convention.
+
+**Keep geometry and rendering in `ui`.** Calculate the session's usable interior
+rectangle once for both drawing and resize requests. `App` receives dimensions,
+not Ratatui layout rules. Rendering uses bounded screen state, does not execute
+effects, and shows available actions from the same interaction policy that
+handles input. Tiny or absent session viewports must not send invalid PTY sizes;
+retain the last usable size until a usable viewport returns. The supervisor
+serializes PTY/parser resize and supplies coherent screen synchronization.
+
+**The interface is the test surface.** Exercise focus, pending requests, shutdown
+outcomes, and reconnect observations through the application interface used by
+the dashboard. Use rendering tests for help, focus, and viewport behavior. Keep
+the approved real-dashboard/supervisor/scripted-PTY seam for actual input bytes,
+sizes, child ownership, durable history, and failure responsiveness. Native-tool
+compatibility still requires recorded macOS evidence. This gives locality to
+interaction policy and leverage to tests without a generic worker framework or
+mock adapter for each module.
+
 ## Investigate the interactive-session boundary first
 
 Ordinary piped stdin/stdout is insufficient for native interactive agents. Spike

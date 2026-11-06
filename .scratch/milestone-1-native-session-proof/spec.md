@@ -86,6 +86,18 @@ fixtures cannot waive it.
   UI, application-state/event, and Git worker boundaries; introduce supervisor,
   session runtime, native adapter, and persistence modules as needed rather than
   new crates or a generic integration framework.
+- Use the [interaction baseline](../../docs/architecture.md#native-session-interaction-baseline-planned)
+  as the implementation direction, rather than first preserving the foundation
+  through a separate refactor. Deepen `App` to own input focus, action decisions,
+  pending requests, and observed state through one input/event interface that
+  returns explicit effects. Keep the event loop mechanical, blocking execution
+  in workers, durable session truth in the supervisor, and viewport geometry in
+  `Ui`. Derive visible available actions from the same interaction policy.
+  Ordinary quit waits for confirmed stop and history flush; failed or uncertain
+  shutdown remains visible and retryable. Bounded effect dispatch reports
+  saturation instead of silently dropping input. Keep stop/recovery responsive
+  when output or persistence queues are full. Verify these decisions through
+  state/rendering checks and the already approved integration seam.
 - Prototype the PTY, screen emulation, supervisor ownership, and recovery path
   before building further coordination features. Evaluate a PTY library and a
   terminal parser against real macOS behavior; library selection is an

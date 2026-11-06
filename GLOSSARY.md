@@ -4,6 +4,10 @@ Language for coordinating coding sessions and preparing reviews.
 
 ## Language
 
+**Input focus**:
+Whether keyboard and paste input control dashboard navigation or the attached
+native session. Returning to dashboard focus leaves the session running.
+
 **Session history**:
 The retained readable record of a session's prompts, agent responses, and
 captured terminal output. It remains useful even when the original conversation
