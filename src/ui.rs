@@ -81,9 +81,13 @@ impl Ui {
             )
         } else {
             format!(
-                " {} · Focus: {focus} · Process: {:?} · semantic status: {} ",
+                " {} · Focus: {focus} · Process: {} · semantic status: {} ",
                 app.session.agent.as_deref().unwrap_or("Session"),
-                app.session.lifecycle,
+                if app.session.connection_lost {
+                    format!("unknown (last seen {:?})", app.session.lifecycle)
+                } else {
+                    format!("{:?}", app.session.lifecycle)
+                },
                 app.session.status.state.label()
             )
         };
@@ -249,7 +253,9 @@ impl Ui {
                 Color::Green,
             )
         };
-        let message = format!(
+        let message = if app.session.connection_lost {
+            format!("{}\n{message}", app.session.identity.as_deref().unwrap_or("No session identity"))
+        } else { format!(
             "{message}\nHistory: {} · durable bytes {}",
             if app.session.metadata_pending {
                 "metadata unconfirmed"
@@ -257,8 +263,8 @@ impl Ui {
                 "metadata committed"
             },
             app.session.durable_bytes
-        );
-        let message = if app.session.error.is_some() {
+        ) };
+        let message = if app.session.error.is_some() && !app.session.connection_lost {
             format!(
                 "{message}\n{}",
                 app.session
@@ -296,15 +302,23 @@ impl Ui {
         let help_text = if frame.area().width < 80 || frame.area().height < 22 {
             if app.attached {
                 compact_help = format!(
-                    "Ctrl-C interrupt · Ctrl-] dashboard\nProcess: {:?} · status: {}",
-                    app.session.lifecycle,
+                    "Ctrl-C interrupt · Ctrl-] dashboard\nProcess: {} · status: {}",
+                    if app.session.connection_lost {
+                        format!("unknown (last seen {:?})", app.session.lifecycle)
+                    } else {
+                        format!("{:?}", app.session.lifecycle)
+                    },
                     app.session.status.state.label()
                 );
                 &compact_help
             } else {
                 compact_help = format!(
-                    "a adopt · c Claude · x Codex · l fixture · Enter attach · s stop · d detach\nq quit/stop · Process: {:?} · status: {}",
-                    app.session.lifecycle,
+                    "a adopt · c Claude · x Codex · l fixture · Enter attach · s stop · d detach\nq quit/stop · Process: {} · status: {}",
+                    if app.session.connection_lost {
+                        format!("unknown (last seen {:?})", app.session.lifecycle)
+                    } else {
+                        format!("{:?}", app.session.lifecycle)
+                    },
                     app.session.status.state.label()
                 );
                 &compact_help

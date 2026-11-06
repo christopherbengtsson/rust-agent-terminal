@@ -29,12 +29,43 @@ pub struct HistoryPage {
 }
 #[derive(Clone, Debug, Default)]
 pub struct Progress {
+    pub pending_bytes: usize,
+    pub pending_high_water: usize,
+    pub backpressure_count: u64,
+    pub backpressure_micros: u64,
     pub durable: u64,
     pub error: Option<String>,
     pub last_flush_micros: u64,
     pub flush_count: u64,
     pub completed_millis: u64,
     pub accepted_to_durable_millis: u64,
+}
+#[derive(Clone)]
+pub struct Capture {
+    sender: SyncSender<(String, Vec<u8>, Instant)>,
+    progress: Arc<Mutex<Progress>>,
+}
+impl Capture {
+    pub fn send(&self, block: (String, Vec<u8>, Instant)) -> std::result::Result<(), ()> {
+        let size = block.1.len();
+        {
+            let mut p = self.progress.lock().unwrap();
+            p.pending_bytes += size;
+            p.pending_high_water = p.pending_high_water.max(p.pending_bytes);
+        }
+        match self.sender.try_send(block) {
+            Ok(()) => Ok(()),
+            Err(mpsc::TrySendError::Disconnected(_)) => Err(()),
+            Err(mpsc::TrySendError::Full(block)) => {
+                let since = Instant::now();
+                self.progress.lock().unwrap().backpressure_count += 1;
+                let result = self.sender.send(block).map_err(|_| ());
+                self.progress.lock().unwrap().backpressure_micros +=
+                    since.elapsed().as_micros() as u64;
+                result
+            }
+        }
+    }
 }
 pub fn metadata(state: &Observation) -> Box<Observation> {
     let mut saved = state.clone();
@@ -64,7 +95,7 @@ pub struct Restored {
 }
 pub struct Worker {
     pub commands: SyncSender<Command>,
-    pub output: SyncSender<(String, Vec<u8>, Instant)>,
+    pub output: Capture,
     pub events: Receiver<Completion>,
     pub progress: Arc<Mutex<Progress>>,
 }
@@ -101,6 +132,7 @@ impl Worker {
                                     if pending.is_none() { pending = capture.try_recv().ok(); }
                                     let Some((id, bytes, accepted)) = &mut pending else { break; };
                                     let count = store.append(id, bytes, *accepted)?;
+                                    status.lock().unwrap().pending_bytes -= count;
                                     bytes.drain(..count);
                                     if bytes.is_empty() { pending = None; }
                                 }
@@ -121,7 +153,7 @@ impl Worker {
                 }
                 if let Some((id, bytes, accepted)) = &mut pending {
                     match store.append(id, bytes, *accepted) {
-                        Ok(count) => { bytes.drain(..count); if bytes.is_empty() { pending = None; } }
+                        Ok(count) => { status.lock().unwrap().pending_bytes -= count; bytes.drain(..count); if bytes.is_empty() { pending = None; } }
                         Err(error) => status.lock().unwrap().error = Some(format!("History capture blocked: {error}; output retained with backpressure")),
                     }
                 }
@@ -144,7 +176,10 @@ impl Worker {
         Ok((
             Self {
                 commands,
-                output,
+                output: Capture {
+                    sender: output,
+                    progress: progress.clone(),
+                },
                 events,
                 progress,
             },

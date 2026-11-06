@@ -18,7 +18,7 @@ use std::{
         mpsc::{self, Receiver, SyncSender},
     },
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 pub const ROWS: u16 = 24;
@@ -61,6 +61,18 @@ pub struct LaunchResult {
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Observation {
+    #[serde(default)]
+    pub connection_lost: bool,
+    #[serde(default)]
+    pub capture_pending_bytes: usize,
+    #[serde(default)]
+    pub capture_high_water: usize,
+    #[serde(default)]
+    pub capture_backpressure_count: u64,
+    #[serde(default)]
+    pub capture_backpressure_micros: u64,
+    #[serde(default)]
+    pub subscriber_frame_high_water: usize,
     #[serde(default)]
     pub history: Option<crate::persistence::HistoryPage>,
     #[serde(default)]
@@ -116,7 +128,8 @@ impl Client {
             .spawn(move || {
                 if let Err(error) = transport(directory, rx, &tx) {
                     let _ = tx.send(Observation {
-                        error: Some(error.to_string()),
+                        connection_lost: true,
+                        error: Some(format!("Dashboard disconnected; press d to detach locally, then reopen. Process state unknown; stop unconfirmed. ({error})")),
                         ..Observation::default()
                     });
                 }
@@ -298,6 +311,46 @@ fn send_observation(stream: &mut UnixStream, state: &Observation) -> io::Result<
     stream.write_all(b"\n")
 }
 
+// Exactly one finite response in flight. Partial writes retain their cursor;
+// the supervisor never waits for a subscriber and never starts a second frame
+// before finishing the first. A stalled subscriber must reconnect to resync.
+struct Delivery {
+    bytes: Vec<u8>,
+    offset: usize,
+    since: Instant,
+}
+impl Delivery {
+    fn new(state: &Observation) -> io::Result<Self> {
+        let mut bytes = serde_json::to_vec(state)?;
+        bytes.push(b'\n');
+        if bytes.len() > MAX_FRAME {
+            return Err(io::Error::other("Supervisor snapshot exceeds frame cap"));
+        }
+        Ok(Self {
+            bytes,
+            offset: 0,
+            since: Instant::now(),
+        })
+    }
+    fn advance(&mut self, stream: &mut UnixStream) -> io::Result<bool> {
+        if self.since.elapsed() >= Duration::from_millis(500) {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "Slow dashboard disconnected after 500ms; reopen to resynchronize the current screen; history capture continues",
+            ));
+        }
+        // Bound transport work per supervisor pass as well as retained bytes.
+        let end = (self.offset + 65536).min(self.bytes.len());
+        match stream.write(&self.bytes[self.offset..end]) {
+            Ok(0) => return Err(io::Error::new(io::ErrorKind::WriteZero, "Dashboard closed")),
+            Ok(n) => self.offset += n,
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
+            Err(error) => return Err(error),
+        }
+        Ok(self.offset == self.bytes.len())
+    }
+}
+
 pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let Some(_ownership) = elect_owner(directory)? else {
         return Ok(());
@@ -385,6 +438,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
     }));
     let mut master: Option<Arc<Mutex<Box<dyn portable_pty::MasterPty + Send>>>> = None;
     let mut controller: Option<UnixStream> = None;
+    let mut delivery: Option<Delivery> = None;
     let mut pending = Vec::new();
     loop {
         while let Ok(event) = storage.events.try_recv() {
@@ -426,6 +480,10 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             capture_done = None;
         }
         let progress = storage.progress.lock().unwrap().clone();
+        state.capture_pending_bytes = progress.pending_bytes;
+        state.capture_high_water = progress.pending_high_water;
+        state.capture_backpressure_count = progress.backpressure_count;
+        state.capture_backpressure_micros = progress.backpressure_micros;
         state.durable_bytes = progress.durable;
         state.durable_flush_count = progress.flush_count;
         state.durable_completed_millis = progress.completed_millis;
@@ -521,7 +579,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
         for _ in 0..32 {
             match listener.accept() {
                 Ok((mut incoming, _)) => {
-                    incoming.set_write_timeout(Some(Duration::from_millis(100)))?;
+                    incoming.set_nonblocking(true)?;
                     if controller.is_some() {
                         let refusal = Observation {
                             control_denied: true,
@@ -531,11 +589,12 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                         let _ = send_observation(&mut incoming, &refusal);
                     } else {
                         screen.lock().unwrap().snapshot(&mut state);
-                        if send_observation(&mut incoming, &state).is_ok() {
-                            incoming.set_nonblocking(true)?;
-                            controller = Some(incoming);
-                            pending.clear();
-                        }
+                        delivery = Some(Delivery::new(&state)?);
+                        state.subscriber_frame_high_water = state
+                            .subscriber_frame_high_water
+                            .max(delivery.as_ref().unwrap().bytes.len());
+                        controller = Some(incoming);
+                        pending.clear();
                     }
                 }
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
@@ -546,6 +605,30 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             thread::sleep(Duration::from_millis(5));
             continue;
         };
+        if let Some(response) = delivery.as_mut() {
+            match response.advance(stream) {
+                Ok(true) => {
+                    delivery = None;
+                }
+                Ok(false) => {
+                    thread::sleep(Duration::from_millis(1));
+                    continue;
+                }
+                Err(error) => {
+                    if error.kind() == io::ErrorKind::TimedOut {
+                        state.error = Some(error.to_string());
+                    }
+                    controller = None;
+                    delivery = None;
+                    pending.clear();
+                    continue;
+                }
+            }
+            if state.stopped {
+                fs::remove_file(&socket)?;
+                return Ok(());
+            }
+        }
         let mut incoming = [0; 4096];
         match stream.read(&mut incoming) {
             Ok(0) => {
@@ -894,14 +977,10 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                 state.output_bytes,
             );
         }
-        if send_observation(stream, &state).is_err() {
-            controller = None;
-            pending.clear();
-        }
-        if state.stopped {
-            fs::remove_file(&socket)?;
-            return Ok(());
-        }
+        delivery = Some(Delivery::new(&state)?);
+        state.subscriber_frame_high_water = state
+            .subscriber_frame_high_water
+            .max(delivery.as_ref().unwrap().bytes.len());
     }
 }
 pub fn scripted_child() -> io::Result<()> {
@@ -925,6 +1004,7 @@ pub fn scripted_child() -> io::Result<()> {
     }
     let mut line = Vec::new();
     let mut approval = false;
+    let mut flood_run = 0;
     for byte in io::stdin().lock().bytes() {
         match byte? {
             3 => {
@@ -1020,6 +1100,24 @@ pub fn scripted_child() -> io::Result<()> {
                         thread::sleep(Duration::from_millis(5));
                     }
                     print!("fixture> ");
+                } else if line == b"flood13" {
+                    flood_run += 1;
+                    let since = Instant::now();
+                    let mut max_write_micros = 0;
+                    let payload = "X".repeat(111);
+                    let mut stdout = io::stdout().lock();
+                    for number in 0..32768 {
+                        let record = format!("flood13:{number:06}:{payload}\r\n");
+                        let write = Instant::now();
+                        stdout.write_all(record.as_bytes())?;
+                        max_write_micros = max_write_micros.max(write.elapsed().as_micros());
+                    }
+                    writeln!(
+                        stdout,
+                        "flood13-complete run={flood_run} bytes=4194304 elapsed_us={} max_write_us={max_write_micros}\r",
+                        since.elapsed().as_micros()
+                    )?;
+                    write!(stdout, "fixture> ")?;
                 } else if line == b"history-bulk" {
                     for number in 0..6000 {
                         println!(
