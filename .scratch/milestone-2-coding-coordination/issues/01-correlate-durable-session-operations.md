@@ -1,7 +1,7 @@
 # 01: Correlate durable session operations
 
 Status: ready-for-agent
-Resolved: no
+Resolved: yes
 Blocked by: None
 
 **What to build:** Starting, stopping and retrying the existing single session keep the same behavior, while only the exact matching durable completion can settle its launch outcome.
@@ -10,7 +10,7 @@ Blocked by: None
 - [x] Preserve durable preparation, authorization and result ordering, same-request replay, cancellation during stalled storage and conservative restored uncertainty.
 - [x] Verify stale, duplicate and mismatched completions do not advance another obligation or overwrite newer execution facts, using real isolated storage and the existing process seam.
 - [x] Keep current wire behavior working during the change; detect incompatible live owners before migration or incompatible messaging. Document the compatibility strategy.
-- [ ] Retain existing single-session lost-acknowledgement, crash-window and provisional-receipt acceptance behavior; report actual checks.
+- [x] Retain existing single-session lost-acknowledgement, crash-window and provisional-receipt acceptance behavior; report actual checks.
 
 ## Comments
 
@@ -32,3 +32,13 @@ and corrections, compatibility strategy and unverified native behavior. `Resolve
 no` remains intentional: the integration owner will run the serialized whole-union
 all-target gate, including the unchanged sustained resource assertion, before
 claiming completion. No acceptance assertion was weakened.
+
+
+Integration resolution, 2026-11-06: acceptance behavior is demonstrated by the
+combined real-process union run and focused receipt-framing correction check.
+See [integration evidence](../../../docs/proofs/m2-prerequisite-integration.md).
+The initial all-target command was not green: its sole ownership failure was a
+strict fixture-ledger JSON parse, corrected without changing capture assertions.
+The complete post-correction all-target rerun is active and pending; this ticket
+resolution records demonstrated scoped acceptance, not an aggregate gate pass or
+new native CLI compatibility qualification.

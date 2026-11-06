@@ -1,7 +1,7 @@
 # 04: Resolve worktrees through bounded execution-owned jobs
 
 Status: ready-for-agent
-Resolved: no
+Resolved: yes
 Blocked by: None
 
 **What to build:** Discovery, refresh and adoption resolve actual checkouts without blocking navigation or shared session controls.
@@ -9,7 +9,7 @@ Blocked by: None
 - [x] Concentrate existing discovery and adoption Git/path interpretation in execution-owned workers. Preserve original Unix path bytes, NUL-safe parsing and canonical worktree identity.
 - [x] A slow or failed Git process is bounded/cancellable, leaves prior successful discovery visible, and cannot block Stop, session polling or dashboard exit.
 - [x] Route results by request/project/checkout identity so late refresh/adoption replies cannot retarget the current selection. Keep discovery read-only and adoption explicit.
-- [ ] Verify actual temporary linked, aliased, detached, bare, locked, missing and prunable worktrees, including non-UTF-8 paths and saturated dispatch.
+- [x] Verify actual temporary linked, aliased, detached, bare, locked, missing and prunable worktrees, including non-UTF-8 paths and saturated dispatch.
 - [x] Establish a concrete per-repository mutation execution discipline for subsequent creation/archive work without holding exclusion for whole agent sessions or creating a generic job engine.
 
 ## Comments
@@ -51,3 +51,17 @@ attribution and transient metadata exclusions. Post-merge warnings-denied Clippy
 refused-dashboard discovery tests pass. The final all-target run is coordinated
 serially on the integration branch; this ticket intentionally remains unresolved
 until that evidence is recorded.
+
+
+Integration resolution, 2026-11-06: acceptance behavior is demonstrated by the
+combined real-process union run and focused receipt-framing correction check.
+See [integration evidence](../../../docs/proofs/m2-prerequisite-integration.md).
+The initial all-target command was not green: its sole ownership failure was a
+strict fixture-ledger JSON parse, corrected without changing capture assertions.
+The complete post-correction all-target rerun is active and pending; this ticket
+resolution records demonstrated scoped acceptance, not an aggregate gate pass or
+new native CLI compatibility qualification.
+The actual native filesystem rejected an attempted invalid-byte directory
+with EILSEQ; its unavailable path was safely rejected by adoption. Byte-exact
+parser/wire round trips pass. No successful non-UTF-8 checkout can be constructed
+on the tested filesystem, and no claim of such a checkout is made.
