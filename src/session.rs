@@ -103,6 +103,7 @@ fn transport(
             || greeting.sessions_protocol != 1
             || greeting.prompt_naming_protocol != 1
             || greeting.creation_protocol != 1
+            || greeting.resume_protocol != 1
         {
             events.send(greeting)?;
             return Ok(());
@@ -142,6 +143,7 @@ fn transport(
         || greeting.sessions_protocol != 1
         || greeting.prompt_naming_protocol != 1
         || greeting.creation_protocol != 1
+            || greeting.resume_protocol != 1
     {
         greeting.control_denied = true;
         greeting.error = Some("Existing supervisor does not support this dashboard's worktree, registry, session or comparison protocol. Use its compatible dashboard to stop activity before upgrading; d detaches locally.".into());
@@ -450,6 +452,7 @@ impl Sessions {
                 | crate::persistence::Completion::Deleted(_)
                 | crate::persistence::Completion::HistoryHidden(_)
                 | crate::persistence::Completion::HistoryTarget(..)
+                | crate::persistence::Completion::ResumeIdentity(..)
         ) {
             for (_, owner) in &mut self.entries {
                 owner.complete(event.clone(), storage);
@@ -495,6 +498,7 @@ impl Sessions {
         let mut state = self.entries[self.selected].1.observation();
         state.history_revision = self.history_revision;
         state.browse_protocol = 1;
+        state.resume_protocol = 1;
         state.browse = self.browse.clone();
         state.sessions_protocol = 1;
         state.control_target = self.entries[self.selected].0.clone();
@@ -719,6 +723,7 @@ impl Sessions {
             | Request::LaunchClaude(id)
             | Request::LaunchCodex(id)
             | Request::Resume(id)
+            | Request::ResumeSelected { request: id, .. }
             | Request::QueryLaunch(id)
             | Request::LaunchNative { request: id, .. } => Some(id),
             _ => None,
@@ -751,6 +756,7 @@ impl Sessions {
                 | Request::LaunchClaude(_)
                 | Request::LaunchCodex(_)
                 | Request::Resume(_)
+                | Request::ResumeSelected { .. }
         ) {
             let active = self
                 .entries
@@ -1076,6 +1082,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
         state.registry_protocol = 1;
         state.prompt_naming_protocol = 1;
         state.creation_protocol = 1;
+        state.resume_protocol = 1;
         let launches = std::mem::take(&mut state.creation.launches);
         state.creation = creation.view.clone();
         state.creation.launches = launches
@@ -1120,6 +1127,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                             sessions_protocol: 1,
                             prompt_naming_protocol: 1,
                             creation_protocol: 1,
+                            resume_protocol: 1,
                             control_denied: true,
                             error: Some("Another dashboard controls this supervisor; close it before reconnecting".into()),
                             ..Observation::default()
@@ -1456,6 +1464,15 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                 quitting |= matches!(request, Request::Shutdown);
                 session.handle(request, &storage, adoption.is_some());
             }
+            request @ Request::ResumeSelected { .. } => {
+                let Request::ResumeSelected { workspace, .. } = &request else { unreachable!() };
+                if let Some(workspace) = registry.workspaces.iter().find(|w| &w.id == workspace) {
+                    if let Some(index) = session.entries.iter().position(|(_,owner)| owner.task() == workspace.task || workspace.legacy_tasks.iter().any(|task|task==owner.task())) {
+                        session.selected = index;
+                        session.handle(request, &storage, adoption.is_some());
+                    } else { session.report_error("Workspace has no runtime owner; adopt its retained checkout before explicit resume".into()); }
+                } else { session.report_error("Selected workspace unavailable; retained history is unchanged".into()); }
+            }
             request => session.handle(request, &storage, adoption.is_some()),
         }
         let mut state = session.observation();
@@ -1468,6 +1485,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
         state.registry_protocol = 1;
         state.prompt_naming_protocol = 1;
         state.creation_protocol = 1;
+        state.resume_protocol = 1;
         let launches = std::mem::take(&mut state.creation.launches);
         state.creation = creation.view.clone();
         state.creation.launches = launches
