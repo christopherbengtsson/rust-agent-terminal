@@ -282,6 +282,9 @@ impl Snapshot {
     }
 }
 pub enum Command {
+    SetupLoad,
+    SetupSave(uuid::Uuid, Box<crate::setup::Record>),
+    ConfigureSetup(uuid::Uuid, String, Option<String>),
     CreationLoad,
     CreationSave(uuid::Uuid, Box<crate::creation::Record>),
     SelectWorkspace(uuid::Uuid, String),
@@ -312,6 +315,8 @@ pub enum Command {
 }
 #[derive(Clone)]
 pub enum Completion {
+    Setups(std::result::Result<Vec<crate::setup::Record>, String>),
+    SetupSaved(uuid::Uuid, std::result::Result<(), String>),
     Creations(std::result::Result<Vec<crate::creation::Record>, String>),
     CreationSaved(
         uuid::Uuid,
@@ -462,10 +467,13 @@ impl Worker {
                             continue;
                         }
                     }
-                    let kind = match &command { Command::ComparisonBase(..) | Command::CreationLoad | Command::CreationSave(..) => "registry", Command::SelectWorkspace(..) => "selection", Command::Capture(..) => unreachable!(), Command::Rename(..) | Command::Register(..) => "registry", Command::Save(..) | Command::Prepare(..) | Command::Authorize(..) => "metadata", Command::History(..) | Command::HistorySession(..) | Command::HistoryTarget { .. } => "history", Command::Cleanup(..) | Command::Delete(..) | Command::Seal(..) => "cleanup", Command::Retry => "retry", Command::Flush(..) => "flush" };
+                    let kind = match &command { Command::SetupLoad | Command::SetupSave(..) | Command::ConfigureSetup(..) | Command::ComparisonBase(..) | Command::CreationLoad | Command::CreationSave(..) => "registry", Command::SelectWorkspace(..) => "selection", Command::Capture(..) => unreachable!(), Command::Rename(..) | Command::Register(..) => "registry", Command::Save(..) | Command::Prepare(..) | Command::Authorize(..) => "metadata", Command::History(..) | Command::HistorySession(..) | Command::HistoryTarget { .. } => "history", Command::Cleanup(..) | Command::Delete(..) | Command::Seal(..) => "cleanup", Command::Retry => "retry", Command::Flush(..) => "flush" };
                     status.lock().unwrap().operation = Some((kind, Instant::now()));
                     let operation = match &command { Command::Prepare(snapshot) | Command::Authorize(snapshot) | Command::Save(snapshot) => Some(snapshot.operation.clone()), Command::Flush(operation) | Command::Seal(operation) => Some(operation.clone()), _ => None };
                     let result = match command {
+                        Command::SetupLoad => Ok(Completion::Setups(store.setups().map_err(|e|e.to_string()))),
+                        Command::SetupSave(id, record) => Ok(Completion::SetupSaved(id, store.save_setup(&record).map_err(|e|e.to_string()))),
+                        Command::ConfigureSetup(id, project, command) => Ok(Completion::Registered(id, store.configure_setup(&project, &command).map_err(|e|e.to_string()))),
                         Command::SelectWorkspace(request, task) => Ok(Completion::Selected(request, store.select_workspace(&task).map_err(|error| error.to_string()))),
                         Command::Capture(..) => unreachable!(),
                         Command::CreationLoad => Ok(Completion::Creations(store.creations().map_err(|e|e.to_string()))),
@@ -697,7 +705,7 @@ impl Store {
             "PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL; PRAGMA fullfsync=ON;",
         )?;
         let version: u32 = db.pragma_query_value(None, "user_version", |r| r.get(0))?;
-        if version > 6 {
+        if version > 8 {
             return Err("History schema is newer than this executable".into());
         }
         if version == 0 {
@@ -774,6 +782,11 @@ impl Store {
         if version < 6 {
             let tx = db.transaction()?;
             tx.execute_batch("CREATE TABLE workspace_creations(id TEXT PRIMARY KEY, record TEXT NOT NULL); PRAGMA user_version=6;")?;
+            tx.commit()?;
+        }
+        if version < 8 {
+            let tx = db.transaction()?;
+            tx.execute_batch("CREATE TABLE IF NOT EXISTS project_setup(project TEXT PRIMARY KEY, command TEXT NOT NULL); CREATE TABLE IF NOT EXISTS workspace_setup(attempt TEXT PRIMARY KEY, record TEXT NOT NULL); PRAGMA user_version=8;")?;
             tx.commit()?;
         }
         db.execute_batch("CREATE TABLE IF NOT EXISTS workspace_comparison_bases(workspace TEXT PRIMARY KEY, reference BLOB NOT NULL, base_commit TEXT NOT NULL);")?;
@@ -1352,6 +1365,68 @@ impl Store {
         tx.execute("INSERT INTO workspace_creations VALUES(?1,?2) ON CONFLICT(id) DO UPDATE SET record=excluded.record",rusqlite::params![record.intent.request,serde_json::to_string(record)?])?;
         tx.commit()?;
         crate::registry::snapshot(&self.db, None)
+    }
+    fn configure_setup(
+        &mut self,
+        project: &str,
+        command: &Option<String>,
+    ) -> Result<crate::registry::Registry> {
+        crate::setup::validate_command(command)?;
+        self.fault("registry")?;
+        if !self.db.query_row(
+            "SELECT EXISTS(SELECT 1 FROM projects WHERE id=?1)",
+            [project],
+            |r| r.get::<_, bool>(0),
+        )? {
+            return Err("Project unavailable".into());
+        }
+        let tx = self.db.transaction()?;
+        if let Some(command) = command {
+            tx.execute("INSERT INTO project_setup VALUES(?1,?2) ON CONFLICT(project) DO UPDATE SET command=excluded.command",rusqlite::params![project,command])?;
+        } else {
+            tx.execute("DELETE FROM project_setup WHERE project=?1", [project])?;
+        }
+        tx.commit()?;
+        crate::registry::snapshot(&self.db, None)
+    }
+    fn setups(&self) -> Result<Vec<crate::setup::Record>> {
+        self.db
+            .prepare("SELECT record FROM workspace_setup ORDER BY rowid LIMIT 256")?
+            .query_map([], |r| r.get::<_, String>(0))?
+            .map(|j| Ok(serde_json::from_str(&j?)?))
+            .collect()
+    }
+    fn save_setup(&mut self, record: &crate::setup::Record) -> Result<()> {
+        crate::setup::validate_command(&Some(record.command.clone()))?;
+        self.fault(match record.phase {
+            crate::setup::Phase::Prepared => "setup-prepare",
+            crate::setup::Phase::Authorized => "setup-authorize",
+            _ => "setup-result",
+        })?;
+        let tx = self.db.transaction()?;
+        let previous: Option<String> = tx
+            .query_row(
+                "SELECT record FROM workspace_setup WHERE attempt=?1",
+                [&record.attempt],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if let Some(previous) = previous {
+            let old: crate::setup::Record = serde_json::from_str(&previous)?;
+            if old.command != record.command
+                || serde_json::to_string(&old.creation)? != serde_json::to_string(&record.creation)?
+            {
+                return Err("Setup attempt is bound to another command or workspace".into());
+            }
+        } else if tx.query_row("SELECT count(*) FROM workspace_setup", [], |r| {
+            r.get::<_, usize>(0)
+        })? >= 256
+        {
+            return Err("Setup receipt capacity reached".into());
+        }
+        tx.execute("INSERT INTO workspace_setup VALUES(?1,?2) ON CONFLICT(attempt) DO UPDATE SET record=excluded.record",rusqlite::params![record.attempt,serde_json::to_string(record)?])?;
+        tx.commit()?;
+        Ok(())
     }
     fn register(
         &mut self,

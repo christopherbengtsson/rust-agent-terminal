@@ -14,6 +14,8 @@ mod persistence;
 mod recovery;
 mod registry;
 mod session;
+mod setup;
+mod setup_execution;
 mod terminal;
 mod ui;
 mod working_diff;

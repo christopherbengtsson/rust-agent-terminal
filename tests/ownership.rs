@@ -7956,3 +7956,89 @@ fn dashboard_create_and_start_targets_new_checkout_and_retains_failed_launch_wit
     drop(control);
     owner.0.wait().unwrap();
 }
+
+#[test]
+fn configured_setup_runs_once_in_created_workspace_without_starting_coding() {
+    use std::os::unix::ffi::OsStrExt;
+    let fixture = Fixture::new();
+    assert!(
+        Command::new("git")
+            .arg("-C")
+            .arg(&fixture.repository)
+            .args([
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=fixture@example.invalid",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "base"
+            ])
+            .status()
+            .unwrap()
+            .success()
+    );
+    let _owner = RegistryOwner(
+        Command::new(env!("CARGO_BIN_EXE_agent-terminal"))
+            .arg("--supervisor")
+            .arg(fixture.state())
+            .spawn()
+            .unwrap(),
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !fixture.state().join("supervisor.sock").exists() {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let mut control = Controller::connect(&fixture);
+    control.request(serde_json::json!({"Register":fixture.repository.as_os_str().as_bytes()}));
+    let project = loop {
+        let state = control.request(serde_json::json!("Screen"));
+        if let Some(project) = state["registry"]["projects"]
+            .as_array()
+            .and_then(|p| p.first())
+        {
+            break project["id"].as_str().unwrap().to_owned();
+        }
+        assert!(Instant::now() < deadline, "{state}");
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    control.request(serde_json::json!({"ConfigureSetup":{"project":project,"command":"pwd > setup-cwd; printf x >> setup-count; printf 'setup complete'"}}));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let state = control.request(serde_json::json!("Screen"));
+        if state["registry"]["projects"][0]["setup_command"].is_string() {
+            break;
+        }
+        assert!(Instant::now() < deadline, "{state}");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let request = uuid::Uuid::new_v4().to_string();
+    let folder = fixture.temp.path().join("setup workspace");
+    control.request(serde_json::json!({"CreateWorkspace":{"request":request,"project":project,"base":"HEAD","branch":"workspace/setup","path":folder.as_os_str().as_bytes(),"agent":"Codex","start":false,"prompt":null}}));
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let settled = loop {
+        let state = control.request(serde_json::json!("Screen"));
+        if state["setup"]["records"][0]["phase"] == "Succeeded"
+            && state["setup"]["pending"] == false
+        {
+            break state;
+        }
+        assert!(Instant::now() < deadline, "{state}");
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    assert_eq!(
+        std::fs::read_to_string(folder.join("setup-count")).unwrap(),
+        "x"
+    );
+    assert_eq!(
+        std::fs::read_to_string(folder.join("setup-cwd"))
+            .unwrap()
+            .trim(),
+        folder.to_str().unwrap()
+    );
+    assert_eq!(settled["setup"]["records"][0]["output"], "setup complete");
+    assert!(settled["execution"].is_null());
+    control.request(serde_json::json!("Shutdown"));
+}
