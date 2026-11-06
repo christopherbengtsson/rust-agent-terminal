@@ -201,12 +201,18 @@ impl Worker {
                     capacity_since = Instant::now();
                 }
                 if store.cleanup_job.is_some() {
+                    status.lock().unwrap().operation = Some(("cleanup", Instant::now()));
                     match store.cleanup_step() {
-                        Ok(Some(event)) => { if tx.send(event).is_err() { break; } },
+                        Ok(Some(event)) => {
+                            if matches!(event, Completion::Deleted(_)) { status.lock().unwrap().capacity = crate::cleanup::Capacity::sample(&store.directory); }
+                            store.publish(&mut status.lock().unwrap());
+                            if tx.send(event).is_err() { break; }
+                        },
                         Ok(None) => {},
                         Err(error) => { store.cleanup_job = None; let _ = tx.send(Completion::Error("cleanup", format!("History cleanup incomplete: {error}; g reopen then explicitly retry selected history"))); }
                     }
                 }
+                status.lock().unwrap().operation = None;
                 if pending.is_none() {
                     match capture.recv_timeout(Duration::from_millis(5)) {
                         Ok(item) => pending = Some(item),
@@ -374,7 +380,7 @@ impl Store {
         if self.cleanup_job.is_some() {
             return Err("Cleanup busy; retry shortly".into());
         }
-        let mut statement = self.db.prepare("SELECT id,identity,state,created,sealed,history_state FROM sessions WHERE history_state!='deleted' ORDER BY sealed DESC, created IS NULL, created ASC, id ASC LIMIT ?1 OFFSET ?2")?;
+        let mut statement = self.db.prepare("SELECT id,identity,state,created,sealed,history_state FROM sessions WHERE history_state!='deleted' ORDER BY sealed DESC, created IS NULL, created ASC, rowid ASC LIMIT ?1 OFFSET ?2")?;
         let mut rows = statement.query(params![
             crate::cleanup::LIST_SIZE + 1,
             index.saturating_mul(crate::cleanup::LIST_SIZE)

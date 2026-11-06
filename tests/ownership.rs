@@ -1878,6 +1878,13 @@ os.execv(sys.argv[0]+'.child',[sys.argv[0]+'.child'])
     while control.request(serde_json::json!("Screen"))["metadata_pending"] != false {
         assert!(Instant::now() < deadline);
     }
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while cleanup_page15(&mut control)["cleanup"]["entries"][0]["eligible"] != true {
+        assert!(
+            Instant::now() < deadline,
+            "original native segment final capture must be sealed before crash"
+        );
+    }
     kill_owner(&fixture);
     drop(control);
     let mut dashboard = fixture.reopen_with_path_after_release("Process: Exited", Some(&path));
@@ -1902,7 +1909,60 @@ os.execv(sys.argv[0]+'.child',[sys.argv[0]+'.child'])
     dashboard.send(b"h");
     dashboard.send(b"n");
     dashboard.wait("received: original-readable-context-16");
-    dashboard.send(b"q");
+    dashboard.kill();
+    let mut control = Controller::connect(&fixture);
+    let resumed_id = control.greeting["identity"]
+        .as_str()
+        .unwrap()
+        .split("session=")
+        .nth(1)
+        .unwrap()
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .to_owned();
+    let old_id = old_identity
+        .as_str()
+        .unwrap()
+        .split("session=")
+        .nth(1)
+        .unwrap()
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .to_owned();
+    let native = control.greeting["native_conversation"].clone();
+    cleanup_wait15(&mut control, |state| state["metadata_pending"] == false);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while cleanup_page15(&mut control)["cleanup"]["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|entry| entry["eligible"] != true)
+    {
+        assert!(Instant::now() < deadline);
+    }
+    let resumed_files = cleanup_chunks15(&fixture, &resumed_id);
+    assert!(!resumed_files.is_empty());
+    control.request(serde_json::json!({"DeleteHistory":{"id":old_id}}));
+    let deleted = cleanup_wait15(&mut control, |state| {
+        state["cleanup_message"]
+            .as_str()
+            .unwrap_or("")
+            .contains("completed")
+    });
+    assert_eq!(deleted["native_conversation"], native);
+    assert_eq!(cleanup_chunks15(&fixture, &resumed_id), resumed_files);
+    assert!(cleanup_chunks15(&fixture, &old_id).is_empty());
+    control.request(serde_json::json!({"History":{"index":0,"offset":0}}));
+    let retained = cleanup_wait15(&mut control, |state| state["history"].is_object());
+    assert!(
+        retained["history"]["identity"]
+            .as_str()
+            .unwrap()
+            .contains(&resumed_id)
+    );
+    control.request(serde_json::json!("Shutdown"));
 }
 
 #[test]
@@ -3103,10 +3163,17 @@ fn explicit_cleanup_warns_previews_cancels_and_deletes_only_selected_history() {
     dashboard.send(b"g");
     dashboard.wait("History cleanup");
     dashboard.wait("allocated bytes");
+    let retained = transcript_bytes14(&fixture);
+    assert!(!retained.is_empty());
     dashboard.send(b"\r");
     dashboard.wait("Confirm selected history deletion");
     dashboard.send(b"\x1b");
     dashboard.wait("History cleanup");
+    assert_eq!(
+        transcript_bytes14(&fixture),
+        retained,
+        "cancellation must preserve all transcript bytes"
+    );
     dashboard.send(b"\r");
     dashboard.wait("Confirm selected history deletion");
     dashboard.send(b"D");
@@ -3698,4 +3765,485 @@ fn paced_session_measurement17() {
     );
     assert!(failures.is_empty(), "healthy targets missed: {failures:?}");
     eprintln!("measurement17 evidence {}", evidence.display());
+}
+
+fn cleanup_wait15(
+    control: &mut Controller,
+    predicate: impl Fn(&serde_json::Value) -> bool,
+) -> serde_json::Value {
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        let state = control.request(serde_json::json!("Screen"));
+        if predicate(&state) {
+            return state;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "cleanup condition missing: {state}"
+        );
+        std::thread::sleep(Duration::from_millis(15));
+    }
+}
+fn cleanup_page15(control: &mut Controller) -> serde_json::Value {
+    control.request(serde_json::json!({"Cleanup":{"page":0}}));
+    cleanup_wait15(control, |state| state["cleanup"].is_object())
+}
+fn cleanup_chunks15(fixture: &Fixture, id: &str) -> Vec<(PathBuf, Vec<u8>)> {
+    let mut files = std::fs::read_dir(fixture.state())
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| {
+            path.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with(&format!("{id}-"))
+                && path.extension().is_some_and(|ext| ext == "transcript")
+        })
+        .map(|path| {
+            let bytes = std::fs::read(&path).unwrap();
+            (path, bytes)
+        })
+        .collect::<Vec<_>>();
+    files.sort_by(|a, b| a.0.cmp(&b.0));
+    files
+}
+#[test]
+fn cleanup_intent_failure_partial_crash_and_restart_preserve_other_history_and_launch_outcomes() {
+    let fixture = Fixture::new();
+    let sentinel = fixture.repository.join("uncommitted-work");
+    std::fs::write(&sentinel, "checkout survives cleanup").unwrap();
+    let mut dashboard = fixture.open();
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted");
+    dashboard.send(b"l");
+    dashboard.wait("fixture>");
+    dashboard.kill();
+    let mut control = Controller::connect(&fixture);
+    let first_identity = control.greeting["identity"].as_str().unwrap().to_owned();
+    let first_request = control.greeting["launch_request"].clone();
+    let first_id = first_identity
+        .split("session=")
+        .nth(1)
+        .unwrap()
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .to_owned();
+    let active = cleanup_page15(&mut control);
+    assert_eq!(active["cleanup"]["entries"][0]["eligible"], false);
+    let refused = control.request(serde_json::json!({"DeleteHistory":{"id":first_id}}));
+    assert!(refused["error"].as_str().unwrap().contains("unflushed"));
+    control.request(serde_json::json!({"Input":b"history-bulk\r".to_vec()}));
+    cleanup_wait15(&mut control, |state| {
+        state["screen"]
+            .as_str()
+            .unwrap_or("")
+            .contains("history-bulk-complete")
+    });
+    control.request(serde_json::json!("Stop"));
+    cleanup_wait15(&mut control, |state| {
+        state["lifecycle"] == "Stopped"
+            && state["metadata_pending"] == false
+            && state["capture_pending_bytes"] == 0
+    });
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let page = cleanup_page15(&mut control);
+        if page["cleanup"]["entries"][0]["eligible"] == true {
+            break;
+        }
+        assert!(Instant::now() < deadline);
+    }
+    let first = cleanup_chunks15(&fixture, &first_id);
+    assert!(
+        first.len() > 2,
+        "partial crash must cross multiple physical chunks"
+    );
+    let second_request = uuid::Uuid::new_v4().to_string();
+    let second = control.request(serde_json::json!({"Launch":second_request}));
+    let second_identity = second["identity"].as_str().unwrap().to_owned();
+    let second_id = second_identity
+        .split("session=")
+        .nth(1)
+        .unwrap()
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .to_owned();
+    control.request(serde_json::json!("Stop"));
+    cleanup_wait15(&mut control, |state| {
+        state["lifecycle"] == "Stopped"
+            && state["metadata_pending"] == false
+            && state["capture_pending_bytes"] == 0
+    });
+    let page = cleanup_page15(&mut control);
+    assert_eq!(
+        page["cleanup"]["entries"][0]["id"], first_id,
+        "oldest stopped segment is suggested first"
+    );
+    let second_files = cleanup_chunks15(&fixture, &second_id);
+    assert!(!second_files.is_empty());
+    std::fs::write(fixture.state().join("proof-storage-delete-intent"), "error").unwrap();
+    control.request(serde_json::json!({"DeleteHistory":{"id":first_id}}));
+    cleanup_wait15(&mut control, |state| {
+        state["cleanup_message"]
+            .as_str()
+            .unwrap_or("")
+            .contains("failed/incomplete")
+    });
+    assert_eq!(
+        cleanup_chunks15(&fixture, &first_id),
+        first,
+        "failed intent must unlink nothing"
+    );
+    std::fs::remove_file(fixture.state().join("proof-storage-delete-intent")).unwrap();
+    std::fs::write(
+        fixture.state().join("proof-storage-delete-after-unlink"),
+        "stall",
+    )
+    .unwrap();
+    control.request(serde_json::json!({"DeleteHistory":{"id":first_id}}));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while cleanup_chunks15(&fixture, &first_id).len() == first.len() {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let partial = cleanup_chunks15(&fixture, &first_id);
+    assert_eq!(partial.len(), first.len() - 1);
+    let pending = control.request(serde_json::json!({"History":{"index":0,"offset":0}}));
+    assert!(
+        !pending["cleanup_message"]
+            .as_str()
+            .unwrap_or("")
+            .contains("completed")
+    );
+    let owner = fixture_peer_pid(&control.stream).unwrap();
+    // SAFETY: authenticated peer of this isolated fixture; no active coding child remains.
+    unsafe {
+        libc::kill(owner, libc::SIGKILL);
+    }
+    drop(control);
+    std::fs::remove_file(fixture.state().join("proof-storage-delete-after-unlink")).unwrap();
+    let mut restarted = fixture.open();
+    restarted.wait("Process: Stopped");
+    restarted.wait("History deletion completed");
+    restarted.kill();
+    let mut control = Controller::connect(&fixture);
+    let page = cleanup_page15(&mut control);
+    assert!(
+        page["cleanup"]["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|entry| entry["id"] != first_id)
+    );
+    assert_eq!(cleanup_chunks15(&fixture, &first_id).len(), 0);
+    assert_eq!(cleanup_chunks15(&fixture, &second_id), second_files);
+    let outcome = control.request(serde_json::json!({"QueryLaunch":first_request}));
+    assert_eq!(outcome["launch_result"]["identity"], first_identity);
+    assert_eq!(
+        std::fs::read_to_string(&sentinel).unwrap(),
+        "checkout survives cleanup"
+    );
+    let before = control.request(serde_json::json!("Screen"))["durable_bytes"].clone();
+    assert!(
+        before.as_u64().unwrap() > 0,
+        "other segment accounting must survive old-history deletion"
+    );
+    control.request(serde_json::json!("Shutdown"));
+}
+
+#[test]
+fn cleanup_failures_remain_incomplete_until_directory_sync_and_completion_commit() {
+    for boundary in ["delete-unlink", "delete-directory-sync", "delete-complete"] {
+        let fixture = Fixture::new();
+        let mut dashboard = fixture.open();
+        dashboard.wait("Discovery complete");
+        dashboard.send(b"a");
+        dashboard.wait("Adopted");
+        dashboard.send(b"l");
+        dashboard.wait("fixture>");
+        dashboard.kill();
+        let mut control = Controller::connect(&fixture);
+        let id = control.greeting["identity"]
+            .as_str()
+            .unwrap()
+            .split("session=")
+            .nth(1)
+            .unwrap()
+            .split_whitespace()
+            .next()
+            .unwrap()
+            .to_owned();
+        control.request(serde_json::json!("Stop"));
+        cleanup_wait15(&mut control, |state| {
+            state["lifecycle"] == "Stopped" && state["metadata_pending"] == false
+        });
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let page = cleanup_page15(&mut control);
+            if page["cleanup"]["entries"][0]["eligible"] == true {
+                break;
+            }
+            assert!(Instant::now() < deadline);
+        }
+        let initial = cleanup_chunks15(&fixture, &id);
+        assert!(!initial.is_empty());
+        let marker = fixture.state().join(format!("proof-storage-{boundary}"));
+        std::fs::write(&marker, "error").unwrap();
+        control.request(serde_json::json!({"DeleteHistory":{"id":id}}));
+        let failed = cleanup_wait15(&mut control, |state| {
+            state["cleanup_message"]
+                .as_str()
+                .unwrap_or("")
+                .contains("incomplete")
+        });
+        assert!(
+            failed["durable_bytes"].as_u64().unwrap() > 0,
+            "no completed deletion accounting on failure"
+        );
+        let page = cleanup_page15(&mut control);
+        assert_eq!(
+            page["cleanup"]["entries"][0]["status"],
+            "incomplete deletion; explicitly retry"
+        );
+        assert_eq!(page["cleanup"]["entries"][0]["id"], id);
+        control.request(serde_json::json!({"History":{"index":0,"offset":0}}));
+        cleanup_wait15(&mut control, |state| {
+            state["error"]
+                .as_str()
+                .unwrap_or("")
+                .contains("No retained session")
+        });
+        if boundary == "delete-unlink" {
+            assert_eq!(cleanup_chunks15(&fixture, &id), initial);
+        } else {
+            assert!(cleanup_chunks15(&fixture, &id).is_empty());
+            assert_eq!(page["cleanup"]["entries"][0]["bytes"], 0);
+        }
+        std::fs::remove_file(marker).unwrap();
+        control.request(serde_json::json!({"DeleteHistory":{"id":id}}));
+        let done = cleanup_wait15(&mut control, |state| {
+            state["cleanup_message"]
+                .as_str()
+                .unwrap_or("")
+                .contains("completed")
+        });
+        assert_eq!(done["durable_bytes"], 0);
+        assert!(
+            cleanup_page15(&mut control)["cleanup"]["entries"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        control.request(serde_json::json!("Shutdown"));
+    }
+}
+
+#[test]
+fn cleanup_never_confuses_process_stop_or_freed_space_with_capture_recovery() {
+    let fixture = Fixture::new();
+    let mut dashboard = fixture.open();
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted");
+    dashboard.send(b"l");
+    dashboard.wait("fixture>");
+    dashboard.kill();
+    let mut control = Controller::connect(&fixture);
+    let first = control.greeting["identity"]
+        .as_str()
+        .unwrap()
+        .split("session=")
+        .nth(1)
+        .unwrap()
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .to_owned();
+    control.request(serde_json::json!("Stop"));
+    cleanup_wait15(&mut control, |state| {
+        state["lifecycle"] == "Stopped" && state["metadata_pending"] == false
+    });
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while cleanup_page15(&mut control)["cleanup"]["entries"][0]["eligible"] != true {
+        assert!(Instant::now() < deadline);
+    }
+    control.request(serde_json::json!({"Launch":uuid::Uuid::new_v4().to_string()}));
+    cleanup_wait15(&mut control, |state| {
+        state["durable_bytes"].as_u64().unwrap_or(0) > 0
+    });
+    std::fs::write(fixture.state().join("proof-storage-available"), "0").unwrap();
+    std::fs::write(fixture.state().join("proof-storage-write"), "error").unwrap();
+    control.request(serde_json::json!({"Input":b"retain-despite-cleanup15\r".to_vec()}));
+    cleanup_wait15(&mut control, |state| {
+        state["storage_error"].is_string()
+            && state["capture_pending_bytes"].as_u64().unwrap_or(0) > 0
+    });
+    control.request(serde_json::json!("Stop"));
+    let stopped = cleanup_wait15(&mut control, |state| state["lifecycle"] == "Stopped");
+    let current = stopped["identity"]
+        .as_str()
+        .unwrap()
+        .split("session=")
+        .nth(1)
+        .unwrap()
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .to_owned();
+    let snapshot = cleanup_chunks15(&fixture, &current);
+    let refused = control.request(serde_json::json!({"DeleteHistory":{"id":current}}));
+    assert!(refused["error"].as_str().unwrap().contains("unflushed"));
+    assert_eq!(cleanup_chunks15(&fixture, &current), snapshot);
+    control.request(serde_json::json!({"DeleteHistory":{"id":first}}));
+    let deleted = cleanup_wait15(&mut control, |state| {
+        state["cleanup_message"]
+            .as_str()
+            .unwrap_or("")
+            .contains("completed")
+            && state["capacity"]["available"] == 0
+    });
+    assert!(
+        deleted["storage_error"].is_string(),
+        "cleanup must not acknowledge capture recovery"
+    );
+    assert!(deleted["capture_pending_bytes"].as_u64().unwrap() > 0);
+    std::fs::remove_file(fixture.state().join("proof-storage-write")).unwrap();
+    control.request(serde_json::json!("RetryStorage"));
+    let recovered = cleanup_wait15(&mut control, |state| {
+        state["capture_pending_bytes"] == 0
+            && state["storage_error"].is_null()
+            && state["durable_bytes"].as_u64().unwrap_or(0)
+                > snapshot.iter().map(|(_, bytes)| bytes.len() as u64).sum()
+    });
+    assert_eq!(
+        recovered["capacity"]["available"], 0,
+        "capacity remains low despite successful write recovery"
+    );
+    control.request(serde_json::json!("Shutdown"));
+}
+
+#[test]
+fn cleanup_migrated_age_is_unknown_pages_are_bounded_and_arbitrary_paths_are_refused() {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = Fixture::new();
+    std::fs::create_dir(fixture.state()).unwrap();
+    std::fs::set_permissions(fixture.state(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let sentinel = fixture.repository.join("keep.txt");
+    std::fs::write(&sentinel, b"untouched").unwrap();
+    let db = rusqlite::Connection::open(fixture.state().join("history.sqlite3")).unwrap();
+    db.execute_batch("CREATE TABLE app (id INTEGER PRIMARY KEY CHECK(id=1), state TEXT NOT NULL, checkout BLOB, task TEXT NOT NULL); CREATE TABLE sessions (id TEXT PRIMARY KEY, identity TEXT NOT NULL, state TEXT NOT NULL, durable INTEGER NOT NULL DEFAULT 0); PRAGMA user_version=1;").unwrap();
+    for index in 1..=10 {
+        let id = format!("11111111-2222-4333-8444-{index:012}");
+        let identity = format!("task=legacy-task session={id} request=legacy-{index}");
+        let state = serde_json::json!({"adopted":"legacy-checkout","identity":identity,"screen":"","formatted":"","rows":24,"cols":100,"output_bytes":4,"error":null,"stopped":false,"lifecycle":"Stopped","control_denied":false,"launch_request":format!("legacy-{index}")});
+        db.execute(
+            "INSERT INTO sessions VALUES(?1,?2,?3,4)",
+            rusqlite::params![id, identity, state.to_string()],
+        )
+        .unwrap();
+        std::fs::write(
+            fixture.state().join(format!("{id}-00000000.transcript")),
+            b"keep",
+        )
+        .unwrap();
+    }
+    drop(db);
+    let mut dashboard = fixture.open();
+    dashboard.wait("Discovery complete");
+    dashboard.kill();
+    let mut control = Controller::connect(&fixture);
+    let page = cleanup_page15(&mut control);
+    assert_eq!(page["cleanup"]["entries"].as_array().unwrap().len(), 8);
+    assert_eq!(page["cleanup"]["next"], true);
+    for entry in page["cleanup"]["entries"].as_array().unwrap() {
+        assert!(
+            entry["created"].is_null(),
+            "migration must not invent historical timestamps"
+        );
+        assert_eq!(
+            entry["eligible"], false,
+            "legacy stopped lifecycle alone cannot prove final capture EOF"
+        );
+        assert!(entry["bytes"].as_u64().unwrap() >= 4);
+    }
+    control.request(serde_json::json!({"Cleanup":{"page":1}}));
+    let second = cleanup_wait15(&mut control, |state| state["cleanup"]["index"] == 1);
+    assert_eq!(second["cleanup"]["entries"].as_array().unwrap().len(), 2);
+    assert_eq!(second["cleanup"]["next"], false);
+    control.request(serde_json::json!({"DeleteHistory":{"id":sentinel.display().to_string()}}));
+    cleanup_wait15(&mut control, |state| {
+        state["cleanup_message"]
+            .as_str()
+            .unwrap_or("")
+            .contains("failed/incomplete")
+    });
+    assert_eq!(std::fs::read(&sentinel).unwrap(), b"untouched");
+    control.request(serde_json::json!("Shutdown"));
+}
+
+#[test]
+fn cleanup_rejects_symlink_chunks_without_following_checkout_targets() {
+    let fixture = Fixture::new();
+    let sentinel = fixture.repository.join("keep.txt");
+    std::fs::write(&sentinel, b"untouched").unwrap();
+    let mut dashboard = fixture.open();
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted");
+    dashboard.send(b"l");
+    dashboard.wait("fixture>");
+    dashboard.kill();
+    let mut control = Controller::connect(&fixture);
+    let id = control.greeting["identity"]
+        .as_str()
+        .unwrap()
+        .split("session=")
+        .nth(1)
+        .unwrap()
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .to_owned();
+    control.request(serde_json::json!("Stop"));
+    cleanup_wait15(&mut control, |state| {
+        state["lifecycle"] == "Stopped" && state["metadata_pending"] == false
+    });
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while cleanup_page15(&mut control)["cleanup"]["entries"][0]["eligible"] != true {
+        assert!(Instant::now() < deadline);
+    }
+    let chunks = cleanup_chunks15(&fixture, &id);
+    let backup = fixture.temp.path().join("original-chunk");
+    std::fs::rename(&chunks[0].0, &backup).unwrap();
+    std::os::unix::fs::symlink(&sentinel, &chunks[0].0).unwrap();
+    let page = cleanup_page15(&mut control);
+    assert_eq!(page["cleanup"]["entries"][0]["eligible"], false);
+    assert!(page["cleanup"]["entries"][0]["bytes"].is_null());
+    control.request(serde_json::json!({"DeleteHistory":{"id":id}}));
+    cleanup_wait15(&mut control, |state| {
+        state["cleanup_message"]
+            .as_str()
+            .unwrap_or("")
+            .contains("incomplete")
+    });
+    assert!(
+        std::fs::symlink_metadata(&chunks[0].0)
+            .unwrap()
+            .is_symlink()
+    );
+    assert_eq!(std::fs::read(&sentinel).unwrap(), b"untouched");
+    std::fs::remove_file(&chunks[0].0).unwrap();
+    std::fs::rename(&backup, &chunks[0].0).unwrap();
+    control.request(serde_json::json!({"DeleteHistory":{"id":id}}));
+    cleanup_wait15(&mut control, |state| {
+        state["cleanup_message"]
+            .as_str()
+            .unwrap_or("")
+            .contains("completed")
+    });
+    assert_eq!(std::fs::read(&sentinel).unwrap(), b"untouched");
+    control.request(serde_json::json!("Shutdown"));
 }

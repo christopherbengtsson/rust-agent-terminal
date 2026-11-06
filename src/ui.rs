@@ -347,6 +347,11 @@ impl Ui {
         } else {
             message
         };
+        let message = if let Some(cleanup) = &app.session.cleanup_message {
+            format!("{}\n{message}", visible(cleanup))
+        } else {
+            message
+        };
         let message = if app.session.capacity.low() {
             format!(
                 "Low storage: {} bytes available (warning below 1 GiB) · g cleanup · y retry / s stop\n{message}",
@@ -515,6 +520,98 @@ fn visible(text: &str) -> String {
 mod tests {
     use super::*;
     use ratatui::{Terminal, backend::TestBackend};
+
+    #[test]
+    fn cleanup_renders_unknown_age_physical_size_preview_and_low_space_recovery_controls() {
+        let mut app = App::new("repo".into());
+        app.cleanup_open = true;
+        app.session.capacity.available = Some(0);
+        let entry = crate::cleanup::Entry {
+            id: "selected-session".into(),
+            identity: "task=task15 session=selected-session".into(),
+            bytes: Some(8192),
+            status: "incomplete deletion; explicitly retry".into(),
+            eligible: true,
+            ..Default::default()
+        };
+        app.session.cleanup = Some(crate::cleanup::Page {
+            entries: vec![entry.clone()],
+            ..Default::default()
+        });
+        let mut terminal = Terminal::new(TestBackend::new(160, 40)).unwrap();
+        terminal
+            .draw(|frame| Ui::default().draw(frame, &app))
+            .unwrap();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(text.contains("unknown (legacy timestamp)"));
+        assert!(text.contains("8192 allocated bytes"));
+        assert!(text.contains("task=task15"));
+        assert!(text.contains("Low storage"));
+        assert!(text.contains("incomplete deletion"));
+        app.cleanup_preview = Some(entry);
+        for (width, height) in [(160, 40), (70, 20)] {
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+            terminal
+                .draw(|frame| Ui::default().draw(frame, &app))
+                .unwrap();
+            let text: String = terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect();
+            assert!(text.contains("Confirm selected history deletion"));
+            assert!(text.contains("Esc cancel"));
+            assert!(text.contains("D delete"));
+        }
+    }
+
+    #[test]
+    fn storage_warning_has_an_exact_threshold_and_unknown_capacity_is_honest() {
+        let mut app = App::new("repo".into());
+        for (bytes, warning) in [
+            (0, true),
+            (1_073_741_823, true),
+            (1_073_741_824, false),
+            (u64::MAX, false),
+        ] {
+            app.session.capacity.available = Some(bytes);
+            let mut terminal = Terminal::new(TestBackend::new(160, 40)).unwrap();
+            terminal
+                .draw(|frame| Ui::default().draw(frame, &app))
+                .unwrap();
+            let text: String = terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect();
+            assert_eq!(text.contains("Low storage"), warning);
+        }
+        app.session.capacity.available = None;
+        app.session.capacity.error = Some("capacity read failed".into());
+        let mut terminal = Terminal::new(TestBackend::new(160, 40)).unwrap();
+        terminal
+            .draw(|frame| Ui::default().draw(frame, &app))
+            .unwrap();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(text.contains("Storage capacity unavailable"));
+        assert!(!text.contains("Low storage"));
+    }
 
     #[test]
     fn stopped_capture_fault_keeps_possible_loss_and_retry_visible() {

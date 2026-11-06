@@ -403,6 +403,50 @@ mod tests {
     }
 
     #[test]
+    fn cleanup_selection_preview_cancel_and_confirmation_are_explicit_and_uuid_bound() {
+        let mut app = App::new("repo".into());
+        assert!(matches!(
+            app.input(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE)),
+            Some(Effect::Session(Request::Cleanup { page: 0 }))
+        ));
+        let selected = crate::cleanup::Entry {
+            id: "selected-session".into(),
+            eligible: true,
+            ..Default::default()
+        };
+        app.session.cleanup = Some(crate::cleanup::Page {
+            entries: vec![selected.clone()],
+            ..Default::default()
+        });
+        assert!(
+            app.input(KeyEvent::new(KeyCode::Char('D'), KeyModifiers::SHIFT))
+                .is_none()
+        );
+        assert!(
+            app.input(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+                .is_none()
+        );
+        assert_eq!(app.cleanup_preview.as_ref().unwrap().id, "selected-session");
+        assert!(
+            app.input(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+                .is_none()
+        );
+        assert!(app.cleanup_preview.is_none());
+        assert!(app.cleanup_open);
+        app.input(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        // A new observation or reordered page cannot retarget a reviewed preview.
+        app.session.cleanup.as_mut().unwrap().entries[0].id = "different-session".into();
+        assert!(
+            matches!(app.input(KeyEvent::new(KeyCode::Char('D'), KeyModifiers::SHIFT)), Some(Effect::Session(Request::DeleteHistory { id })) if id == "selected-session")
+        );
+        app.attached = true;
+        assert!(matches!(
+            app.input(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE)),
+            Some(Effect::Session(Request::Key(_)))
+        ));
+    }
+
+    #[test]
     fn semantic_evidence_is_separate_from_process_and_terminal_prose() {
         let mut app = App::new("repo".into());
         app.observe_session(Observation {
