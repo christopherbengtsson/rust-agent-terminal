@@ -80,6 +80,19 @@ pub enum Request {
         session: Option<String>,
         command: Box<Request>,
     },
+    PreviewCreation {
+        project: String,
+    },
+    CreateWorkspace(crate::creation::Intent),
+    RecoverCreation {
+        request: String,
+        local: bool,
+    },
+    CancelCreation {
+        request: String,
+        #[serde(default)]
+        native_session: Option<String>,
+    },
     SelectSession(String),
     Discover {
         request: u64,
@@ -148,6 +161,10 @@ pub struct LaunchResult {
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Observation {
+    #[serde(default)]
+    pub creation_protocol: u32,
+    #[serde(default)]
+    pub creation: crate::creation::View,
     #[serde(default)]
     pub diff_protocol: u32,
     #[serde(default)]

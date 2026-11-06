@@ -2,6 +2,7 @@ mod app;
 mod child_scope;
 mod cleanup;
 mod codex_status;
+mod creation;
 mod editor;
 mod events;
 mod git;

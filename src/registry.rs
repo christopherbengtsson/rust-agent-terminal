@@ -20,6 +20,8 @@ pub struct Project {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Workspace {
+    #[serde(default)]
+    pub creation: Option<crate::creation::Facts>,
     pub id: String,
     /// Original opaque task identity, never parsed or rewritten during migration.
     pub task: String,
@@ -237,7 +239,27 @@ pub(crate) fn snapshot(db: &Connection, selected_task: Option<&str>) -> Result<R
             .prepare("SELECT task FROM workspace_tasks WHERE workspace=?1 ORDER BY rowid")?
             .query_map([&id], |row| row.get(0))?
             .collect::<std::result::Result<Vec<_>, _>>()?;
+        let creation: Option<String> = db
+            .query_row(
+                "SELECT record FROM workspace_creations WHERE id=?1",
+                [&task],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let creation = creation
+            .map(|json| serde_json::from_str::<crate::creation::Record>(&json))
+            .transpose()?
+            .and_then(|r| {
+                Some(crate::creation::Facts {
+                    request: r.intent.request,
+                    original_base_ref: r.base_ref?,
+                    original_base_commit: r.commit?,
+                    original_branch: r.intent.branch,
+                    created_branch: r.checkout.is_some(),
+                })
+            });
         workspaces.push(Workspace {
+            creation,
             legacy_tasks,
             id,
             task,

@@ -102,6 +102,7 @@ fn transport(
             || greeting.registry_protocol != 1
             || greeting.sessions_protocol != 1
             || greeting.prompt_naming_protocol != 1
+            || greeting.creation_protocol != 1
         {
             events.send(greeting)?;
             return Ok(());
@@ -140,6 +141,7 @@ fn transport(
         || greeting.registry_protocol != 1
         || greeting.sessions_protocol != 1
         || greeting.prompt_naming_protocol != 1
+        || greeting.creation_protocol != 1
     {
         greeting.control_denied = true;
         greeting.error = Some("Existing supervisor does not support this dashboard's worktree, registry, session or comparison protocol. Use its compatible dashboard to stop activity before upgrading; d detaches locally.".into());
@@ -436,8 +438,23 @@ impl Sessions {
     }
     fn observation(&mut self) -> Observation {
         let mut summaries = Vec::new();
+        let mut creation_launches = Vec::new();
         for (target, owner) in &mut self.entries {
             let state = owner.observation();
+            if !state.launch_request.is_empty() {
+                creation_launches.push(crate::creation::LaunchReceipt {
+                    request: state.launch_request.clone(),
+                    session: state.session_identity.as_ref().map(|id| id.session.clone()),
+                    lifecycle: state.lifecycle,
+                    result: if state.metadata_pending {
+                        None
+                    } else {
+                        state.launch_result.clone()
+                    },
+                    pending: state.metadata_pending,
+                    error: state.error.clone(),
+                });
+            }
             summaries.push(crate::events::SessionSummary {
                 status: state.status.clone(),
                 reserved: owner.reserved(),
@@ -452,6 +469,7 @@ impl Sessions {
         state.sessions_protocol = 1;
         state.control_target = self.entries[self.selected].0.clone();
         state.sessions = summaries;
+        state.creation.launches = creation_launches;
         state.metadata_pending |= self.selection_pending.is_some();
         state
     }
@@ -468,6 +486,16 @@ impl Sessions {
         task: String,
         storage: &crate::persistence::Worker,
     ) -> Result<(), String> {
+        self.adopt_checkout_at(identity, task, storage, true)
+            .map(|_| ())
+    }
+    fn adopt_checkout_at(
+        &mut self,
+        identity: crate::git::CheckoutIdentity,
+        task: String,
+        storage: &crate::persistence::Worker,
+        select: bool,
+    ) -> Result<usize, String> {
         let matching = |owner: &mut agent_session::AgentSession| {
             let state = owner.observation();
             state.checkout_identity.as_ref().is_some_and(|known| {
@@ -484,21 +512,25 @@ impl Sessions {
                     .position(|(_, owner)| matching(owner))
             });
         if let Some(index) = index {
-            self.selected = index;
+            if select {
+                self.selected = index;
+            }
             self.entries[index]
                 .1
                 .adopt(identity, true, task.clone(), storage);
-            let operation = uuid::Uuid::new_v4();
-            storage
-                .commands
-                .try_send(crate::persistence::Command::SelectWorkspace(
-                    operation, task,
-                ))
-                .map_err(|error| {
-                    format!("Workspace selection not saved: {error}; retry selection")
-                })?;
-            self.selection_pending = Some(operation);
-            return Ok(());
+            if select {
+                let operation = uuid::Uuid::new_v4();
+                storage
+                    .commands
+                    .try_send(crate::persistence::Command::SelectWorkspace(
+                        operation, task,
+                    ))
+                    .map_err(|error| {
+                        format!("Workspace selection not saved: {error}; retry selection")
+                    })?;
+                self.selection_pending = Some(operation);
+            }
+            return Ok(index);
         }
         if self.entries.len() >= 1024 {
             return Err("Session owner capacity reached; retained owners are preserved".into());
@@ -513,18 +545,46 @@ impl Sessions {
         let mut owner = agent_session::AgentSession::restore(&self.directory, restored, storage)
             .map_err(|e| e.to_string())?;
         owner.adopt(identity, false, task.clone(), storage);
-        let operation = uuid::Uuid::new_v4();
-        storage
-            .commands
-            .try_send(crate::persistence::Command::SelectWorkspace(
-                operation, task,
-            ))
-            .map_err(|error| format!("Workspace selection not saved: {error}; retry selection"))?;
-        self.selection_pending = Some(operation);
+        if select {
+            let operation = uuid::Uuid::new_v4();
+            storage
+                .commands
+                .try_send(crate::persistence::Command::SelectWorkspace(
+                    operation, task,
+                ))
+                .map_err(|error| {
+                    format!("Workspace selection not saved: {error}; retry selection")
+                })?;
+            self.selection_pending = Some(operation);
+        }
         let target = owner.observation().control_target;
         self.entries.push((target, owner));
-        self.selected = self.entries.len() - 1;
-        Ok(())
+        let index = self.entries.len() - 1;
+        if select {
+            self.selected = index;
+        }
+        Ok(index)
+    }
+    fn cancel_creation_launch(
+        &mut self,
+        request: &str,
+        native_session: Option<&str>,
+        storage: &crate::persistence::Worker,
+    ) {
+        for (_, owner) in &mut self.entries {
+            let state = owner.observation();
+            if owner.task() == request
+                && state.launch_request == request
+                && native_session.is_none_or(|expected| {
+                    state
+                        .session_identity
+                        .as_ref()
+                        .is_some_and(|id| id.session == expected && id.request == request)
+                })
+            {
+                owner.handle(Request::Stop, storage, false);
+            }
+        }
     }
     fn handle(&mut self, request: Request, storage: &crate::persistence::Worker, adopting: bool) {
         let (index, request) = match request {
@@ -557,6 +617,10 @@ impl Sessions {
                         | Request::Shutdown
                         | Request::Adopt(_)
                         | Request::Register(_)
+                        | Request::PreviewCreation { .. }
+                        | Request::CreateWorkspace(_)
+                        | Request::RecoverCreation { .. }
+                        | Request::CancelCreation { .. }
                         | Request::RenameWorkspace { .. }
                         | Request::Discover { .. }
                         | Request::InspectWorking { .. }
@@ -717,6 +781,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             return Ok(());
         }
     };
+    let mut creation = crate::creation::Coordinator::new(&storage);
     let mut registry = restored.state.registry.clone();
     let mut registry_error = None;
     let mut registry_operation = None;
@@ -839,7 +904,12 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         while let Ok(event) = storage.events.try_recv() {
+            if let Some(snapshot) = creation.complete(&event, &storage) {
+                registry = snapshot;
+            }
             match event {
+                crate::persistence::Completion::Creations(_)
+                | crate::persistence::Completion::CreationSaved(..) => {}
                 crate::persistence::Completion::Registry(snapshot) => registry = snapshot,
                 crate::persistence::Completion::Selected(operation, result) => {
                     session.complete(
@@ -880,6 +950,48 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                 event => session.complete(event, &storage),
             }
         }
+        creation.advance(&storage);
+        if let Some(crate::creation::LaunchHandoff {
+            record,
+            authorized_start,
+        }) = creation.launch.take()
+            && let Some(checkout) = record.checkout
+        {
+            match session.adopt_checkout_at(
+                checkout,
+                record.intent.request.clone(),
+                &storage,
+                false,
+            ) {
+                Ok(index) if authorized_start => {
+                    let target = session.entries[index].0.clone();
+                    let expected = session.entries[index]
+                        .1
+                        .observation()
+                        .session_identity
+                        .map(|id| id.session);
+                    session.handle(
+                        Request::Session {
+                            target,
+                            session: expected,
+                            command: Box::new(Request::LaunchNative {
+                                request: record.intent.request,
+                                agent: record.intent.agent,
+                                prompt: record.intent.prompt,
+                            }),
+                        },
+                        &storage,
+                        false,
+                    );
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    creation.view.error = Some(format!(
+                        "Workspace retained; launch not started: {error}. Adopt and Start explicitly"
+                    ))
+                }
+            }
+        }
         session.advance(&storage, adoption.is_some());
         let mut state = session.observation();
         state.subscriber_frame_high_water = subscriber_frame_high_water;
@@ -890,6 +1002,19 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
         state.git_jobs_protocol = 1;
         state.registry_protocol = 1;
         state.prompt_naming_protocol = 1;
+        state.creation_protocol = 1;
+        let launches = std::mem::take(&mut state.creation.launches);
+        state.creation = creation.view.clone();
+        state.creation.launches = launches
+            .into_iter()
+            .filter(|r| {
+                creation
+                    .view
+                    .records
+                    .iter()
+                    .any(|record| record.intent.request == r.request)
+            })
+            .collect();
         state.registry_pending = registering || registry_operation.is_some();
         state.registry = registry.clone();
         state.error = state.error.or_else(|| registry_error.clone());
@@ -902,7 +1027,8 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             && source_job.is_none()
             && diff_job.is_none()
             && diff_save.is_none()
-            && registry_operation.is_none();
+            && registry_operation.is_none()
+            && !creation.busy();
         if state.stopped && controller.is_none() {
             fs::remove_file(&socket)?;
             return Ok(());
@@ -920,6 +1046,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                             registry_protocol: 1,
                             sessions_protocol: 1,
                             prompt_naming_protocol: 1,
+                            creation_protocol: 1,
                             control_denied: true,
                             error: Some("Another dashboard controls this supervisor; close it before reconnecting".into()),
                             ..Observation::default()
@@ -1165,6 +1292,26 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
             }
+            Request::CancelCreation {
+                request,
+                native_session,
+            } => {
+                session.cancel_creation_launch(&request, native_session.as_deref(), &storage);
+                creation.handle(
+                    Request::CancelCreation {
+                        request,
+                        native_session,
+                    },
+                    &registry,
+                    &storage,
+                    directory,
+                );
+            }
+            request @ (Request::PreviewCreation { .. }
+            | Request::CreateWorkspace(_)
+            | Request::RecoverCreation { .. }) => {
+                creation.handle(request, &registry, &storage, directory);
+            }
             Request::Register(bytes) => {
                 registry_error = None;
                 let result = (|| -> Result<(), Box<dyn std::error::Error>> {
@@ -1206,7 +1353,12 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     session.report_error(error.to_string());
                 }
             }
+            Request::RetryStorage => {
+                creation.retry_storage(&storage);
+                session.handle(Request::RetryStorage, &storage, adoption.is_some());
+            }
             Request::Stop | Request::Shutdown => {
+                creation.cancel();
                 if let Some(job) = &source_job {
                     job.cancel();
                 }
@@ -1242,6 +1394,19 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
         state.git_jobs_protocol = 1;
         state.registry_protocol = 1;
         state.prompt_naming_protocol = 1;
+        state.creation_protocol = 1;
+        let launches = std::mem::take(&mut state.creation.launches);
+        state.creation = creation.view.clone();
+        state.creation.launches = launches
+            .into_iter()
+            .filter(|r| {
+                creation
+                    .view
+                    .records
+                    .iter()
+                    .any(|record| record.intent.request == r.request)
+            })
+            .collect();
         state.registry_pending = registering || registry_operation.is_some();
         state.registry = registry.clone();
         state.error = state.error.or_else(|| registry_error.clone());
@@ -1254,7 +1419,8 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             && source_job.is_none()
             && diff_job.is_none()
             && diff_save.is_none()
-            && registry_operation.is_none();
+            && registry_operation.is_none()
+            && !creation.busy();
         if controller.is_some() {
             delivery = Some(Delivery::new(&mut state)?);
             subscriber_frame_high_water =

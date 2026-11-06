@@ -533,7 +533,51 @@ impl Ui {
             .wrap(Wrap { trim: false }),
             status,
         );
-        if let Some((_, text)) = &app.first_prompt {
+        if let Some(form) = &app.create_form {
+            let project = app
+                .session
+                .registry
+                .projects
+                .iter()
+                .find(|p| p.id == form.intent.project)
+                .map(|p| p.name.as_str())
+                .unwrap_or("Unavailable");
+            let fields = [
+                format!("Base: {}", form.intent.base),
+                format!("Branch: {}", form.intent.branch),
+                format!("Folder: {}", form.path),
+                format!(
+                    "First prompt (optional): {}",
+                    form.intent.prompt.as_deref().unwrap_or_default()
+                ),
+                format!("Agent: {:?} (Left/Right changes)", form.intent.agent),
+            ];
+            let mut text = format!("Project: {project}\n");
+            for (i, field) in fields.iter().enumerate() {
+                text.push_str(&format!(
+                    "{} {}\n",
+                    if i == form.field { ">" } else { " " },
+                    visible(field)
+                ));
+            }
+            if let Some(preview) = &app.session.creation.preview {
+                text.push_str(&format!("Available bases: {}\n", preview.bases.join(", ")));
+                if preview.default_base.is_none() {
+                    text.push_str("Choose an explicit base; no unambiguous remote default.\n");
+                }
+                if let Some(error) = &preview.error {
+                    text.push_str(&visible(error));
+                }
+            }
+            text.push_str("\nEnter: Create without starting\nCtrl-S: Create and start (supplied prompt sent once)\nTab: next field · Ctrl-U: clear · Esc: cancel");
+            frame.render_widget(Clear, session);
+            frame.render_widget(
+                Paragraph::new(text)
+                    .block(Block::bordered().title(" New independent workspace "))
+                    .wrap(Wrap { trim: false }),
+                session,
+            );
+        } else if let Some((_, text)) = &app.first_prompt {
             frame.render_widget(Clear, session);
             frame.render_widget(
                 Paragraph::new(visible(text))
@@ -555,8 +599,125 @@ impl Ui {
                 session,
             );
         }
+        if app.creation_open
+            && app.create_form.is_none()
+            && app.first_prompt.is_none()
+            && app.rename_workspace.is_none()
+        {
+            let text = if let Some(record) = app.creation_record() {
+                let project = app
+                    .session
+                    .registry
+                    .projects
+                    .iter()
+                    .find(|p| p.id == record.intent.project)
+                    .map(|p| p.name.as_str())
+                    .unwrap_or(&record.intent.project);
+                let launch = app
+                    .session
+                    .creation
+                    .launches
+                    .iter()
+                    .find(|r| r.request == record.intent.request);
+                let launch = if record.launch_cancelled {
+                    launch.map(|r|format!("Original launch intent cancelled; original process {:?}",r.lifecycle)).unwrap_or_else(||"Original launch intent cancelled; later conversations remain independent".into())
+                } else if let Some(receipt) = launch {
+                    if let Some(result) = &receipt.result {
+                        result
+                            .error
+                            .as_ref()
+                            .map(|e| format!("Native launch failed: {}", visible(e)))
+                            .unwrap_or_else(|| {
+                                if receipt.lifecycle == crate::events::Lifecycle::Running {
+                                    "Native agent started; attach through its workspace".into()
+                                } else {
+                                    format!(
+                                        "Native launch confirmed; process {:?}; history retained",
+                                        receipt.lifecycle
+                                    )
+                                }
+                            })
+                    } else if receipt.pending {
+                        "Native launch awaiting durable result".into()
+                    } else {
+                        receipt
+                            .error
+                            .as_ref()
+                            .map(|e| format!("Launch unavailable: {}", visible(e)))
+                            .unwrap_or_else(|| {
+                                "No confirmed native launch result; query original operation".into()
+                            })
+                    }
+                } else if !record.intent.start {
+                    "Created without starting".into()
+                } else {
+                    "No confirmed native launch; explicit Start required after recovery".into()
+                };
+                let action = if record.phase != crate::creation::Phase::LocalChoice
+                    || record.commit.is_none()
+                {
+                    "Local fallback unavailable for this phase".into()
+                } else if record.intent.start && !record.launch_cancelled {
+                    format!("L: Create locally and start {:?}", record.intent.agent)
+                } else {
+                    "L: Create locally without starting".into()
+                };
+                format!(
+                    "Project: {}\nPhase: {:?}\nBase: {}\nCommit: {}\nBranch: {}\nFolder: {}\n{}\n\n{}\n\n{}\nG: Query/recover creation without starting\n[/]: receipts · Z: cancel · Esc: return",
+                    visible(project),
+                    record.phase,
+                    visible(record.base_ref.as_deref().unwrap_or(&record.intent.base)),
+                    record.commit.as_deref().unwrap_or("not yet selected"),
+                    visible(&record.intent.branch),
+                    visible(
+                        &crate::creation::path(&record.intent.path)
+                            .display()
+                            .to_string()
+                    ),
+                    launch,
+                    visible(&record.message),
+                    action
+                )
+            } else {
+                app.session
+                    .creation
+                    .error
+                    .clone()
+                    .unwrap_or_else(|| "Creation receipt pending · Z cancels · Esc returns".into())
+            };
+            frame.render_widget(Clear, session);
+            frame.render_widget(
+                Paragraph::new(text)
+                    .block(Block::bordered().title(" Creation receipt · original operation "))
+                    .wrap(Wrap { trim: false }),
+                session,
+            );
+        }
+        if app.create_form.is_none()
+            && (app.creation_open
+                || app.session.creation.pending
+                || app.session.creation.error.is_some()
+                || app
+                    .session
+                    .creation
+                    .records
+                    .last()
+                    .is_some_and(|r| !matches!(r.phase, crate::creation::Phase::Created)))
+        {
+            let message=app.session.creation.error.clone().or_else(||app.creation_record().map(|r|format!("{:?}: {} · branch {} · folder {} · base {} · commit {} · L local fallback · G recover · Z cancel · Esc dismiss",r.phase,r.message,r.intent.branch,crate::creation::path(&r.intent.path).display(),r.base_ref.as_deref().unwrap_or("pending"),r.commit.as_deref().unwrap_or("pending")))).unwrap_or_else(||"Workspace creation in progress · Z cancel".into());
+            frame.render_widget(
+                Paragraph::new(visible(&message))
+                    .block(Block::bordered().title(" Workspace creation "))
+                    .wrap(Wrap { trim: false }),
+                status,
+            );
+        }
         let compact_help;
-        let help_text = if app.diff.is_some()
+        let help_text = if app.create_form.is_some() {
+            "Tab fields · Left/Right agent · Enter Create without starting\nCtrl-S Create and start · Ctrl-U clear · Esc cancel"
+        } else if app.creation_open {
+            "L explicit local creation (launch choice in receipt) · G recover without starting\n[/] receipt · Z cancel creation · Esc return · q quit"
+        } else if app.diff.is_some()
             && !app.attached
             && (frame.area().width < 80 || frame.area().height < 22)
         {
@@ -573,7 +734,7 @@ Esc cancel · registration never starts an agent"
             && app.workspaces_open
             && (frame.area().width < 80 || frame.area().height < 22)
         {
-            "j/k select · [/] project · a adopt · E LIVE · R rename
+            "N create  j/k select  [/] project  a adopt  E LIVE  R rename
 A add · h history · w/Esc back · d detach · q quit"
         } else if app.cleanup_open
             && !app.attached
@@ -604,7 +765,7 @@ A add · h history · w/Esc back · d detach · q quit"
                 &compact_help
             } else {
                 compact_help = format!(
-                    "q quit  s stop  h history  g cleanup  y retry  {}\nw workspaces  a adopt  c/x start  f diff  E LIVE  d detach",
+                    "q quit  s stop  h history  g cleanup  y retry  {}\nN create  O receipt  w workspaces  f diff  E LIVE  d detach",
                     if app.session.lifecycle == crate::session::Lifecycle::Running {
                         "Enter attach"
                     } else {
@@ -990,6 +1151,7 @@ mod tests {
                 .registry
                 .workspaces
                 .push(crate::registry::Workspace {
+                    creation: None,
                     id: task.into(),
                     task: task.into(),
                     legacy_tasks: vec![],
@@ -1034,6 +1196,7 @@ mod tests {
         let mut app = App::new("repo".into());
         app.session.registry.workspaces = (0..20)
             .map(|index| crate::registry::Workspace {
+                creation: None,
                 id: format!("workspace-{index}"),
                 task: format!("task-{index}"),
                 legacy_tasks: vec![format!("task-{index}")],
@@ -1359,5 +1522,60 @@ mod tests {
         assert!(text.contains("not a git repository"));
         terminal.backend_mut().resize(12, 4);
         terminal.draw(|frame| ui.draw(frame, &app)).unwrap();
+    }
+    #[test]
+    fn new_workspace_form_exposes_both_creation_actions_at_normal_and_small_sizes() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let mut app = App::new("repo".into());
+        app.session
+            .registry
+            .projects
+            .push(crate::registry::Project {
+                id: "project".into(),
+                name: "Example".into(),
+                common_dir: b"/repo/.git".to_vec(),
+            });
+        app.input(KeyEvent::new(KeyCode::Char('N'), KeyModifiers::NONE));
+        for (cols, rows) in [(160, 40), (60, 18)] {
+            let mut terminal = Terminal::new(TestBackend::new(cols, rows)).unwrap();
+            terminal
+                .draw(|frame| Ui::default().draw(frame, &app))
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            let text = (0..rows)
+                .map(|y| {
+                    (0..cols)
+                        .map(|x| buffer[(x, y)].symbol())
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(text.contains("Create without starting"), "{text}");
+            assert!(text.contains("Create and start"), "{text}");
+        }
+    }
+    #[test]
+    fn local_fallback_preview_shows_exact_commit_before_the_explicit_choice() {
+        let mut app = App::new("repo".into());
+        app.creation_open = true;
+        let commit = "1234567890123456789012345678901234567890";
+        app.session.creation.records.push(serde_json::from_value(serde_json::json!({"intent":{"request":"request","project":"project","base":"origin/main","branch":"workspace/new","path":b"/managed/workspace".to_vec(),"agent":"Codex","start":true,"prompt":null},"repository":[],"common_dir":[],"phase":"LocalChoice","base_ref":"refs/remotes/origin/main","commit":commit,"message":"Latest code could not be obtained from configured remote. ".repeat(8),"checkout":null})).unwrap());
+        for (cols, rows) in [(160, 40), (60, 18)] {
+            let mut terminal = Terminal::new(TestBackend::new(cols, rows)).unwrap();
+            terminal
+                .draw(|frame| Ui::default().draw(frame, &app))
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            let text = (0..rows)
+                .map(|y| {
+                    (0..cols)
+                        .map(|x| buffer[(x, y)].symbol())
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(text.contains(commit), "{text}");
+            assert!(text.contains("LocalChoice"), "{text}");
+        }
     }
 }

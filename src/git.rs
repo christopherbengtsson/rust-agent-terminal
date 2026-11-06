@@ -1,6 +1,6 @@
 use std::{
     ffi::OsString,
-    io::{ErrorKind, Read},
+    io::{ErrorKind, Read, Write},
     os::unix::{io::AsRawFd, process::CommandExt},
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -63,7 +63,7 @@ const OUTPUT_LIMIT: usize = 256 * 1024;
 
 // Concrete execution-owned Git subprocess boundary. Process groups include Git's
 // helpers; neither a pipe-filling child nor an inherited helper pipe can stall it.
-fn run_git(
+pub(crate) fn run_git(
     repository: &Path,
     arguments: &[&str],
     cancelled: &AtomicBool,
@@ -81,8 +81,37 @@ pub(crate) fn run_git_command(
     command: &mut Command,
     cancelled: &AtomicBool,
 ) -> Result<Vec<u8>, String> {
+    run_git_command_deadline(command, cancelled, DEADLINE)
+}
+pub(crate) fn run_git_command_deadline(
+    command: &mut Command,
+    cancelled: &AtomicBool,
+    timeout: Duration,
+) -> Result<Vec<u8>, String> {
+    run_git_command_with_input(command, cancelled, timeout, None)
+}
+pub(crate) fn run_git_command_input(
+    command: &mut Command,
+    cancelled: &AtomicBool,
+    input: &[u8],
+) -> Result<Vec<u8>, String> {
+    if input.len() > 512 {
+        return Err("Git transaction exceeds the 512-byte input bound".into());
+    }
+    run_git_command_with_input(command, cancelled, DEADLINE, Some(input))
+}
+fn run_git_command_with_input(
+    command: &mut Command,
+    cancelled: &AtomicBool,
+    timeout: Duration,
+    input: Option<&[u8]>,
+) -> Result<Vec<u8>, String> {
     command
-        .stdin(Stdio::null())
+        .stdin(if input.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     // SAFETY: setsid is async-signal-safe; this child owns a fresh process group.
@@ -99,6 +128,16 @@ pub(crate) fn run_git_command(
         .map_err(|e| format!("Cannot run Git: {e}"))?;
     let group = child.id() as i32;
     let result = (|| {
+        if let Some(input) = input {
+            // One write within POSIX minimum PIPE_BUF to an empty owned pipe, then EOF. The
+            // direct child is already owned, including every write-error path.
+            child
+                .stdin
+                .take()
+                .ok_or("Git transaction stdin unavailable")?
+                .write_all(input)
+                .map_err(|e| format!("Git transaction input failed: {e}"))?;
+        }
         let mut stdout = child.stdout.take().ok_or("Git stdout unavailable")?;
         let mut stderr = child.stderr.take().ok_or("Git stderr unavailable")?;
         for fd in [stdout.as_raw_fd(), stderr.as_raw_fd()] {
@@ -113,7 +152,7 @@ pub(crate) fn run_git_command(
                 }
             }
         }
-        let deadline = Instant::now() + DEADLINE;
+        let deadline = Instant::now() + timeout;
         let mut out = Vec::new();
         let mut err = Vec::new();
         let mut done = [false; 2];
@@ -122,7 +161,10 @@ pub(crate) fn run_git_command(
                 return Err("Git job cancelled".into());
             }
             if Instant::now() >= deadline {
-                return Err("Git job timed out after 2 seconds; retry refresh/adoption".into());
+                return Err(format!(
+                    "Git job timed out after {} seconds; reconcile or retry explicitly",
+                    timeout.as_secs()
+                ));
             }
             // Bound each pipe's contribution per turn, even when a child floods it.
             for (index, pipe, bytes) in [

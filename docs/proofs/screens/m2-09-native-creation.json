@@ -1,0 +1,60 @@
+{
+  "root": "/private/tmp/rat09-native-6fndm2p9",
+  "source": "6f4ab06004880bef22f26ea587498d8555df8cca",
+  "agents": [
+    {
+      "agent": "Claude",
+      "version": "2.1.319 (Claude Code)",
+      "request": "f029de6e-2100-49be-b40f-4014353fb06e",
+      "folder": "/private/tmp/rat09-native-6fndm2p9/claude",
+      "branch": "workspace/native-claude",
+      "base_commit": "d89af19128a8762f90588eb7eb9b396f6814dbf8",
+      "identity": {
+        "task": "f029de6e-2100-49be-b40f-4014353fb06e",
+        "session": "b7115b2e-5376-48ba-8933-633122224e6f",
+        "request": "f029de6e-2100-49be-b40f-4014353fb06e"
+      },
+      "native_conversation": "35047e3e-3931-4900-b1ab-5a113105e5d7",
+      "launch_result": {
+        "request": "f029de6e-2100-49be-b40f-4014353fb06e",
+        "identity": "task=f029de6e-2100-49be-b40f-4014353fb06e session=b7115b2e-5376-48ba-8933-633122224e6f request=f029de6e-2100-49be-b40f-4014353fb06e",
+        "error": null
+      },
+      "screen_has_prompt_marker": false,
+      "screen_file": "/private/tmp/rat09-native-6fndm2p9/claude-screen.txt",
+      "stopped": "Stopped",
+      "trust_input_sent": true,
+      "captured_screen": "docs/proofs/screens/m2-09-native-claude.txt"
+    },
+    {
+      "agent": "Codex",
+      "version": "codex-cli 0.167.0",
+      "request": "98e72eb8-de54-4e11-96ab-f75449ba9a0e",
+      "folder": "/private/tmp/rat09-native-6fndm2p9/codex",
+      "branch": "workspace/native-codex",
+      "base_commit": "d89af19128a8762f90588eb7eb9b396f6814dbf8",
+      "identity": {
+        "task": "98e72eb8-de54-4e11-96ab-f75449ba9a0e",
+        "session": "7a5a3ce1-a6fc-4410-8bab-a6ad7fbd0faf",
+        "request": "98e72eb8-de54-4e11-96ab-f75449ba9a0e"
+      },
+      "native_conversation": null,
+      "launch_result": {
+        "request": "98e72eb8-de54-4e11-96ab-f75449ba9a0e",
+        "identity": "task=98e72eb8-de54-4e11-96ab-f75449ba9a0e session=7a5a3ce1-a6fc-4410-8bab-a6ad7fbd0faf request=98e72eb8-de54-4e11-96ab-f75449ba9a0e",
+        "error": null
+      },
+      "screen_has_prompt_marker": false,
+      "screen_file": "/private/tmp/rat09-native-6fndm2p9/codex-screen.txt",
+      "stopped": "Stopped",
+      "trust_input_sent": true,
+      "captured_screen": "docs/proofs/screens/m2-09-native-codex.txt"
+    }
+  ],
+  "shutdown_confirmed": true,
+  "owner_exit": 0,
+  "binary_sha256": "a33b560559fe4ccd7351841a865b82ff699a95f8df28a2a96ed650cd7b18a049",
+  "platform": "macOS 26.2 (25C56), arm64",
+  "rust": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+  "scope": "Native startup/dedup/Stop only; folder trust/hook review blocked initial-prompt visibility. trust_input_sent is not trust confirmation."
+}

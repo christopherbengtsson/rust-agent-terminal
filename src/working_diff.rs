@@ -1176,6 +1176,7 @@ mod tests {
             .registry
             .workspaces
             .push(crate::registry::Workspace {
+                creation: None,
                 id: "w".into(),
                 task: "t".into(),
                 legacy_tasks: vec![],
@@ -1457,6 +1458,7 @@ mod tests {
             .registry
             .workspaces
             .push(crate::registry::Workspace {
+                creation: None,
                 id: "w".into(),
                 task: "t".into(),
                 legacy_tasks: vec![],
