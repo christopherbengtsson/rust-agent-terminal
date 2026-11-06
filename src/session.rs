@@ -2,7 +2,7 @@
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     fs::{self, File, OpenOptions},
     io::{self, BufRead, BufReader, Read, Write},
     os::unix::{
@@ -15,6 +15,7 @@ use std::{
     process::{Command, Stdio},
     sync::{
         Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
         mpsc::{self, Receiver, SyncSender},
     },
     thread,
@@ -461,6 +462,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let mut flush_pending = false;
     let mut final_flush = false;
     let mut capture_done: Option<Receiver<()>> = None;
+    let stop_drain = Arc::new(AtomicBool::new(false));
     let mut eof = true;
     let mut child: Option<Box<dyn portable_pty::Child + Send + Sync>> = None;
     let mut writer: Option<SyncSender<Vec<u8>>> = None;
@@ -697,6 +699,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     native_exit = true;
                     writer = None;
                     state.lifecycle = Lifecycle::Stopping;
+                    stop_drain.store(true, Ordering::Release);
                     stopping = Some(crate::lifecycle::stop(child.take().unwrap(), process_group));
                 }
                 Ok(None) => {}
@@ -1202,17 +1205,46 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     let mut source = pty.master.try_clone_reader()?;
                     master = Some(Arc::new(Mutex::new(pty.master)));
                     let parser = screen.clone();
+                    stop_drain.store(false, Ordering::Release);
+                    let drain = stop_drain.clone();
                     thread::spawn(move || {
+                        // A macOS PTY leader can await terminal output drain even
+                        // after SIGKILL. Stop alone reserves a finite 1MiB raw tail;
+                        // the single reader preserves byte order and retries it
+                        // before reporting EOF. Exhaustion keeps backpressure and
+                        // bounded lifecycle verification still reports failure.
+                        const STOP_TAIL: usize = 1024 * 1024;
+                        const STOP_BLOCKS: usize = 256;
+                        let mut tail = VecDeque::new();
+                        let mut retained = 0;
                         let mut bytes = [0; 4096];
                         while let Ok(n) = source.read(&mut bytes) {
                             if n == 0 {
                                 break;
                             }
-                            // Transfer capture ownership before parsing; never block with parser lock.
-                            if capture.send((session.clone(), bytes[..n].to_vec(), std::time::Instant::now())).is_err() { break; }
+                            capture.accept(n);
+                            let block = (session.clone(), bytes[..n].to_vec(), std::time::Instant::now());
+                            if tail.is_empty() {
+                                match capture.send(block, Some(&drain)) {
+                                    Ok(Some(block)) => { retained += n; tail.push_back(block); }
+                                    Ok(None) => {}
+                                    Err(()) => break,
+                                }
+                            } else {
+                                retained += n;
+                                tail.push_back(block);
+                            }
+                            if retained >= STOP_TAIL || tail.len() >= STOP_BLOCKS {
+                                let block = tail.pop_front().unwrap();
+                                retained -= block.1.len();
+                                if capture.send(block, None).is_err() { break; }
+                            }
                             let mut screen = parser.lock().unwrap();
                             screen.parser.process(&bytes[..n]);
                             screen.output_bytes = screen.output_bytes.saturating_add(n as u64);
+                        }
+                        for block in tail {
+                            if capture.send(block, None).is_err() { return; }
                         }
                         let _ = finished.send(());
                     });
@@ -1311,6 +1343,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                             writer = None;
                             native_exit = false;
                             state.lifecycle = Lifecycle::Stopping;
+                            stop_drain.store(true, Ordering::Release);
                             stopping = Some(crate::lifecycle::stop(active, process_group));
                         } else {
                             final_flush = false;

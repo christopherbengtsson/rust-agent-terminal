@@ -3764,6 +3764,7 @@ fn paced_capture_saturation_stop_confirms_without_storage_repair() {
     dashboard.wait("Focus: dashboard");
     dashboard.kill();
     let mut controller = Controller::connect(&fixture);
+    controller.request(serde_json::json!({"Resize":{"rows":80,"cols":200}}));
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         let state = controller.request(serde_json::json!("Screen"));
@@ -3773,6 +3774,8 @@ fn paced_capture_saturation_stop_confirms_without_storage_repair() {
         assert!(Instant::now() < deadline, "{state}");
         std::thread::sleep(Duration::from_millis(25));
     }
+    controller.request(serde_json::json!({"Input":b"ack17 fault\r".to_vec()}));
+    std::thread::sleep(Duration::from_millis(100));
     controller.request(serde_json::json!("Stop"));
     let deadline = Instant::now() + Duration::from_secs(4);
     loop {
