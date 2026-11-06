@@ -1,0 +1,26 @@
+{
+  "source_commit": "8844b88309cf13b8cff3f349474eb851e8fee382",
+  "binary_sha256": "ce20c9785727088346a9b54c59906c6e7753ed76b23357e28f02e10624bc4510",
+  "command": "cargo test --locked --test ownership active_capture_flushes_while_retained_search -- --nocapture",
+  "result": "passed",
+  "date": "2026-11-07",
+  "host": {
+    "model": "Mac16,8",
+    "architecture": "arm64",
+    "memory_bytes": 51539607552,
+    "logical_cpus": 12,
+    "os": "macOS26.2 25C56",
+    "rustc": "1.99.1 (58cf8f9c3 2026-10-13)",
+    "cargo": "1.99.1 (5f94df478 2026-08-27)"
+  },
+  "workload": "one existing scripted PTY session, three finite stream commands; 600 fourteen-byte records plus three nine-byte prompts; repeated history exact-word searches and cancellation while capture/indexing proceed",
+  "searches": 65,
+  "max_search_ms": 53,
+  "durable_receipts": 16,
+  "contiguous_receipt_sequences": true,
+  "max_accepted_to_durable_us": 289621,
+  "producer_observation_elapsed_ms": 4362,
+  "test_wall_seconds": 5.72,
+  "scope": "fixture-only search/capture qualification; no new native timing, six-session load, reboot, sustained throughput or complete milestone gate claim",
+  "development_note": "Earlier assertion mistakenly subtracted oldest_accepted_micros from completed_micros. oldest_accepted_micros already stores age. Apparent 1.044s was an assertion calculation error; actual age290766us. Corrected before source-pinned run."
+}

@@ -1,0 +1,51 @@
+{
+  "opened": [
+    {
+      "committed": 31718,
+      "passages": [
+        {
+          "provisional": false,
+          "raw_end": 5496,
+          "raw_start": 5381,
+          "text_end": 100,
+          "text_start": 0
+        }
+      ],
+      "raw_end": 5496,
+      "raw_start": 5381,
+      "text": "› Say exactly HISTORY08-CODEX-ANSWER then ask whether I want the bounded output check. Do not run\n",
+      "version": 1
+    }
+  ],
+  "query": "HISTORY08-CODEX-ANSWER",
+  "response": {
+    "after": 160,
+    "error": null,
+    "more": false,
+    "opened": null,
+    "preparing": false,
+    "request": "bb59dd8d-152a-46e0-9f50-b6b1c1a037b7",
+    "rows": [
+      {
+        "key": "1e0c6f01-6f20-4080-9a98-59eb97028975:1:159",
+        "label": "history retained · Some(\"Codex CLI\") · Stopped · 1e0c6f01-6f20-4080-9a98-59eb97028975 · rat08-codex-one-checkout · Say exactly HISTORY08-CODEX-ANSWER then ask whether I want the bounded o… · branch unknown (legacy/unobserved) · /private/tmp/rat08-codex-one-checkout · checkout present",
+        "passage": {
+          "ordinal": 159,
+          "raw_end": 5496,
+          "raw_start": 5381,
+          "session": "1e0c6f01-6f20-4080-9a98-59eb97028975",
+          "version": 1
+        },
+        "session": "1e0c6f01-6f20-4080-9a98-59eb97028975",
+        "snippet": "› Say exactly HISTORY08-CODEX-ANSWER then ask whether I want the bounded output check. Do not run�",
+        "workspace": "051f2d1b-1b18-49bf-b45b-3a4e5ad65705"
+      }
+    ]
+  },
+  "scope": "current search replay of retained08 native corpus; no new native run or native search timing",
+  "source_agent": "Codex CLI",
+  "source_committed": 31718,
+  "source_corpus": "/tmp/rat-search11-native-corpus/corpus-codex",
+  "source_native_conversation": "01a1b2d5-0142-7f62-a8c7-4d34352e1208",
+  "source_session": "1e0c6f01-6f20-4080-9a98-59eb97028975"
+}

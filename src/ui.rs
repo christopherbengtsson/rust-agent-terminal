@@ -65,7 +65,9 @@ impl Ui {
             reviews,
         );
         let focus = if app.attached { "session" } else { "dashboard" };
-        let title = if let Some(view) = &app.diff {
+        let title = if let Some(browser) = &app.browser {
+            format!(" {:?} · retained work · reading only ", browser.mode)
+        } else if let Some(view) = &app.diff {
             format!(
                 " {} · {} ",
                 if view.whole {
@@ -121,7 +123,9 @@ impl Ui {
             session,
         );
         let viewport = Self::session_viewport(frame.area());
-        if let Some(view) = &app.diff {
+        if let Some(browser) = &app.browser {
+            draw_browser(frame, viewport, browser);
+        } else if let Some(view) = &app.diff {
             draw_working_diff(frame, viewport, view);
         } else if app.workspaces_open || app.project_input.is_some() {
             let items = app
@@ -713,7 +717,11 @@ impl Ui {
             );
         }
         let compact_help;
-        let help_text = if app.create_form.is_some() {
+        let help_text = if app.browser.is_some() && frame.area().width < 80 {
+            "Enter search/open · ↑/↓ select · Esc back\nTab mode · n next · Ctrl-R refresh · / edit"
+        } else if app.browser.is_some() {
+            "Enter search/open · ↑/↓ select · Tab mode · Esc back · n next · Ctrl-R refresh · / edit"
+        } else if app.create_form.is_some() {
             "Tab fields · Left/Right agent · Enter Create without starting\nCtrl-S Create and start · Ctrl-U clear · Esc cancel"
         } else if app.creation_open {
             "L explicit local creation (launch choice in receipt) · G recover without starting\n[/] receipt · Z cancel creation · Esc return · q quit"
@@ -765,7 +773,7 @@ A add · h history · w/Esc back · d detach · q quit"
                 &compact_help
             } else {
                 compact_help = format!(
-                    "q quit  s stop  h history  g cleanup  y retry  {}\nN create  O receipt  w workspaces  f diff  E LIVE  d detach",
+                    "q quit s stop h history S text / find B chats {}\nN create  O receipt  w workspaces  f diff  E LIVE  d detach",
                     if app.session.lifecycle == crate::session::Lifecycle::Running {
                         "Enter attach"
                     } else {
@@ -780,6 +788,87 @@ A add · h history · w/Esc back · d detach · q quit"
         frame.render_widget(
             Paragraph::new(app.editor_message.as_deref().unwrap_or(help_text)),
             help,
+        );
+    }
+}
+
+fn draw_browser(frame: &mut Frame, area: Rect, browser: &crate::browser::Browser) {
+    if let Some(page) = &browser.opened {
+        let text = format!(
+            "Committed passage v{} · raw {}–{} / {}\n{}",
+            page.version, page.raw_start, page.raw_end, page.committed, page.text
+        );
+        frame.render_widget(
+            Paragraph::new(text)
+                .wrap(Wrap { trim: false })
+                .scroll((browser.scroll, 0)),
+            area,
+        );
+        return;
+    }
+    let [query, notice, rows] = Layout::vertical([
+        Constraint::Length(2),
+        Constraint::Length(2),
+        Constraint::Min(1),
+    ])
+    .areas(area);
+    frame.render_widget(
+        Paragraph::new(format!(
+            "{:?}: {}{}",
+            browser.mode,
+            crate::persistence::search::visible(&browser.text),
+            if browser.editing { "_" } else { "" }
+        )),
+        query,
+    );
+    let message = if browser.editing {
+        "Enter searches · ↓ selects results"
+    } else {
+        browser.response.as_ref().map_or(
+        "Enter searches · ↓ selects results",
+        |response| {
+            if let Some(error) = &response.error {
+                error.as_str()
+            } else if browser.selected.as_ref().is_some_and(|selected|!response.rows.iter().any(|row| &row.key==selected)) {
+                "Selected session/passage unavailable; choose another row or refresh."
+            } else if response.preparing {
+                "Searching in bounded background steps…"
+            } else if response.rows.is_empty() {
+                "No results. Index catches up to committed output; Ctrl-R refreshes."
+            } else {
+                "Partial index of committed text · exact words (all, case-insensitive). Ctrl-R refreshes."
+            }
+        },
+    )
+    };
+    frame.render_widget(Paragraph::new(message).wrap(Wrap { trim: false }), notice);
+    if let Some(response) = &browser.response {
+        let selected = response
+            .rows
+            .iter()
+            .position(|r| Some(&r.key) == browser.selected.as_ref());
+        let items = response.rows.iter().map(|row| {
+            let width = rows.width.saturating_sub(3).max(1) as usize;
+            let mut lines = Vec::new();
+            let text = if row.snippet.is_empty() {
+                row.label.clone()
+            } else {
+                format!("{}\n{}", row.snippet, row.label)
+            };
+            for line in text.lines() {
+                let chars = line.chars().collect::<Vec<_>>();
+                for chunk in chars.chunks(width) {
+                    lines.push(chunk.iter().collect::<String>());
+                }
+            }
+            ListItem::new(lines.join("\n"))
+        });
+        frame.render_stateful_widget(
+            List::new(items)
+                .highlight_symbol("> ")
+                .highlight_style(Style::default().fg(Color::Cyan)),
+            rows,
+            &mut ListState::default().with_selected(selected),
         );
     }
 }

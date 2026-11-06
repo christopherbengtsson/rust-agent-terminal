@@ -1,0 +1,51 @@
+{
+  "opened": [
+    {
+      "committed": 16501,
+      "passages": [
+        {
+          "provisional": false,
+          "raw_end": 2176,
+          "raw_start": 2009,
+          "text_end": 103,
+          "text_start": 0
+        }
+      ],
+      "raw_end": 2176,
+      "raw_start": 2009,
+      "text": "❯ Say exactly HISTORY08-CLAUDE-ANSWER then ask whether I want the bounded output check. Do not run  \n",
+      "version": 1
+    }
+  ],
+  "query": "HISTORY08-CLAUDE-ANSWER",
+  "response": {
+    "after": 21,
+    "error": null,
+    "more": false,
+    "opened": null,
+    "preparing": false,
+    "request": "c01fcd82-425a-4346-ad05-fb2f7bfaba05",
+    "rows": [
+      {
+        "key": "b9984a05-7999-45dd-a1cf-c5e38aa26e8d:1:20",
+        "label": "history retained · Some(\"Claude Code\") · Stopped · b9984a05-7999-45dd-a1cf-c5e38aa26e8d · rat08-claude-one-checkout · Say exactly HISTORY08-CLAUDE-ANSWER then ask whether I want the bounded … · branch unknown (legacy/unobserved) · /private/tmp/rat08-claude-one-checkout · checkout present",
+        "passage": {
+          "ordinal": 20,
+          "raw_end": 2176,
+          "raw_start": 2009,
+          "session": "b9984a05-7999-45dd-a1cf-c5e38aa26e8d",
+          "version": 1
+        },
+        "session": "b9984a05-7999-45dd-a1cf-c5e38aa26e8d",
+        "snippet": "❯ Say exactly HISTORY08-CLAUDE-ANSWER then ask whether I want the bounded output check. Do not run  �",
+        "workspace": "4a6277b8-e4df-4d96-9e1d-2900a7efa628"
+      }
+    ]
+  },
+  "scope": "current search replay of retained08 native corpus; no new native run or native search timing",
+  "source_agent": "Claude Code",
+  "source_committed": 16501,
+  "source_corpus": "/tmp/rat-search11-native-corpus/corpus-claude",
+  "source_native_conversation": "fc132b2c-77c7-4445-acbf-aa98a84a9489",
+  "source_session": "b9984a05-7999-45dd-a1cf-c5e38aa26e8d"
+}
