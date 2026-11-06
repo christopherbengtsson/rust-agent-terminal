@@ -170,6 +170,19 @@ fn read_frame(reader: &mut impl BufRead) -> io::Result<Vec<u8>> {
     }
     Ok(bytes)
 }
+// One in-flight creation owns its PTY and child even before the supervisor
+// can install input/capture. The bounded receiver is also the launch reservation.
+struct CreatedExecution {
+    pty: portable_pty::PtyPair,
+    child: crate::lifecycle::Child,
+    listener: UnixListener,
+    nonce: String,
+}
+struct CreatingExecution {
+    request: Request,
+    result: Receiver<Result<CreatedExecution, String>>,
+}
+
 pub fn path_bytes(path: &Path) -> Vec<u8> {
     path.as_os_str().as_bytes().to_vec()
 }
@@ -337,8 +350,11 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let mut save_pending = 1usize;
     let mut pending_launch: Option<Request> = None;
     let mut prepared_ready = false;
+    let mut creating: Option<CreatingExecution> = None;
+    let mut created: Option<Result<CreatedExecution, String>> = None;
     let mut cancelled_launch = false;
     let mut gate_release: Option<SyncSender<()>> = None;
+    let mut partial_gate: Option<UnixListener> = None;
     let mut gate_receipt: Option<Receiver<crate::recovery::Receipt>> = None;
     let mut outcome_reply = false;
     state.metadata_pending = true;
@@ -448,6 +464,13 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }
+        if let Some(creation) = creating.as_ref()
+            && let Ok(result) = creation.result.try_recv()
+        {
+            pending_launch = Some(creating.take().unwrap().request);
+            prepared_ready = true;
+            created = Some(result);
+        }
         if let Some(receipt) = &gate_receipt
             && let Ok(result) = receipt.try_recv()
         {
@@ -455,8 +478,9 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             crate::recovery::crash_barrier(directory, "before-result");
             match result {
                 _ if cancelled_launch => {
-                    state.error =
-                        Some("Launch cancelled by Stop; metadata may still be pending".into());
+                    state.error.get_or_insert_with(|| {
+                        "Launch cancelled by Stop; metadata may still be pending".into()
+                    });
                 }
                 crate::recovery::Receipt::Executed => {
                     let verified = state
@@ -568,6 +592,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
         state.metadata_pending = save_pending > 0
             || metadata_failed
             || pending_launch.is_some()
+            || creating.is_some()
             || gate_receipt.is_some()
             || outcome_reply;
         if (shutdown
@@ -616,6 +641,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             && save_pending == 0
             && !metadata_failed
             && pending_launch.is_none()
+            && creating.is_none()
             && gate_receipt.is_none()
             && !outcome_reply;
         if let Ok(error) = input_errors.try_recv() {
@@ -623,6 +649,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
         }
         if stopping.is_none()
             && state.lifecycle != Lifecycle::StopFailed
+            && owned_scope.is_some()
             && let Some(active) = child.as_mut()
         {
             match active.try_wait() {
@@ -658,6 +685,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                 shutdown = false;
             } else {
                 owned_scope = None;
+                partial_gate = None;
                 state.lifecycle = match state.process_exit.as_ref() {
                     Some(outcome) if outcome.failed() => Lifecycle::Failed,
                     Some(_) => Lifecycle::Exited,
@@ -696,14 +724,20 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                 current.snapshot(&mut state);
             }
         }
-        if let Some(monitor) = monitor.as_mut() {
+        if creating.is_none()
+            && created.is_none()
+            && let Some(monitor) = monitor.as_mut()
+        {
             state.status = monitor.poll(
                 state.lifecycle == Lifecycle::Running,
                 &state.screen,
                 state.output_bytes,
             );
         }
-        if let Some(monitor) = codex_monitor.as_mut() {
+        if creating.is_none()
+            && created.is_none()
+            && let Some(monitor) = codex_monitor.as_mut()
+        {
             state.status = monitor.poll(
                 state.lifecycle == Lifecycle::Running,
                 &state.screen,
@@ -866,14 +900,20 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
         };
         let result = (|| -> Result<(), Box<dyn std::error::Error>> {
             if !continuing
-                && (pending_launch.is_some() || gate_receipt.is_some() || outcome_reply)
+                && (pending_launch.is_some()
+                    || creating.is_some()
+                    || gate_receipt.is_some()
+                    || outcome_reply)
                 && launch_request.as_deref() == Some(state.launch_request.as_str())
             {
                 deferred = true;
                 return Ok(());
             }
             if matches!(&request, Request::QueryLaunch(id) if id == &state.launch_request)
-                && (pending_launch.is_some() || gate_receipt.is_some() || outcome_reply)
+                && (pending_launch.is_some()
+                    || creating.is_some()
+                    || gate_receipt.is_some()
+                    || outcome_reply)
             {
                 return Ok(());
             }
@@ -881,6 +921,20 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                 state.launch_result = Some(recorded.clone());
                 state.error = recorded.error.clone();
                 return Ok(());
+            }
+            if !continuing
+                && creating.is_some()
+                && matches!(
+                    request,
+                    Request::Adopt(_)
+                        | Request::Reconcile
+                        | Request::Launch(_)
+                        | Request::LaunchClaude(_)
+                        | Request::LaunchCodex(_)
+                        | Request::Resume(_)
+                )
+            {
+                return Err("Process creation still owns a launch reservation; Stop cancels intent, then wait for cleanup".into());
             }
             if !continuing && child.is_some() && launch_request.is_some() {
                 return Err("A session already exists; attach to it".into());
@@ -981,6 +1035,9 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                         deferred = true;
                         return Ok(());
                     }
+                    let CreatedExecution { pty, child: launched, listener: gate_listener, nonce } = if let Some(result) = created.take() {
+                        result.map_err(io::Error::other)?
+                    } else {
                     let (rows, cols) = screen.lock().unwrap().parser.screen().size();
                     let pty = native_pty_system().openpty(PtySize {
                         rows: rows.get(),
@@ -1060,15 +1117,41 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     command.env("TERM", "xterm-256color");
                     command.cwd(path);
                     crate::recovery::wrap(&mut command, &gate_path, &nonce)?;
-                    let launched = pty.slave.spawn_command(command).map_err(|error| {
-                        if claude {
-                            format!("Claude Code launch failed: {error}. Install claude on PATH, run claude auth login in your usual terminal, then explicitly retry c; adopted checkout retained")
-                        } else if codex {
-                            format!("Codex CLI launch failed: {error}. Install codex on PATH, run codex login in your usual terminal, then explicitly retry x; adopted checkout retained")
-                        } else {
-                            format!("Fixture launch failed: {error}; retry l")
-                        }
+                    let (finished, result) = mpsc::sync_channel(1);
+                    let proof_creation = directory.join("proof-launch-creation");
+                    thread::Builder::new().name("session-create".into()).spawn(move || {
+                        let result = pty.slave.spawn_command(command).map(|child| {
+                            // No fallible setup occurs between successful creation
+                            // and installation in this resource owner.
+                            let execution = CreatedExecution { pty, child, listener: gate_listener, nonce };
+                            #[cfg(debug_assertions)]
+                            if proof_creation.exists() {
+                                let _ = fs::write(proof_creation.with_extension("ready"), execution.child.process_id().unwrap_or(0).to_string());
+                                while proof_creation.exists() { thread::sleep(Duration::from_millis(10)); }
+                            }
+                            let _ = proof_creation;
+                            execution
+                        }).map_err(|error| {
+                            if claude {
+                                format!("Claude Code launch failed: {error}. Install claude on PATH, run claude auth login in your usual terminal, then explicitly retry c; adopted checkout retained")
+                            } else if codex {
+                                format!("Codex CLI launch failed: {error}. Install codex on PATH, run codex login in your usual terminal, then explicitly retry x; adopted checkout retained")
+                            } else {
+                                format!("Fixture launch failed: {error}; retry l")
+                            }
+                        });
+                        let _ = finished.send(result);
                     })?;
+                    creating = Some(CreatingExecution { request: if resume { Request::Resume(request) } else if claude { Request::LaunchClaude(request) } else if codex { Request::LaunchCodex(request) } else { Request::Launch(request) }, result });
+                    deferred = true;
+                    return Ok(());
+                    };
+                    // Transfer the actual child and terminal before any fallible
+                    // identity, input or capture installation can return early.
+                    child = Some(launched);
+                    partial_gate = Some(gate_listener);
+                    drop(pty.slave);
+                    master = Some(Arc::new(Mutex::new(pty.master)));
                     crate::recovery::crash_barrier(directory, "after-create");
                     state.agent = Some(
                         if claude {
@@ -1080,18 +1163,22 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                         }
                         .into(),
                     );
-                    drop(pty.slave);
-                    let process_group = launched
+                    let process_group = child.as_ref().unwrap()
                         .process_id()
                         .ok_or("Missing managed process identity")?
                         .try_into()?;
-                    state.execution.as_mut().ok_or("Missing durable intent")?.identify(process_group)?;
+                    state.execution.as_mut().ok_or("Missing durable intent")?.pid = Some(process_group);
+                    launch_setup_fault(directory, "before-scope")?;
                     owned_scope = Some(crate::child_scope::Scope::new(process_group)?);
+                    state.execution.as_mut().ok_or("Missing durable intent")?.identify(process_group)?;
+                    launch_setup_fault(directory, "after-create")?;
                     let (release, authorized) = mpsc::sync_channel(1);
                     let (receipt, result) = mpsc::sync_channel(1);
                     gate_release = Some(release);
                     gate_receipt = Some(result);
+                    let gate_listener = partial_gate.take().unwrap();
                     let proof_receipt_pause = directory.join("proof-launch-receipt");
+                    let gate_path = directory.join("launch-gate.sock");
                     thread::spawn(move || {
                         let result = (|| -> io::Result<crate::recovery::Receipt> {
                             let deadline = std::time::Instant::now() + Duration::from_secs(2);
@@ -1121,10 +1208,8 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                         let _ = proof_receipt_pause;
                         let _ = receipt.send(result);
                     });
-                    storage.commands.try_send(crate::persistence::Command::Authorize(crate::persistence::Snapshot::new(&state, Some(path), &task_identity)))?;
-                    save_pending += 1;
-                    deferred = true;
-                    let mut sink = pty.master.take_writer()?;
+                    launch_setup_fault(directory, "before-input")?;
+                    let mut sink = master.as_ref().unwrap().lock().unwrap().take_writer()?;
                     let (input, writes) = mpsc::sync_channel::<Vec<u8>>(32);
                     let errors = write_errors.clone();
                     thread::spawn(move || {
@@ -1140,15 +1225,15 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     state.stopped = false;
                     state.history_index = 0;
                     history_sealed = false;
-                    capture_started_here = true;
                     let session = state.session_identity.as_ref().ok_or("Missing prepared identity")?.session.clone();
                     let capture = storage.output.clone();
+                    launch_setup_fault(directory, "before-capture")?;
+                    let mut source = master.as_ref().unwrap().lock().unwrap().try_clone_reader()?;
+                    capture_started_here = true;
                     let (finished, done) = mpsc::sync_channel(1);
                     capture_done = Some(done);
                     eof = false;
                     final_flush = false;
-                    let mut source = pty.master.try_clone_reader()?;
-                    master = Some(Arc::new(Mutex::new(pty.master)));
                     let parser = screen.clone();
                     stop_drain.store(false, Ordering::Release);
                     let drain = stop_drain.clone();
@@ -1193,7 +1278,18 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                         }
                         let _ = finished.send(());
                     });
-                    child = Some(launched);
+                    launch_setup_fault(directory, "before-authorization")?;
+                    if cancelled_launch {
+                        gate_release = None;
+                        writer = None;
+                        state.lifecycle = Lifecycle::Stopping;
+                        stop_drain.store(true, Ordering::Release);
+                        stopping = Some(crate::lifecycle::stop(child.take().unwrap(), owned_scope.as_ref().unwrap().clone()));
+                        return Err("Launch cancelled by Stop before authorization".into());
+                    }
+                    storage.commands.try_send(crate::persistence::Command::Authorize(crate::persistence::Snapshot::new(&state, Some(path), &task_identity)))?;
+                    save_pending += 1;
+                    deferred = true;
                 }
                 Request::Input(bytes) => {
                     if let Some(monitor) = monitor.as_mut() { monitor.input(screen.lock().unwrap().output_bytes, bytes.as_slice() == [3]); }
@@ -1280,22 +1376,26 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                 }
                 Request::Stop | Request::Shutdown => {
                     if state.storage_wait_millis >= 250 || state.producer_wait_millis > 0 || state.storage_error.is_some() { state.capture_loss_possible = true; }
-                    if pending_launch.is_some() || gate_receipt.is_some() {
+                    if (pending_launch.is_some() || gate_receipt.is_some()) && creating.is_none() {
                         let result = LaunchResult { request: state.launch_request.clone(), identity: state.identity.clone(), error: Some("Launch cancelled by Stop; metadata may still be pending".into()) };
                         launches.insert(result.request.clone(), result.clone());
                         state.launch_result = Some(result);
                     }
-                    let cancelled_preparation = pending_launch.is_some() && child.is_none() && gate_receipt.is_none();
+                    let cancelled_preparation = pending_launch.is_some() && creating.is_none() && child.is_none() && gate_receipt.is_none();
                     cancelled_launch = true;
                     pending_launch = None;
                     prepared_ready = false;
                     if cancelled_preparation { state.execution = None; }
                     gate_release = None;
-                    if child.is_none() && stopping.is_none() && state.execution.is_some() {
+                    if creating.is_none() && child.is_none() && stopping.is_none() && state.execution.is_some() {
                         return Err("Interrupted execution remains uncertain; u reconciles evidence, d detaches. A missing native leader may require verified reboot before replacement or confirmed shutdown.".into());
                     }
                     shutdown |= matches!(request, Request::Shutdown);
                     if stopping.is_none() {
+                        if owned_scope.is_none() && let Some(active) = child.as_ref() {
+                            let pid = active.process_id().ok_or("Missing managed process identity; stop unconfirmed")?.try_into()?;
+                            owned_scope = Some(crate::child_scope::Scope::new(pid).map_err(|error| format!("Stop unconfirmed: {error}; child retained; retry Stop"))?);
+                        }
                         if let Some(active) = child.take() {
                             writer = None;
                                     state.lifecycle = Lifecycle::Stopping;
@@ -1305,11 +1405,21 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                             final_flush = false;
                         }
                     }
+                    if creating.is_some() {
+                        state.lifecycle = Lifecycle::Stopping;
+                        state.error = Some("Launch cancelled by Stop; process creation still outstanding, cleanup pending".into());
+                    }
                 }
             }
             Ok(())
         })();
         if let Err(error) = result {
+            // A failed setup must never release its gated child, including a
+            // delayed authorization completion from the storage worker.
+            if continuing && launch_request.is_some() && !deferred {
+                cancelled_launch = true;
+                gate_release = None;
+            }
             state.error = Some(error.to_string());
         }
         let fresh_launch = launch_request.is_some() && recorded.is_none();
@@ -1352,7 +1462,10 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         screen.lock().unwrap().snapshot(&mut state);
-        if let Some(monitor) = monitor.as_mut() {
+        if creating.is_none()
+            && created.is_none()
+            && let Some(monitor) = monitor.as_mut()
+        {
             state.status = monitor.poll(
                 state.lifecycle == Lifecycle::Running,
                 &state.screen,
@@ -1363,6 +1476,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             state.metadata_pending = save_pending > 0
                 || metadata_failed
                 || pending_launch.is_some()
+                || creating.is_some()
                 || gate_receipt.is_some()
                 || outcome_reply;
             delivery = Some(Delivery::new(&mut state)?);
@@ -1822,4 +1936,17 @@ pub fn scripted_descendant() -> io::Result<()> {
     loop {
         thread::sleep(Duration::from_secs(60));
     }
+}
+
+fn launch_setup_fault(directory: &Path, boundary: &str) -> io::Result<()> {
+    #[cfg(debug_assertions)]
+    if fs::read_to_string(directory.join("proof-launch-setup"))
+        .is_ok_and(|value| value.trim() == boundary)
+    {
+        return Err(io::Error::other(format!(
+            "Injected launch setup failure: {boundary}"
+        )));
+    }
+    let _ = (directory, boundary);
+    Ok(())
 }
