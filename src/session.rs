@@ -622,8 +622,9 @@ impl Sessions {
                 .iter()
                 .find_map(|(_, owner)| owner.recorded_launch(id))
         {
-            self.entries[index].1.remember_launch(result);
-            self.entries[index].1.handle(request, storage, adopting);
+            self.entries[index]
+                .1
+                .handle_recorded(request, result, storage, adopting);
             return;
         }
         if matches!(

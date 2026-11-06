@@ -312,10 +312,16 @@ impl AgentSession {
             Completion::History(page) => self.state.history = Some(page),
             Completion::HistoryTarget(target, request, result) => {
                 if target == self.state.control_target && self.pending_history == Some(request) {
-                    self.pending_history = None;
                     match result {
-                        Ok(page) => self.state.history = Some(page),
+                        Ok(page) => {
+                            if !page.projection_preparing {
+                                self.pending_history = None;
+                            }
+                            self.state.history = Some(page);
+                        }
                         Err(error) => {
+                            self.pending_history = None;
+                            self.state.history = None;
                             self.state.error = Some(format!("History unavailable: {error}; retry"))
                         }
                     }
@@ -694,7 +700,7 @@ impl AgentSession {
             && let Some(request) = self.launch.pending_launch.take()
         {
             self.launch.prepared_ready = false;
-            self.handle_inner(request, true, storage, adoption_pending);
+            self.handle_inner(request, true, None, storage, adoption_pending);
         }
     }
     pub(super) fn handle(
@@ -703,12 +709,22 @@ impl AgentSession {
         storage: &crate::persistence::Worker,
         adoption_pending: bool,
     ) {
-        self.handle_inner(request, false, storage, adoption_pending);
+        self.handle_inner(request, false, None, storage, adoption_pending);
+    }
+    pub(super) fn handle_recorded(
+        &mut self,
+        request: Request,
+        recorded: LaunchResult,
+        storage: &crate::persistence::Worker,
+        adoption_pending: bool,
+    ) {
+        self.handle_inner(request, false, Some(recorded), storage, adoption_pending);
     }
     fn handle_inner(
         &mut self,
         request: Request,
         continuing: bool,
+        recorded_result: Option<LaunchResult>,
         storage: &crate::persistence::Worker,
         adoption_pending: bool,
     ) {
@@ -721,9 +737,6 @@ impl AgentSession {
                 .map(|identity| identity.session.as_str()),
         );
         let mut deferred = false;
-        if !matches!(request, Request::Screen | Request::Resize { .. }) && !self.metadata_failed {
-            self.state.error = None;
-        }
         let save_history = matches!(&request, Request::History { index, .. } if *index != self.state.history_index);
         let save = save_history
             || matches!(
@@ -765,7 +778,8 @@ impl AgentSession {
             | Request::Resume(id)
             | Request::QueryLaunch(id) => self.launches.get(id).cloned(),
             _ => None,
-        };
+        }
+        .or(recorded_result);
         let result = (|| -> Result<(), Box<dyn std::error::Error>> {
             // A provisional launch owns its result slot until the matching
             // result commit. Another launch/query cannot replace its request or
@@ -788,6 +802,10 @@ impl AgentSession {
             {
                 deferred = true;
                 return Ok(());
+            }
+            if !matches!(request, Request::Screen | Request::Resize { .. }) && !self.metadata_failed
+            {
+                self.state.error = None;
             }
             if let Some(recorded) = &recorded {
                 self.state.launch_result = Some(recorded.clone());
@@ -1430,11 +1448,6 @@ impl AgentSession {
                 || self.launch.gate_receipt.is_some()
                 || self.launch.outcome_reply)
     }
-    pub(super) fn remember_launch(&mut self, result: LaunchResult) {
-        self.launches
-            .entry(result.request.clone())
-            .or_insert(result);
-    }
     pub(super) fn adopt(
         &mut self,
         identity: crate::git::CheckoutIdentity,
@@ -1509,6 +1522,49 @@ impl Drop for AgentSession {
 }
 
 #[cfg(test)]
+mod launch_replay_tests {
+    use super::*;
+
+    #[test]
+    fn another_owners_cached_result_cannot_replace_a_provisional_launch() {
+        let directory = tempfile::tempdir().unwrap();
+        let (worker, restored) = crate::persistence::Worker::start(directory.path()).unwrap();
+        let mut owner = AgentSession::restore(directory.path(), restored, &worker).unwrap();
+        owner.handle(Request::Launch("own pending result".into()), &worker, false);
+        let before = owner.observation();
+        assert!(before.metadata_pending);
+        for request in [
+            Request::QueryLaunch("another owners request".into()),
+            Request::Launch("another owners request".into()),
+        ] {
+            owner.handle_recorded(
+                request,
+                LaunchResult {
+                    request: "another owners request".into(),
+                    identity: Some("another identity".into()),
+                    error: Some("another error".into()),
+                },
+                &worker,
+                false,
+            );
+            let after = owner.observation();
+            assert_eq!(after.control_target, before.control_target);
+            assert_eq!(
+                serde_json::to_value(after.session_identity).unwrap(),
+                serde_json::to_value(&before.session_identity).unwrap()
+            );
+            assert_eq!(after.launch_request, before.launch_request);
+            assert_eq!(
+                serde_json::to_value(after.launch_result).unwrap(),
+                serde_json::to_value(&before.launch_result).unwrap()
+            );
+            assert_eq!(after.error, before.error);
+            assert!(after.metadata_pending);
+        }
+    }
+}
+
+#[cfg(test)]
 mod readable_history_tests {
     use super::*;
     use crate::persistence::{Completion, HistoryPage, Worker};
@@ -1531,10 +1587,11 @@ mod readable_history_tests {
         owner.handle(poll(), &worker, false);
         owner.complete(
             Completion::HistoryTarget(
-                target,
+                target.clone(),
                 request,
                 Ok(HistoryPage {
                     text: "retained raw page".into(),
+                    projection_preparing: true,
                     ..Default::default()
                 }),
             ),
@@ -1549,6 +1606,26 @@ mod readable_history_tests {
             Some("retained raw page")
         );
         owner.handle(poll(), &worker, false);
+        owner.complete(
+            Completion::HistoryTarget(
+                target,
+                request,
+                Ok(HistoryPage {
+                    text: "retained raw page".into(),
+                    readable: Some(crate::history::ReadablePage {
+                        text: "completed readable page".into(),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }),
+            ),
+            &worker,
+        );
+        assert_eq!(
+            owner.observation().history.unwrap().readable.unwrap().text,
+            "completed readable page"
+        );
+        owner.handle(poll(), &worker, false);
         assert_eq!(
             owner
                 .observation()
@@ -1557,6 +1634,79 @@ mod readable_history_tests {
                 .map(|page| page.text.as_str()),
             Some("retained raw page")
         );
+        let Completion::HistoryTarget(target, refreshed, _) =
+            worker.events.recv_timeout(Duration::from_secs(3)).unwrap()
+        else {
+            panic!("expected same-passage refresh")
+        };
+        assert_ne!(refreshed, request);
+        owner.complete(
+            Completion::HistoryTarget(
+                target,
+                refreshed,
+                Ok(HistoryPage {
+                    text: "new committed suffix".into(),
+                    committed: 42,
+                    readable: Some(crate::history::ReadablePage {
+                        text: "fresh readable suffix".into(),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }),
+            ),
+            &worker,
+        );
+        let refreshed = owner.observation().history.unwrap();
+        assert_eq!(refreshed.committed, 42);
+        assert_eq!(refreshed.text, "new committed suffix");
+        assert_eq!(refreshed.readable.unwrap().text, "fresh readable suffix");
+    }
+
+    #[test]
+    fn failed_readable_stage_clears_preparing_page_and_allows_same_passage_retry() {
+        let directory = tempfile::tempdir().unwrap();
+        let (worker, restored) = Worker::start(directory.path()).unwrap();
+        let mut owner = AgentSession::restore(directory.path(), restored, &worker).unwrap();
+        let poll = || Request::History {
+            index: 0,
+            offset: 0,
+        };
+        owner.handle(poll(), &worker, false);
+        let Completion::HistoryTarget(target, request, _) =
+            worker.events.recv_timeout(Duration::from_secs(3)).unwrap()
+        else {
+            panic!("expected history reply")
+        };
+        owner.complete(
+            Completion::HistoryTarget(
+                target.clone(),
+                request,
+                Ok(HistoryPage {
+                    projection_preparing: true,
+                    ..Default::default()
+                }),
+            ),
+            &worker,
+        );
+        owner.complete(
+            Completion::HistoryTarget(
+                target.clone(),
+                request,
+                Err("Selected history was deleted".into()),
+            ),
+            &worker,
+        );
+        assert!(owner.observation().history.is_none());
+        assert!(owner.observation().error.unwrap().contains("deleted"));
+        owner.handle(poll(), &worker, false);
+        let Completion::HistoryTarget(retried_target, retried, _) =
+            worker.events.recv_timeout(Duration::from_secs(3)).unwrap()
+        else {
+            panic!("expected explicit retry reply")
+        };
+        assert_eq!(retried_target, target);
+        assert_ne!(retried, request);
+        assert!(owner.observation().error.is_none());
     }
 
     #[test]
