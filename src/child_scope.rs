@@ -182,7 +182,7 @@ fn refresh(state: &mut State) -> io::Result<()> {
                     "Owned process inventory deadline exceeded",
                 ));
             }
-            if state.owned.contains_key(pid) {
+            if live.contains_key(pid) {
                 continue;
             }
             if let Some(parent) = live.get(parent)
