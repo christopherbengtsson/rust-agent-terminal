@@ -1,0 +1,19 @@
+{
+  "lifecycle": "Running",
+  "status": {
+    "state": "Working",
+    "evidence": "native model request started",
+    "reason": "Codex native support gate open",
+    "recent": [
+      "SessionStart:::",
+      "UserPromptSubmit:01a1b118-f5de-7451-a00a-d424ceff0f63::",
+      "PreModelRequest:01a1b118-f5de-7451-a00a-d424ceff0f63::"
+    ]
+  },
+  "screen": " \n  >_ OpenAI Codex (v0.167.0)\n     /private/tmp/rat-codex-proof-checkout\n \n \n› Reply exactly first-gated-stop-proof. Do not use tools or write files.\n \n \n \n \n \n \n \n \n \n \n \n \n \n \n \n \n \n \n \n◦ Working (1s • esc to interrupt)\n \n \n› Ask Codex to do anything\n \n  GPT-6.1-Sol medium · /private/tmp/rat-codex-proof-checkout\n  ← for agents · ? for shortcuts",
+  "identity": "task=93a1c122-2643-43d1-b113-12f531c8cf90 session=edb9095d-770d-480e-a709-dac73ee98232 request=c20f82f2-3c2d-43e1-a2ce-5a373da109ab",
+  "agent": "Codex CLI",
+  "rows": 32,
+  "cols": 104,
+  "output_bytes": 12433
+}
