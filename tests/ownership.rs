@@ -85,8 +85,30 @@ impl Dashboard {
         }
     }
     fn kill(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        // portable-pty's Unix kill sends SIGHUP, which need not terminate a
+        // dashboard blocked on a full outer PTY. Tests require actual abrupt
+        // dashboard loss; use SIGKILL only for this owned fixture process.
+        if let Some(pid) = self.child.process_id() {
+            // SAFETY: the handle is the fixture child, not an inferred owner PID.
+            unsafe {
+                libc::kill(pid as i32, libc::SIGKILL);
+            }
+        }
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            // Keep the real outer PTY drained during abrupt fixture cleanup.
+            // Otherwise macOS can retain an exiting writer behind tty output
+            // backpressure while this bounded harness channel is full.
+            while self.output.try_recv().is_ok() {}
+            if self.child.try_wait().is_ok_and(|status| status.is_some()) {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "owned dashboard did not exit after SIGKILL and PTY drain"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
     }
 }
 impl Drop for Dashboard {
@@ -1742,6 +1764,19 @@ fn slow_subscriber_disconnects_with_reason_and_reconnects_coherently() {
     resumed.request(serde_json::json!("Shutdown"));
 }
 
+fn measurement_clock() -> u64 {
+    let mut time = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // SAFETY: writable timespec, same kernel monotonic clock as the child.
+    assert_eq!(
+        unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut time) },
+        0
+    );
+    time.tv_sec as u64 * 1_000_000_000 + time.tv_nsec as u64
+}
+
 #[test]
 fn sustained_capture_crosses_caps_while_attached_focused_detached_and_lagged() {
     use std::sync::{
@@ -1883,20 +1918,23 @@ fn sustained_capture_crosses_caps_while_attached_focused_detached_and_lagged() {
     dashboard.send(&[0x1d]);
     dashboard.wait("Focus: dashboard");
     for _ in 0..5 {
+        let injected_ns = measurement_clock();
         let since = Instant::now();
         dashboard.send(b"j");
         dashboard.wait("Branch: other13");
         record(
-            serde_json::json!({"kind":"navigation","key":"j","visible_us":since.elapsed().as_micros()}),
+            serde_json::json!({"kind":"navigation","key":"j","visible_us":since.elapsed().as_micros(),"injected_ns":injected_ns,"visible_ns":measurement_clock()}),
         );
+        let injected_ns = measurement_clock();
         let since = Instant::now();
         dashboard.send(b"k");
         dashboard.wait("Branch: main");
         record(
-            serde_json::json!({"kind":"navigation","key":"k","visible_us":since.elapsed().as_micros()}),
+            serde_json::json!({"kind":"navigation","key":"k","visible_us":since.elapsed().as_micros(),"injected_ns":injected_ns,"visible_ns":measurement_clock()}),
         );
         dashboard.send(b"r");
     }
+    let attach_injected_ns = measurement_clock();
     let since = Instant::now();
     dashboard.send(b"\r");
     dashboard.wait("Focus: session");
@@ -1904,7 +1942,7 @@ fn sustained_capture_crosses_caps_while_attached_focused_detached_and_lagged() {
     dashboard.send(b"attach13-nonce\r");
     dashboard.wait("received: attach13-nonce");
     record(
-        serde_json::json!({"kind":"attach","focus_frame_us":screen_ready_us,"screen_and_input_visible_us":since.elapsed().as_micros(),"boundary":"coherent replacement snapshots and unique fixture input ACK; child may finish its unpaced burst before reading input"}),
+        serde_json::json!({"kind":"attach","focus_frame_us":screen_ready_us,"screen_and_input_visible_us":since.elapsed().as_micros(),"injected_ns":attach_injected_ns,"visible_ns":measurement_clock(),"boundary":"coherent replacement snapshots and unique fixture input ACK; child may finish its unpaced burst before reading input"}),
     );
     let complete = dashboard.wait("flood13-complete run=2");
     record(
