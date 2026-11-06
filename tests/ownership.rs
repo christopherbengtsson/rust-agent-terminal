@@ -562,6 +562,32 @@ fn missing_claude_keeps_adopted_checkout_and_allows_fixture_launch() {
     dashboard.send(b"q");
 }
 
+#[test]
+fn missing_codex_keeps_adopted_checkout_and_allows_fixture_launch() {
+    let fixture = Fixture::new();
+    let tools = fixture.temp.path().join("tools");
+    std::fs::create_dir(&tools).unwrap();
+    for (name, target) in [("git", "/usr/bin/git"), ("ps", "/bin/ps")] {
+        std::os::unix::fs::symlink(target, tools.join(name)).unwrap();
+    }
+    let mut dashboard = Dashboard::open_with_path(
+        &fixture.repository,
+        &fixture.state(),
+        Some(tools.as_os_str()),
+    );
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted");
+    dashboard.send(b"x");
+    dashboard.wait("Codex CLI launch failed:");
+    dashboard.wait("adopted checkout retained");
+    dashboard.send(b"l");
+    dashboard.wait("fixture>");
+    fixture.assert_one_owner_and_child();
+    dashboard.send(&[0x1d]);
+    dashboard.send(b"q");
+}
+
 struct Controller {
     stream: std::os::unix::net::UnixStream,
     reader: std::io::BufReader<std::os::unix::net::UnixStream>,
@@ -648,7 +674,7 @@ fn lost_launch_acknowledgement_recovers_original_request_and_child() {
 
 #[test]
 fn lost_failed_launch_result_is_recovered_without_executing_after_adoption() {
-    for launch in ["Launch", "LaunchClaude"] {
+    for launch in ["Launch", "LaunchClaude", "LaunchCodex"] {
         let fixture = Fixture::new();
         let mut dashboard = fixture.open();
         dashboard.wait("Discovery complete");

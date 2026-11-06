@@ -1,0 +1,32 @@
+› alpha. Acknowledge my choice, then run exactly printf approval-proof > approval-marker in this proof…
+  └ (no output)
+ 
+• Created approval-marker containing approval-proof.
+ 
+  Worked for 41s • 14:00                                                                                
+ 
+ 
+› Count from 1 to 1000, one number per line. Do not use tools.
+ 
+ 
+■ Conversation interrupted - use /feedback if something went wrong
+ 
+  Keyboard shortcuts
+ 
+  Compose                       Session                              Transcript (open first)
+  /        Commands             tab      Send message                ⌃t            Open transcript
+  @        Mention files        ⇧tab     Change mode                 f3            Find text
+  !        Shell command        ⌥,       Less reasoning              pgup / pgdn   Scroll
+  ⌃j       New line             ⌥.       More reasoning              ⌃space        Start selection
+  ⌃v       Paste image          f8       Voice                       ⌃home / ⌃end  Top / latest
+  ⌃g       External editor      ←        Agents (empty prompt)       ⇧⌥, / ⇧⌥.     Top / latest
+  ⌃r       Search history       ⌥← / ⌥→  Subagents (empty prompt)
+  esc esc  Edit last message    f4       Inspect activity
+                                ⌃c       Quit
+ 
+  /keymap customize
+ 
+› Ask Codex to do anything
+
+  GPT-6.1-Sol medium · /private/tmp/rat-codex-proof-checkout · Reply with exact text
+  ? / esc close

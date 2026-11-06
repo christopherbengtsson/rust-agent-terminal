@@ -5,11 +5,12 @@ A Rust terminal workspace for coding agents. The product name is undecided;
 [product requirements](PRODUCT.md), [architecture](docs/architecture.md), and
 [implementation milestones](docs/milestones.md).
 
-The dashboard discovers real Git worktrees and can explicitly adopt a checkout
-and explicitly launch Claude Code (`c`) or a scripted PTY fixture (`l`). Claude
-launch is experimental; its full compatibility gate remains open. Codex CLI,
-durable history, recovery, and GitHub workflows are not supported yet. The first release targets macOS; fixture tests do not
-establish native-agent compatibility.
+The dashboard discovers real Git worktrees, explicitly adopts a checkout, and
+launches Claude Code (`c`), Codex CLI (`x`), or a scripted PTY fixture (`l`). Native
+launch is experimental; see the recorded version-specific proofs below. Durable
+readable history and supervisor reconnect are implemented; full crash
+reconciliation, semantic status and GitHub workflows remain later gates. The first
+release targets macOS; fixture tests do not establish native-agent compatibility.
 
 ## Run
 
@@ -32,6 +33,7 @@ Errors appear in the dashboard, where you can retry or quit.
 | `r` | Refresh worktrees in the background |
 | `a` | Explicitly adopt the selected usable checkout |
 | `c` | Launch installed Claude Code directly in the adopted checkout (experimental) |
+| `x` | Launch installed Codex CLI with `--no-daemon` in the adopted checkout (experimental) |
 | `l` | Launch the scripted PTY fixture in the adopted checkout |
 | Enter | Attach to the existing managed session |
 | Ctrl-] | Return from attached focus to dashboard navigation |
@@ -132,6 +134,16 @@ session refuses replacement regardless of the selected launch choice. Launch is
 experimental: see [the native proof](docs/proofs/05-claude-native.md) for the exact
 version and unresolved scenarios. Native tool usage can consume your account's
 allowance. No credential copying or product authentication store is used.
+
+Codex CLI launch uses `codex --no-daemon` from the supervisor's inherited PATH,
+keeping the managed interactive runtime outside Codex's shared daemon. It reuses
+existing native authentication; run `codex login` in your usual terminal if
+needed. Native authentication/setup prompts stay in the CLI. Failed spawn keeps
+the adopted checkout; `x` explicitly retries. Stop the current session before
+changing tools: launching the other tool starts a new conversation and does not
+transfer context. See [the Codex native proof](docs/proofs/11-codex-native.md)
+for the tested version and limitations. Semantic status remains unknown pending
+the separate native status proof.
 
 Readable history is independent of a live child, native resume, and the checkout.
 In dashboard focus press `h` to open/close retained history, `n`/`p` for older/newer

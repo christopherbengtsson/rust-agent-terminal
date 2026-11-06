@@ -346,6 +346,20 @@ controller continues to exclude every competing dashboard. See the
 [reconnect proof](proofs/07-dashboard-reconnect.md). Supervisor failure, uncertain
 survivors and launch reconciliation belong to ticket 09.
 
+### Experimental Codex native launch (ticket 11)
+
+Dashboard `x` sends the same request-identity launch contract as Claude `c` and
+fixture `l`. The supervisor executes `codex --no-daemon` directly in the adopted
+checkout using its inherited PATH and existing native authentication. Keeping
+Codex out of its shared daemon preserves managed process ownership; no shell
+interpolation or credential copy is involved. All launch choices share active
+worktree exclusion and replay their known request outcome. Changing tool requires
+stopping the active session and starts a new native conversation. Native setup
+and authentication remain in the CLI; help explains `codex login` and failed
+spawn preserves adoption. See [recorded native proof](proofs/11-codex-native.md)
+for version-specific observations. Semantic status remains separate/unknown until
+the Codex status ticket establishes evidence.
+
 ### Durable readable history (ticket 08 implementation)
 
 A single `persistence` worker owns the supervisor's SQLite connection and raw

@@ -31,6 +31,7 @@ pub enum Request {
     Adopt(Vec<u8>),
     Launch(String),
     LaunchClaude(String),
+    LaunchCodex(String),
     QueryLaunch(String),
     History { index: usize, offset: u64 },
     Input(Vec<u8>),
@@ -579,18 +580,23 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                 Request::Adopt(_)
                     | Request::Launch(_)
                     | Request::LaunchClaude(_)
+                    | Request::LaunchCodex(_)
                     | Request::Stop
                     | Request::Shutdown
             );
         let claude = matches!(&request, Request::LaunchClaude(_));
+        let codex = matches!(&request, Request::LaunchCodex(_));
         let launch_request = match &request {
-            Request::Launch(id) | Request::LaunchClaude(id) => Some(id.clone()),
+            Request::Launch(id) | Request::LaunchClaude(id) | Request::LaunchCodex(id) => {
+                Some(id.clone())
+            }
             _ => None,
         };
         let recorded = match &request {
-            Request::Launch(id) | Request::LaunchClaude(id) | Request::QueryLaunch(id) => {
-                launches.get(id).cloned()
-            }
+            Request::Launch(id)
+            | Request::LaunchClaude(id)
+            | Request::LaunchCodex(id)
+            | Request::QueryLaunch(id) => launches.get(id).cloned(),
             _ => None,
         };
         let result = (|| -> Result<(), Box<dyn std::error::Error>> {
@@ -633,7 +639,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     checkout = Some(path);
                 }
                 Request::QueryLaunch(_) => return Err("Launch request unknown to this supervisor; do not replay uncertain activity after supervisor loss".into()),
-                Request::Launch(request) | Request::LaunchClaude(request) => {
+                Request::Launch(request) | Request::LaunchClaude(request) | Request::LaunchCodex(request) => {
                     if state.lifecycle == Lifecycle::Interrupted { return Err("Interrupted execution is uncertain; inspect history, do not replace until reconciled".into()); }
                     if request.is_empty() || request.len() > 128 {
                         return Err("Launch request must contain 1–128 bytes".into());
@@ -655,6 +661,10 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     })?;
                     let mut command = if claude {
                         CommandBuilder::new("claude")
+                    } else if codex {
+                        let mut command = CommandBuilder::new("codex");
+                        command.arg("--no-daemon");
+                        command
                     } else {
                         let mut fixture = CommandBuilder::new(std::env::current_exe()?);
                         fixture.arg("--scripted-child");
@@ -665,6 +675,8 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     let launched = pty.slave.spawn_command(command).map_err(|error| {
                         if claude {
                             format!("Claude Code launch failed: {error}. Install claude on PATH, run claude auth login in your usual terminal, then explicitly retry c; adopted checkout retained")
+                        } else if codex {
+                            format!("Codex CLI launch failed: {error}. Install codex on PATH, run codex login in your usual terminal, then explicitly retry x; adopted checkout retained")
                         } else {
                             format!("Fixture launch failed: {error}; retry l")
                         }
@@ -672,6 +684,8 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     state.agent = Some(
                         if claude {
                             "Claude Code"
+                        } else if codex {
+                            "Codex CLI"
                         } else {
                             "Scripted PTY"
                         }
