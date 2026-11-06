@@ -254,18 +254,18 @@ native child under its verified proof owner and completed end to end.
 
 [Foreground native working dashboard](screens/18-codex-owned-tool-running.png)
 and [Stopped dashboard](screens/18-codex-owned-tool-stopped.png) are continuous
-whole160×40 captures, visually inspected. After Stop the native pane intentionally
+whole 160×40 captures, visually inspected. After Stop the native pane intentionally
 retains its last screen; the Process/semantic labels identify Stopped/Unknown,
 so retained native “Working” prose is not claimed as current semantic evidence.
 
 ### Aggregate check failure preserved before the final followup
 
 On `a3842906`, locked build, format and warnings-denied all-target Clippy passed.
-The all-target run passed26 unit tests and49 ownership scenarios, but failed two
-ownership assertions in363.22s; two separate measurements remained ignored.
+The all-target run passed 26 unit tests and 49 ownership scenarios, but failed two
+ownership assertions in 363.22s; two separate measurements remained ignored.
 [Exact final output](18-checks-a384-final-output.log) is preserved. One storage
 fault waited for the OS-specific literal “readonly database”; the actual visible
-error was “disk I/O error”, with Process Stopped, retained102 pending bytes and
+error was “disk I/O error”, with Process Stopped, retained 102 pending bytes and
 retry guidance. The other compared capture with a fixture ledger lacking a
 bounded completed-write/in-flight-ledger interval. These are not presented as a
 passing suite. Cargo stopped before scripted/screen integration; later final
