@@ -184,8 +184,7 @@ above an active storage error. Its new render-seam test first failed because the
 message was hidden and then passed with both the warning and y retry visible.
 Locked build, formatting and warnings-denied all-target Clippy pass on that
 source. The preceding aggregate receipt does not pretend its old binary tested
-this final warning placement. An additional exact-source all-target repeat is
-running; its result will be appended without delaying downstream preparation.
+this final warning placement. The optional exact-source repeat and its later correction are recorded below.
 
 Reproduction:
 
@@ -216,6 +215,31 @@ current owned stopping worker for restored unknown execution; the check now
 distinguishes those cases and retains the conservative restored-state policy.
 Marker cleanup releases only this additional fixture-owned hold.
 
-Final verification of this follow-up reruns all targets except the already
-passing sustained resource scenario; the exact source/result receipt follows.
-The full union at ticket 18 remains the final integration gate.
+Final follow-up checks passed locked build, format and warnings-denied
+all-target Clippy. The deterministic held-receipt test passed in 0.78s. The six
+launch-filter scenarios passed together in 14.98s on committed follow-up
+`cffd349`: existing-child refusal, launch gate arguments, lost acknowledgement,
+held receipt with immediate Shutdown, failed-result cache, and all four crash
+windows. No automatically owned coding child appeared in any restored crash row.
+
+The aggregate command `cargo test --locked --all-targets -- --skip
+sustained_capture_crosses_caps_while_attached_focused_detached_and_lagged` passed
+23 unit checks (one intentionally ignored probe driven by terminal restoration),
+39 ownership checks (the resource scenario explicitly filtered), scripted
+interaction in 26.64s and screen integration in 8.34s. The ownership portion took
+84.52s. This aggregate occurred during the follow-up diagnosis/build series;
+the separately completed six-scenario run is the precise committed-code receipt
+for the changed control boundary. The preceding full runs already exercised the
+unchanged sustained resource workload successfully; they do not falsely claim
+that final receipt-state changes had an additional full resource run. Ticket 18
+retains the final whole-union all-target gate.
+
+The branch merged integration `13466db` before its main checks and latest
+integration `39d0ed8` before final handoff, retaining the native classifier edits.
+Two old failed ticket-14 fixtures remained from before the cleanup correction:
+peer 83196 at its exact isolated state endpoint acknowledged authenticated
+Shutdown; orphan fixture 84815 was identified by exact PID, parent, start timestamp
+and argv before terminating its own group. No substring process targeting or
+normal user endpoint was used. A final read-only inventory found **no** ticket-14
+test, supervisor or fixture processes remaining. The current bounded teardown
+was exercised by all subsequent fault/control runs.

@@ -26,8 +26,8 @@ Raw source-labelled queue/RSS/emission/control observations are linked there.
 All 39 ownership scenarios and the scripted/screen integrations passed together
 on the combined source before the final warning-only placement change; its
 render regression and build/fmt/clippy pass separately. Final loss disclosure
-remains visible during an active storage fault. A further exact-source aggregate
-repeat is in progress and will be appended to the proof. No native version,
+remains visible during an active storage fault. The optional aggregate repeat and deterministic receipt-gap correction are
+recorded in the proof. No native version,
 physical presentation, actual full-volume or fault usable-attach latency claim
 is inferred. Ticket 17 retains those measurement gates. All accepted bytes in
 the recorded fault run became durable; 1024 completed-emitted but uncaptured
@@ -40,3 +40,11 @@ receipt pending-state gap. A deterministic held-receipt regression reproduced
 it, then passed after the pending predicate included receipt/outcome phases and
 Shutdown recognized the current owned stopping worker. The proof records the
 38/39 failed repeat and the correction; no null result is accepted as durable.
+
+
+Final follow-up: locked build/fmt/all-target Clippy pass; the deterministic
+held-receipt regression and six launch/cache/crash scenarios pass on committed
+follow-up. Aggregate all-target checks excluding the already passing sustained
+resource scenario pass 23 unit, 39 ownership, scripted interaction and screen
+checks. The final whole-union run belongs to ticket 18. Exact-peer cleanup and a
+final read-only inventory leave no ticket-14 fixture processes running.
