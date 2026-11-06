@@ -21,7 +21,7 @@ implementation or new validation evidence is claimed by this ticket.
 Implementation is ready on `feature/m2-09-create-workspace` in `/tmp/rat-m2-09`.
 It includes the current Whole workspace integration (`ea7deea`) and corrected
 compatibility checkpoint (`0690026`), plus current external-editor integration
-(`438b75d`). This ticket intentionally remains
+(`438b75d`) and the frozen compatibility source `5b3ab57`. This ticket intentionally remains
 `Resolved: no` while reopened upstream tickets 06/08 await their frozen full gate.
 A fresh merger can integrate this branch and close its criteria afterward; no
 additional individual full aggregate is claimed.

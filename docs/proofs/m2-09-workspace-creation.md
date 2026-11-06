@@ -10,7 +10,8 @@ Feature branch `feature/m2-09-create-workspace`, isolated worktree
 `/tmp/rat-m2-09`, started at integration `610c723`. Working-diff integration
 `5c1a604` and the corrected compatibility implementation `c20cd49` are merged.
 External-editor integration `438b75d` is also merged, preserving its protocol and
-App/editor handoff behavior. The actual native smoke used source `6f4ab06` and binary SHA-256
+App/editor handoff behavior. The frozen compatibility source `5b3ab57` is also
+merged, including owner/native-session-bound viewport acknowledgements. The actual native smoke used source `6f4ab06` and binary SHA-256
 `a33b560559fe4ccd7351841a865b82ff699a95f8df28a2a96ed650cd7b18a049`.
 Subsequent amendments cover paste preservation, receipt attribution/rendering,
 cancelled intent labels, relative managed paths, failed worker reporting, atomic

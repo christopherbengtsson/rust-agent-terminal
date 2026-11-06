@@ -1931,6 +1931,55 @@ fn launch_gate_preserves_native_arguments_environment_and_checkout() {
 }
 
 #[test]
+fn adopted_owner_receives_viewport_before_native_process_startup() {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = Fixture::new();
+    let tools = fixture.temp.path().join("tools");
+    std::fs::create_dir(&tools).unwrap();
+    for (name, target) in [("git", "/usr/bin/git"), ("ps", "/bin/ps")] {
+        std::os::unix::fs::symlink(target, tools.join(name)).unwrap();
+    }
+    let startup = fixture.temp.path().join("native-startup-size");
+    let executable = env!("CARGO_BIN_EXE_agent-terminal").replace('\'', "'\\''");
+    let wrapper = tools.join("codex");
+    std::fs::write(
+        &wrapper,
+        format!(
+            "#!/bin/sh\n/bin/stty size > '{}' || exit 1\nexec '{executable}' --scripted-child\n",
+            startup.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let mut dashboard = Dashboard::open_with_path(
+        &fixture.repository,
+        &fixture.state(),
+        Some(tools.as_os_str()),
+    );
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted");
+    dashboard.send(b"x");
+    dashboard.wait("fixture>");
+    assert_eq!(
+        std::fs::read_to_string(startup)
+            .unwrap()
+            .split_whitespace()
+            .collect::<Vec<_>>(),
+        ["32", "104"],
+        "native startup must use the adopted owner's viewport, before any fixture input or later resize"
+    );
+    dashboard.send(&[0x1d]);
+    dashboard.wait("Focus: dashboard");
+    dashboard.send(b"q");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while dashboard.child.try_wait().unwrap().is_none() {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[test]
 fn codex_status_requires_current_attributed_evidence_despite_liveness_and_prose() {
     use std::os::unix::{fs::PermissionsExt, net::UnixDatagram};
     let fixture = Fixture::new();
@@ -1963,8 +2012,13 @@ fn codex_status_requires_current_attributed_evidence_despite_liveness_and_prose(
     dashboard.send(b"x");
     dashboard.wait("fixture>");
     dashboard.wait("Codex evidence unavailable");
-    dashboard.send(b"Conversation interrupted; Worked for 3s; approval needed\r");
+    // The negative status payload is a real paste, not an unpaced key flood.
+    // This fixture echoes input literally, so disable its child-side wrappers.
+    dashboard.send(b"paste-off\r");
+    dashboard.wait("paste plain");
+    dashboard.send(b"\x1b[200~Conversation interrupted; Worked for 3s; approval needed\x1b[201~\r");
     dashboard.wait("received: Conversation interrupted");
+    dashboard.wait("received: Conversation interrupted; Worked for 3s; approval needed");
     assert!(
         dashboard
             .wait("semantic status: unknown")

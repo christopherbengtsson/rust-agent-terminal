@@ -123,3 +123,92 @@ in the default readable view. The test now verifies retained readable text first
 explicitly selects `v` escaped raw, and keeps that exact escape assertion. The
 corrected stopped-history test passed in 2.55 seconds. This preserves both view
 contracts; no raw content assertion was removed or weakened.
+
+## Frozen corrected gate and the remaining status fixture
+
+The next aggregate prebuilt every target with `cargo test --locked --all-targets
+--no-run`, recorded source `06900269e7eca8a84b6370d12a066aca4628f3a9` and every
+test/product executable hash, then ran `cargo test --locked --all-targets --
+--test-threads=1`. Source stayed clean and unchanged, and every recorded binary
+hash matched afterward. The product SHA-256 was
+`b998149c5c56ed287c7e3db2071d18715d322c0f900d1078f13fcd992c892c10`.
+The source-specific local log is
+`/tmp/rat-coordination-compat-0690026-all-targets-serial.log` and ends with
+`boundary_stable: true`.
+
+Units passed 63 with 2 ignored. Ownership passed 75, failed 1 and ignored 2 in
+447.63 seconds. All twelve originally failing cases passed, including every
+numbered record from the sustained four-run capture. The command still exited
+101 before later integration binaries. Its sole failure was
+`codex_status_requires_current_attributed_evidence_despite_liveness_and_prose`:
+the fixture never received the quoted prose, the dashboard reported its bounded
+32-request transport queue was full, and semantic status correctly stayed Unknown.
+This was not a native-evidence classification failure.
+
+The original 57-byte unpaced key burst passed 25 subsequent isolated runs, so the
+natural race was not represented as deterministically reproducible. A temporary
+fixture-only causal probe paused its live authenticated supervisor for 500 ms
+while the dashboard consumed that same burst and its outer output was drained.
+That reproduced the exact queue-full/missing-echo failure. The live owner was
+resumed by an independent bounded thread; no restored PID or unrelated process
+was signalled. An earlier 200 ms probe that joined before draining output passed
+and did not establish reproduction. Probe-only code was removed afterward.
+
+For the semantic-negative fixture, the same prose now arrives through one real
+outer-terminal bracketed-paste event, followed by Return. The scripted child
+echoes escape wrappers literally, so its existing `paste-off` command first
+disables child-side wrappers; the dashboard still takes its actual paste event
+and native delivery path. The original received-prefix, Unknown/Running,
+malformed-receipt and failed-command assertions remain, and a complete prose echo
+assertion was added. A paste probe with child wrappers still enabled delivered
+the complete payload but failed the unchanged plain-prefix assertion; this was
+recorded separately, not called a pass. Under the same 500 ms consumer delay,
+plain-child-mode raw keys still failed and the real paste passed all assertions
+in 3.23 seconds. The final fixture without the probe passed in 2.79 seconds.
+
+No status classification, evidence freshness/version bounds, queue capacity or
+input-saturation/Stop test changed. The observed raw-key burst limitation remains:
+when individual key requests outrun the bounded transport, the UI reports queue
+full and requires recovery; this fixture correction does not qualify arbitrary
+unpaced input delivery. Probe logs are local temporary files under
+`/tmp/rat-status-0690026-*`; the final focused run is
+`/tmp/rat-status-paste-final-focused.log`. A new frozen full aggregate is required
+after the fixture correction before claiming an aggregate pass.
+
+## Previously unreached screen and interaction preflights
+
+After completed ticket 14 was integrated, source `9423bc3` ran the two integration
+binaries that the failed ownership aggregates had never reached. The screen
+preflight failed its unchanged initial `size: 104x32` assertion: the child still
+had the new owner's default 100x24 geometry. The scripted interaction preflight
+failed twice waiting for `paste plain`, after earlier input/cursor assertions had
+passed. These failures were retained in
+`/tmp/rat-compat-screen-preflight.log`,
+`/tmp/rat-compat-scripted-preflight.log` and
+`/tmp/rat-compat-scripted-preflight-repeat.log`.
+
+The viewport acknowledgement remembered only dimensions. A resize accepted by the
+old owner during adoption could therefore suppress the same-sized new owner's
+resize. The cache now also identifies its exact control target, native session
+and whether its real PTY is running, while retaining queue-full retry and unusable
+geometry behavior. The adoption state test was strengthened by accepting an old
+owner's resize while adoption was pending, then requiring a new targeted resize
+before its explicit launch. A new state test covers prepared/new conversation and
+real-PTY readiness. Both went red with the previous acknowledgement policy; all
+22 App state tests then passed.
+
+The actual launch seam also records `/bin/stty size` in a Codex fixture wrapper
+before executing the scripted child, without waiting for a later size command.
+With dimensions-only acknowledgement it recorded 24 rows/100 columns and failed;
+the corrected acknowledgement recorded 32/104 and passed in 1.40 seconds. The
+original screen test then passed its exact startup, resize, styled/wide-cell,
+alternate-screen, focus, detach and reconnect assertions in 10.47 seconds.
+Changing only the viewport acknowledgement also made the unchanged scripted
+interaction test pass in 30.60 seconds: its native 24-row screen had hidden the
+later paste receipt below the dashboard's 22-row pane. No scripted input, quoting,
+paste, byte-equality, status or focus assertion was changed for this correction.
+The local green logs are `/tmp/rat-viewport-startup-green.log`,
+`/tmp/rat-compat-screen-viewport-fixed.log` and
+`/tmp/rat-compat-scripted-viewport-fixed.log`; the startup red log is
+`/tmp/rat-viewport-startup-red.log`. These are real PTY fixture results, not a new
+native CLI/version qualification. The final combined full gate remains required.

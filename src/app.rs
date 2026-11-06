@@ -15,6 +15,14 @@ pub struct CreateForm {
     original_path: Option<(String, Vec<u8>)>,
     preview_applied: bool,
 }
+#[derive(PartialEq)]
+struct Viewport {
+    owner: String,
+    session: Option<String>,
+    running: bool,
+    dimensions: (u16, u16),
+}
+
 /// Dashboard navigation retained across a deliberate external-editor handoff.
 pub struct EditorContext {
     repository: PathBuf,
@@ -69,8 +77,8 @@ pub struct App {
     pub loading: bool,
     pub discovery_request: u64,
     pub error: Option<String>,
-    sent_viewport: Option<(u16, u16)>,
-    pending_viewport: Option<(u16, u16)>,
+    sent_viewport: Option<Viewport>,
+    pending_viewport: Option<Viewport>,
 }
 
 impl App {
@@ -169,10 +177,22 @@ impl App {
         if !self.selected_target.is_empty() && self.selected_target != self.session.control_target {
             return None;
         }
-        if self.sent_viewport == Some(dimensions) {
+        let viewport = Viewport {
+            owner: self.session.control_target.clone(),
+            session: self
+                .session
+                .session_identity
+                .as_ref()
+                .map(|identity| identity.session.clone()),
+            // Creation can finish after a resize updated only its prepared parser.
+            // Reapply that geometry when the actual native PTY becomes running.
+            running: self.session.lifecycle == crate::events::Lifecycle::Running,
+            dimensions,
+        };
+        if self.sent_viewport.as_ref() == Some(&viewport) {
             return None;
         }
-        self.pending_viewport = Some(dimensions);
+        self.pending_viewport = Some(viewport);
         Some(self.session_effect(Request::Resize {
             rows: dimensions.0,
             cols: dimensions.1,
@@ -1608,6 +1628,8 @@ mod tests {
             adoption_pending: true,
             ..Observation::default()
         });
+        assert!(app.viewport(Some((24, 100))).is_some());
+        app.viewport_dispatched(Ok(()));
         app.observe_session(Observation {
             control_target: "new-owner".into(),
             adopted: Some("other".into()),
@@ -1618,6 +1640,47 @@ mod tests {
         assert!(
             matches!(app.viewport(Some((24,100))), Some(Effect::Session(Request::Session { target, .. })) if target == "new-owner")
         );
+        app.viewport_dispatched(Ok(()));
+        assert!(
+            matches!(app.input(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE)), Some(Effect::Session(Request::Session { target, session: None, command })) if target == "new-owner" && matches!(*command, Request::Launch(_)))
+        );
+    }
+
+    #[test]
+    fn viewport_acknowledgement_is_bound_to_conversation_and_execution_readiness() {
+        let mut app = App::new("repo".into());
+        let state = |session: Option<&str>, lifecycle| Observation {
+            control_target: "owner-a".into(),
+            session_identity: session.map(|session| crate::events::SessionIdentity {
+                task: "workspace-a".into(),
+                session: session.into(),
+                request: "launch-a".into(),
+            }),
+            lifecycle,
+            ..Observation::default()
+        };
+        app.observe_session(state(None, crate::events::Lifecycle::Idle));
+        assert!(app.viewport(Some((32, 104))).is_some());
+        app.viewport_dispatched(Ok(()));
+        assert!(app.viewport(Some((32, 104))).is_none());
+        app.observe_session(state(
+            Some("new-conversation"),
+            crate::events::Lifecycle::Interrupted,
+        ));
+        assert!(
+            matches!(app.viewport(Some((32, 104))), Some(Effect::Session(Request::Session { target, session: Some(session), .. })) if target == "owner-a" && session == "new-conversation")
+        );
+        app.viewport_dispatched(Ok(()));
+        app.observe_session(state(
+            Some("new-conversation"),
+            crate::events::Lifecycle::Running,
+        ));
+        assert!(
+            app.viewport(Some((32, 104))).is_some(),
+            "the created PTY must receive the current geometry even if preparation already accepted it"
+        );
+        app.viewport_dispatched(Ok(()));
+        assert!(app.viewport(Some((32, 104))).is_none());
     }
 
     #[test]
@@ -2127,5 +2190,55 @@ mod tests {
             app.create_form.as_ref().unwrap().intent.prompt.as_deref(),
             Some("Fix unicode λ\nKeep the index unchanged")
         );
+    }
+    #[test]
+    fn creation_fields_consume_mixed_case_before_editor_and_other_modal_shortcuts() {
+        for field in 0..4 {
+            let mut app = App::new("repo".into());
+            app.session.editor_protocol = 1;
+            app.session
+                .registry
+                .projects
+                .push(crate::registry::Project {
+                    id: "project".into(),
+                    name: "Project".into(),
+                    common_dir: vec![],
+                });
+            app.input(KeyEvent::new(KeyCode::Char('N'), KeyModifiers::NONE));
+            let request = app.create_form.as_ref().unwrap().intent.request.clone();
+            for _ in 0..field {
+                app.input(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+            }
+            app.input(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+            for c in "ECXRNcamelCase".chars() {
+                assert!(
+                    app.input(KeyEvent::new(
+                        KeyCode::Char(c),
+                        if c.is_uppercase() {
+                            KeyModifiers::SHIFT
+                        } else {
+                            KeyModifiers::NONE
+                        }
+                    ))
+                    .is_none()
+                );
+            }
+            let form = app.create_form.as_ref().unwrap();
+            let text = match field {
+                0 => form.intent.base.as_str(),
+                1 => form.intent.branch.as_str(),
+                2 => form.path.as_str(),
+                _ => form.intent.prompt.as_deref().unwrap(),
+            };
+            assert_eq!(text, "ECXRNcamelCase");
+            assert_eq!(form.intent.request, request);
+            assert!(
+                app.first_prompt.is_none()
+                    && app.rename_workspace.is_none()
+                    && app.editor_source_request.is_none()
+                    && app.editor_ready.is_none()
+                    && app.editor_message.is_none()
+            );
+        }
     }
 }
