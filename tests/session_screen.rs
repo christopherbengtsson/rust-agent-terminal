@@ -1,4 +1,5 @@
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+mod support;
 use std::{
     io::{Read, Write},
     path::{Path, PathBuf},
@@ -126,21 +127,59 @@ impl Fixture {
 }
 impl Drop for Fixture {
     fn drop(&mut self) {
-        // Only the isolated test endpoint can be stopped by this cleanup.
-        use std::os::unix::net::UnixStream;
-        for _ in 0..20 {
-            if let Ok(mut stream) = UnixStream::connect(self.state().join("supervisor.sock")) {
-                let _ = stream.set_read_timeout(Some(Duration::from_millis(100)));
-                let _ = stream.write_all(b"\"Shutdown\"\n");
-                let mut bytes = [0; 4096];
-                let _ = stream.read(&mut bytes);
-                let _ = stream.read(&mut bytes);
-            }
-            if !self.state().join("supervisor.sock").exists() {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(20));
+        if !support::shutdown(&self.state().join("supervisor.sock")) {
+            self.temp.disable_cleanup(true);
+            eprintln!(
+                "Fixture shutdown unconfirmed; private state retained at {}",
+                self.temp.path().display()
+            );
         }
+    }
+}
+
+#[test]
+fn fixture_drop_confirms_native_cleanup_after_dashboard_loss() {
+    let fixture = Fixture::new();
+    let socket = fixture.state().join("supervisor.sock");
+    let mut dashboard = fixture.open();
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted");
+    dashboard.send(b"l");
+    let screen = dashboard.wait("fixture>");
+    let child: u32 = screen
+        .split("pid=")
+        .nth(1)
+        .unwrap()
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap();
+    dashboard.kill();
+    drop(dashboard);
+    drop(fixture);
+    assert!(
+        !socket.exists(),
+        "fixture must await the real shutdown acknowledgement"
+    );
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let state = Command::new("/bin/ps")
+            .args(["-p", &child.to_string(), "-o", "stat="])
+            .output()
+            .unwrap();
+        let running = String::from_utf8_lossy(&state.stdout)
+            .lines()
+            .any(|line| !line.trim().is_empty() && !line.trim().starts_with('Z'));
+        if !running {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "fixture native process still alive after cleanup"
+        );
+        std::thread::sleep(Duration::from_millis(10));
     }
 }
 
@@ -393,4 +432,13 @@ fn screen_resize_styles_alternate_modes_and_output_survive_focus_and_reconnect()
     dashboard.send(&[0x1d]);
     dashboard.wait("Focus: dashboard");
     dashboard.send(b"q");
+    let deadline = Instant::now() + Duration::from_secs(8);
+    while dashboard.child.try_wait().unwrap().is_none() {
+        assert!(
+            Instant::now() < deadline,
+            "confirmed shutdown must finish before dashboard Drop"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(!fixture.state().join("supervisor.sock").exists());
 }

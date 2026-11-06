@@ -1056,7 +1056,7 @@ impl App {
 
     pub fn keyboard_help(&self) -> &'static str {
         if self.diff.is_some() {
-            "e inspect ALL · o edit LIVE file · E LIVE workspace · j/k file · arrows scroll · w Working/Whole workspace · b local base · r refresh · f/Esc back · s stop · q quit · d detach"
+            "f/Esc back · s stop · q quit · e inspect ALL · o edit LIVE file · E LIVE workspace · j/k file · arrows scroll · w Working/Whole · b base · r refresh · d detach"
         } else if self.first_prompt.is_some() {
             "First prompt (optional): Enter starts native agent · Esc cancels without launch"
         } else if self.rename_workspace.is_some() {
@@ -1064,17 +1064,17 @@ impl App {
         } else if self.project_input.is_some() {
             "Add project: existing local path · Enter register without launch · Esc cancel"
         } else if self.workspaces_open {
-            "Workspaces: E edit LIVE workspace · j/k select · [/] project · Enter open · a adopt · R rename · f Working diff · h latest history · A add project · w/Esc back · d detach · q quit"
+            "q quit · h latest history · w/Esc back · j/k select · [/] project · Enter open · a adopt · R rename · A add · E edit LIVE · f diff · d detach"
         } else if self.attached {
             "Native input · Ctrl-C interrupt · Ctrl-] / Ctrl-5 dashboard (keeps session running)"
         } else if self.cleanup_open {
             "Cleanup: j/k select · n/p page · Enter preview · D confirm selected deletion · Esc cancel/back · g refresh · y capture retry · s stop · q quit"
+        } else if self.history_open {
+            "q quit/stop · s stop · h live · v raw/readable · [/] page · j/k scroll · n/p session · y retry · g cleanup · d detach"
         } else if self.session.lifecycle == crate::session::Lifecycle::Interrupted {
             "u reconcile · v resume · g cleanup · h history · d detach · q quit/stop · j/k select · r refresh"
-        } else if self.history_open {
-            "q quit/stop/retry · s stop · y retry history · g cleanup · h live · n/p session · [/] page · j/k scroll · d detach"
         } else {
-            "E edit LIVE workspace · f Working diff · w workspaces · A add · Enter attach · x new Codex · v resume · q quit/stop · a adopt · c Claude · C/X prompt and start · R rename · h history · g cleanup · y retry · s stop · d detach · j/k · r refresh"
+            "q quit/stop · s stop · h history · Enter attach · x new Codex · v resume · E edit LIVE · f diff · g cleanup · y retry · w workspaces · a adopt · d detach"
         }
     }
 

@@ -189,10 +189,13 @@ pub struct Observation {
     #[serde(default)]
     pub capture_pending_bytes: usize,
     #[serde(default)]
-    /// Owner-lifetime bytes read from PTY, including the producer block waiting
-    /// for queue space. Baseline at launch before comparing current-session durable bytes.
+    /// Current managed-session capture bytes, including producer blocks waiting
+    /// for queue space. Resets for a new session and remains final after sealing;
+    /// restoration recovers only its committed prefix, not lost process-local queues.
     pub accepted_bytes: u64,
     #[serde(default)]
+    /// Current managed-session raw prefix written to transcript files; it may
+    /// exceed the committed durable prefix during a sync/commit failure.
     pub written_bytes: u64,
     #[serde(default)]
     pub storage_wait_millis: u64,
@@ -219,8 +222,9 @@ pub struct Observation {
     #[serde(default)]
     pub history_index: usize,
     #[serde(default)]
-    /// Durable raw prefix for the current session; output_bytes is owner-lifetime.
-    /// Baseline output_bytes at each launch before comparing these counters.
+    /// Committed raw prefix for the current managed session, directly comparable
+    /// with accepted_bytes/written_bytes without a launch baseline. Only the
+    /// separate in-process screen counter output_bytes needs a launch baseline.
     pub durable_bytes: u64,
     #[serde(default)]
     pub metadata_pending: bool,
@@ -254,7 +258,8 @@ pub struct Observation {
     pub formatted: String,
     pub rows: u16,
     pub cols: u16,
-    /// All bytes through this boundary have been applied exactly once to the screen.
+    /// Bytes applied to this owner's in-process screen across its conversations.
+    /// Reinitialized on owner restoration; baseline at launch for session comparisons.
     pub output_bytes: u64,
     #[serde(skip)]
     pub decoded: Option<vt100::Screen>,
