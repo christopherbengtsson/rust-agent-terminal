@@ -7,7 +7,10 @@ use std::{
     io::{self, Read, Seek, SeekFrom, Write},
     os::{
         fd::AsRawFd,
-        unix::{ffi::OsStrExt, fs::OpenOptionsExt},
+        unix::{
+            ffi::{OsStrExt, OsStringExt},
+            fs::OpenOptionsExt,
+        },
     },
     path::{Path, PathBuf},
     sync::{
@@ -264,6 +267,7 @@ impl Snapshot {
     }
 }
 pub enum Command {
+    SelectWorkspace(String),
     Capture(CaptureStream),
     Register(uuid::Uuid, crate::git::CheckoutIdentity),
     Prepare(Snapshot),
@@ -293,7 +297,13 @@ pub enum Completion {
     History(HistoryPage),
     Error(&'static str, String),
 }
+pub struct RestoredSession {
+    pub state: Observation,
+    pub checkout: Option<PathBuf>,
+    pub task: String,
+}
 pub struct Restored {
+    pub sessions: Vec<RestoredSession>,
     pub state: Observation,
     pub checkout: Option<Vec<u8>>,
     pub task: String,
@@ -413,10 +423,11 @@ impl Worker {
                             continue;
                         }
                     }
-                    let kind = match &command { Command::Capture(..) => unreachable!(), Command::Register(..) => "registry", Command::Save(..) | Command::Prepare(..) | Command::Authorize(..) => "metadata", Command::History(..) | Command::HistorySession(..) => "history", Command::Cleanup(..) | Command::Delete(..) | Command::Seal(..) => "cleanup", Command::Retry => "retry", Command::Flush(..) => "flush" };
+                    let kind = match &command { Command::SelectWorkspace(..) => "selection", Command::Capture(..) => unreachable!(), Command::Register(..) => "registry", Command::Save(..) | Command::Prepare(..) | Command::Authorize(..) => "metadata", Command::History(..) | Command::HistorySession(..) => "history", Command::Cleanup(..) | Command::Delete(..) | Command::Seal(..) => "cleanup", Command::Retry => "retry", Command::Flush(..) => "flush" };
                     status.lock().unwrap().operation = Some((kind, Instant::now()));
                     let operation = match &command { Command::Prepare(snapshot) | Command::Authorize(snapshot) | Command::Save(snapshot) => Some(snapshot.operation.clone()), Command::Flush(operation) | Command::Seal(operation) => Some(operation.clone()), _ => None };
                     let result = match command {
+                        Command::SelectWorkspace(task) => store.select_workspace(&task).map(Completion::Registry),
                         Command::Capture(..) => unreachable!(),
                         Command::Register(id, checkout) => Ok(Completion::Registered(id, store.register(checkout).map_err(|error| error.to_string()))),
                         Command::Cleanup(index) => store.start_cleanup(index).map(|_| Completion::Sealed),
@@ -954,12 +965,16 @@ impl Store {
         Ok(None)
     }
     fn restore(&mut self) -> Result<Restored> {
-        let launches = self
+        let mut launches = self
             .db
-            .prepare("SELECT result FROM requests LIMIT 1024")?
+            .prepare("SELECT result FROM requests LIMIT 1025")?
             .query_map([], |r| r.get::<_, String>(0))?
             .map(|row| Ok(serde_json::from_str(&row?)?))
             .collect::<Result<Vec<_>>>()?;
+        if launches.len() > 1024 {
+            return Err("Retained launch outcomes exceed recovery capacity; cannot safely truncate request identities".into());
+        }
+        let sessions = self.restore_sessions(&mut launches)?;
         let row: Option<(String, Option<Vec<u8>>, String)> = self
             .db
             .query_row("SELECT state,checkout,task FROM app WHERE id=1", [], |r| {
@@ -968,6 +983,7 @@ impl Store {
             .optional()?;
         let Some((json, path, task)) = row else {
             return Ok(Restored {
+                sessions,
                 state: Observation {
                     registry: crate::registry::snapshot(&self.db, None)?,
                     ..Observation::default()
@@ -979,9 +995,40 @@ impl Store {
         };
         let mut state: Observation = decode_record(&json)?;
         state.registry = crate::registry::snapshot(&self.db, Some(&task))?;
+        state = self.recover_state(state, &mut launches)?;
+        Ok(Restored {
+            sessions,
+            state,
+            checkout: path,
+            task,
+            launches,
+        })
+    }
+    fn recover_state(
+        &mut self,
+        mut state: Observation,
+        launches: &mut Vec<crate::session::LaunchResult>,
+    ) -> Result<Observation> {
         state.stopped = false;
         state.status = crate::native_status::Status::default();
         state.metadata_pending = false;
+        if let Some(identity) = &state.session_identity {
+            // Recovered bytes are the committed prefix. Prior process-local queues
+            // and producer ownership cannot be restored or treated as pending work.
+            let durable: u64 = self.db.query_row(
+                "SELECT durable FROM sessions WHERE id=?1",
+                [&identity.session],
+                |row| row.get(0),
+            )?;
+            state.capture_loss_possible |= state.accepted_bytes > durable;
+            state.accepted_bytes = durable;
+            state.written_bytes = durable;
+            state.durable_bytes = durable;
+            state.capture_pending_bytes = 0;
+            state.producer_wait_millis = 0;
+            state.storage_wait_millis = 0;
+            state.storage_error = None;
+        }
 
         if state.execution.is_some()
             || matches!(
@@ -999,26 +1046,113 @@ impl Store {
             state.lifecycle = Lifecycle::Interrupted;
             state.error = Some("Interrupted supervisor: retained history available; execution is uncertain. No automatic restart. u reconciles; absent native leader may require verified reboot.".into());
         }
-        if state.execution.is_some()
-            && !launches
+        if state.execution.is_some() {
+            if let Some(known) = launches
                 .iter()
-                .any(|result: &crate::session::LaunchResult| result.request == state.launch_request)
-        {
-            state.launch_result = Some(crate::session::LaunchResult { request: state.launch_request.clone(), identity: state.identity.clone(), error: Some("Interrupted launch: native execution outcome uncertain; reconcile explicitly with u. No automatic restart.".into()) });
-            self.save(&state, path.clone(), task.clone())?;
+                .find(|result| result.request == state.launch_request)
+            {
+                state.launch_result = Some(known.clone());
+            } else {
+                if launches.len() >= 1024 {
+                    return Err(
+                        "Interrupted launch outcome cannot fit within retained request capacity"
+                            .into(),
+                    );
+                }
+                let result = crate::session::LaunchResult { request: state.launch_request.clone(), identity: state.identity.clone(), error: Some("Interrupted launch: native execution outcome uncertain; reconcile explicitly with u. No automatic restart.".into()) };
+                self.db.execute(
+                    "INSERT INTO requests VALUES(?1,?2) ON CONFLICT(id) DO NOTHING",
+                    params![result.request, serde_json::to_string(&result)?],
+                )?;
+                launches.push(result.clone());
+                state.launch_result = Some(result);
+            }
+            if let Some(identity) = &state.session_identity {
+                // Anchor uncertainty without changing the selected workspace.
+                self.db.execute(
+                    "UPDATE sessions SET state=?2 WHERE id=?1",
+                    params![identity.session, serde_json::to_string(&state)?],
+                )?;
+            }
         }
-        let mut launches = launches;
-        if let Some(result) = &state.launch_result
-            && !launches.iter().any(|known| known.request == result.request)
-        {
-            launches.push(result.clone());
+        Ok(state)
+    }
+    fn restore_sessions(
+        &mut self,
+        launches: &mut Vec<crate::session::LaunchResult>,
+    ) -> Result<Vec<RestoredSession>> {
+        // Existing launch outcomes cap the history population at 1024. Never
+        // silently truncate occupancy evidence if a newer/legacy DB exceeds it.
+        let rows = self.db.prepare("SELECT s.id,s.state,w.path,w.task FROM sessions s LEFT JOIN workspace_sessions m ON m.session=s.id LEFT JOIN workspaces w ON w.id=m.workspace ORDER BY s.rowid DESC LIMIT 1025")?
+            .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, Option<Vec<u8>>>(2)?, row.get::<_, Option<String>>(3)?)))?
+            .collect::<std::result::Result<Vec<_>,_>>()?;
+        if rows.len() > 1024 {
+            return Err("Retained session recovery exceeds 1024 records; cannot safely omit execution reservations".into());
         }
-        Ok(Restored {
-            state,
-            checkout: path,
-            task,
-            launches,
-        })
+        let mut latest = std::collections::HashSet::new();
+        let mut sessions = Vec::new();
+        for (id, json, path, task) in rows {
+            let state = decode_record(&json)?;
+            let identity = state
+                .session_identity
+                .as_ref()
+                .ok_or("Retained session lacks attributable identity")?;
+            if identity.session != id {
+                return Err("Retained session identity does not match its durable row".into());
+            }
+            let task = task.unwrap_or_else(|| identity.task.clone());
+            let is_latest = latest.insert(task.clone());
+            let unresolved = state.execution.is_some()
+                || matches!(
+                    state.lifecycle,
+                    Lifecycle::Running | Lifecycle::Stopping | Lifecycle::StopFailed
+                )
+                || state.lifecycle == Lifecycle::Interrupted && !state.reconciled;
+            if !is_latest && !unresolved {
+                continue;
+            }
+            let checkout = path
+                .map(|bytes| PathBuf::from(std::ffi::OsString::from_vec(bytes)))
+                .or_else(|| {
+                    state
+                        .checkout_identity
+                        .as_ref()
+                        .map(|identity| identity.root.clone())
+                });
+            let state = self.recover_state(state, launches)?;
+            sessions.push(RestoredSession {
+                state,
+                checkout,
+                task,
+            });
+        }
+        Ok(sessions)
+    }
+    fn select_workspace(&mut self, task: &str) -> Result<crate::registry::Registry> {
+        let registry = crate::registry::snapshot(&self.db, Some(task))?;
+        let workspace = registry
+            .workspaces
+            .iter()
+            .find(|workspace| {
+                workspace.task == task || workspace.legacy_tasks.iter().any(|old| old == task)
+            })
+            .ok_or("Unknown retained workspace selection")?;
+        let saved: Option<String> = self.db.query_row("SELECT s.state FROM sessions s JOIN workspace_sessions m ON m.session=s.id WHERE m.workspace=?1 ORDER BY s.rowid DESC LIMIT 1", [&workspace.id], |row| row.get(0)).optional()?;
+        let state = if let Some(json) = saved {
+            decode_record(&json)?
+        } else {
+            Observation {
+                checkout_identity: workspace.checkout.clone(),
+                adopted: workspace.path.as_ref().map(|bytes| {
+                    PathBuf::from(std::ffi::OsString::from_vec(bytes.clone()))
+                        .display()
+                        .to_string()
+                }),
+                ..Observation::default()
+            }
+        };
+        self.db.execute("INSERT INTO app VALUES(1,?1,?2,?3) ON CONFLICT(id) DO UPDATE SET state=excluded.state,checkout=excluded.checkout,task=excluded.task", params![serde_json::to_string(&state)?, workspace.path, workspace.task])?;
+        crate::registry::snapshot(&self.db, Some(&workspace.task))
     }
     // Isolated debug proof boundary: all file inspection and injected waits run on
     // this sole storage worker, never the UI or supervisor control loop.
@@ -1106,7 +1240,7 @@ impl Store {
         state.error = None;
         let json = serde_json::to_string(&state)?;
         let tx = self.db.transaction()?;
-        tx.execute("INSERT INTO app VALUES(1,?1,?2,?3) ON CONFLICT(id) DO UPDATE SET state=excluded.state,checkout=excluded.checkout,task=excluded.task", params![json,path,task])?;
+        tx.execute("INSERT INTO app VALUES(1,?1,?2,?3) ON CONFLICT(id) DO UPDATE SET state=excluded.state,checkout=excluded.checkout,task=excluded.task WHERE app.task=excluded.task", params![json,path,task])?;
         crate::registry::record(&tx, &state, path.as_deref(), &task)?;
         if let Some(identity) = state.session_identity.as_ref() {
             tx.execute("INSERT INTO sessions(id,identity,state,created) VALUES(?1,?2,?3,unixepoch()) ON CONFLICT(id) DO UPDATE SET state=excluded.state", params![identity.session,identity.label(),json])?;
@@ -1654,5 +1788,196 @@ mod concurrent_tests {
             }
         }
         assert_eq!(text, "A".repeat(270336));
+    }
+    #[test]
+    fn restored_session_reports_its_committed_prefix() {
+        let root = tempfile::tempdir().unwrap();
+        let (worker, _) = Worker::start(root.path()).unwrap();
+        let id = uuid::Uuid::new_v4().to_string();
+        saved(&worker, &id);
+        let capture = worker.capture_for(&id).unwrap();
+        capture.accept(3);
+        capture
+            .send((id.clone(), b"AAA".to_vec(), Instant::now()), None)
+            .unwrap();
+        let operation = final_operation(&id);
+        worker
+            .commands
+            .send(Command::Flush(operation.clone()))
+            .unwrap();
+        committed(&worker, &operation);
+        drop(capture);
+        drop(worker);
+        let (_restored_worker, restored) = Worker::start(root.path()).unwrap();
+        assert_eq!(restored.state.session_identity.unwrap().session, id);
+        assert_eq!(
+            (
+                restored.state.accepted_bytes,
+                restored.state.written_bytes,
+                restored.state.durable_bytes,
+                restored.state.capture_pending_bytes
+            ),
+            (3, 3, 3, 0)
+        );
+    }
+    #[test]
+    fn live_capture_admission_is_finite_and_seal_releases_the_reservation() {
+        let root = tempfile::tempdir().unwrap();
+        let (worker, _) = Worker::start(root.path()).unwrap();
+        let mut sessions = Vec::new();
+        for _ in 0..32 {
+            let id = uuid::Uuid::new_v4().to_string();
+            saved(&worker, &id);
+            let capture = worker.capture_for(&id).unwrap();
+            sessions.push((id, capture));
+        }
+        let next = uuid::Uuid::new_v4().to_string();
+        saved(&worker, &next);
+        assert!(worker.capture_for(&next).is_err());
+        let operation = final_operation(&sessions[0].0);
+        worker
+            .commands
+            .send(Command::Flush(operation.clone()))
+            .unwrap();
+        committed(&worker, &operation);
+        let operation = Operation {
+            purpose: Purpose::Seal,
+            ..final_operation(&sessions[0].0)
+        };
+        worker
+            .commands
+            .send(Command::Seal(operation.clone()))
+            .unwrap();
+        committed(&worker, &operation);
+        let capture = worker.capture_for(&next).unwrap();
+        capture.accept(3);
+        capture
+            .send((next.clone(), b"new".to_vec(), Instant::now()), None)
+            .unwrap();
+        let operation = final_operation(&next);
+        worker
+            .commands
+            .send(Command::Flush(operation.clone()))
+            .unwrap();
+        committed(&worker, &operation);
+        assert_eq!(worker.progress_for(Some(&next)).durable, 3);
+        assert!(
+            sessions[0]
+                .1
+                .send(
+                    (sessions[0].0.clone(), b"late".to_vec(), Instant::now()),
+                    None
+                )
+                .is_err()
+        );
+    }
+    #[test]
+    fn restore_retains_unselected_uncertain_execution_and_latest_workspace_context() {
+        let root = tempfile::tempdir().unwrap();
+        let (worker, _) = Worker::start(root.path()).unwrap();
+        let task = uuid::Uuid::new_v4().to_string();
+        let mut ids = Vec::new();
+        let mut states = Vec::new();
+        for index in 0..3 {
+            let session = uuid::Uuid::new_v4().to_string();
+            let state = Observation {
+                session_identity: Some(crate::events::SessionIdentity {
+                    session: session.clone(),
+                    task: if index < 2 {
+                        task.clone()
+                    } else {
+                        uuid::Uuid::new_v4().to_string()
+                    },
+                    request: format!("restore-{index}"),
+                }),
+                launch_request: format!("restore-{index}"),
+                lifecycle: if index == 0 {
+                    Lifecycle::Running
+                } else {
+                    Lifecycle::Stopped
+                },
+                execution: if index == 0 {
+                    Some(crate::recovery::Execution::prepared().unwrap())
+                } else {
+                    None
+                },
+                ..Observation::default()
+            };
+            worker
+                .commands
+                .send(Command::Save(Snapshot::new(
+                    &state,
+                    None,
+                    &state.session_identity.as_ref().unwrap().task,
+                )))
+                .unwrap();
+            loop {
+                if matches!(
+                    worker.events.recv_timeout(Duration::from_secs(5)).unwrap(),
+                    Completion::Committed(_)
+                ) {
+                    break;
+                }
+            }
+            ids.push(session);
+            states.push(state);
+        }
+        let selected_task = states[2].session_identity.as_ref().unwrap().task.clone();
+        worker
+            .commands
+            .send(Command::SelectWorkspace(selected_task.clone()))
+            .unwrap();
+        loop {
+            if matches!(
+                worker.events.recv_timeout(Duration::from_secs(5)).unwrap(),
+                Completion::Registry(_)
+            ) {
+                break;
+            }
+        }
+        // A late background save must update A's facts while preserving selected B.
+        worker
+            .commands
+            .send(Command::Save(Snapshot::new(&states[0], None, &task)))
+            .unwrap();
+        loop {
+            if matches!(
+                worker.events.recv_timeout(Duration::from_secs(5)).unwrap(),
+                Completion::Committed(_)
+            ) {
+                break;
+            }
+        }
+        drop(worker);
+        let (_worker, restored) = Worker::start(root.path()).unwrap();
+        assert_eq!(restored.task, selected_task);
+        assert_eq!(
+            restored.state.session_identity.as_ref().unwrap().session,
+            ids[2]
+        );
+        let uncertain = restored
+            .sessions
+            .iter()
+            .find(|saved| saved.state.session_identity.as_ref().unwrap().session == ids[0])
+            .unwrap();
+        assert_eq!(uncertain.task, task);
+        assert_eq!(uncertain.state.lifecycle, Lifecycle::Interrupted);
+        assert!(uncertain.state.execution.is_some());
+        assert!(
+            uncertain.checkout.is_none(),
+            "unknown legacy path must remain unknown"
+        );
+        for id in &ids[1..] {
+            assert!(
+                restored.sessions.iter().any(|saved| saved
+                    .state
+                    .session_identity
+                    .as_ref()
+                    .unwrap()
+                    .session
+                    == *id)
+            );
+        }
+        assert_eq!(restored.sessions.len(), 3);
     }
 }

@@ -201,7 +201,20 @@ impl AgentSession {
                 ));
                 self.state.history = None;
                 self.state.history_index = 0;
-                self.history.history_sealed = false;
+                if self
+                    .state
+                    .session_identity
+                    .as_ref()
+                    .is_some_and(|identity| identity.session == id)
+                {
+                    self.history.history_sealed = false;
+                    self.history.capture_started_here = false;
+                    self.state.accepted_bytes = 0;
+                    self.state.written_bytes = 0;
+                    self.state.durable_bytes = 0;
+                    self.state.capture_pending_bytes = 0;
+                    self.state.durable_commits.clear();
+                }
                 self.state.cleanup = None;
                 let _ = storage
                     .commands
@@ -453,7 +466,7 @@ impl AgentSession {
                 .map(|identity| identity.session.as_str()),
         );
         self.state.capacity = progress.capacity.clone();
-        if !self.history.history_sealed {
+        if self.history.capture_started_here && !self.history.history_sealed {
             self.state.accepted_bytes = progress.accepted;
             self.state.written_bytes = progress.written;
             self.state.storage_wait_millis = progress
@@ -822,6 +835,19 @@ impl AgentSession {
                     }
                     if !continuing {
                         self.history.capture_started_here = false;
+                        self.history.history_sealed = false;
+                        self.state.accepted_bytes = 0;
+                        self.state.written_bytes = 0;
+                        self.state.durable_bytes = 0;
+                        self.state.capture_pending_bytes = 0;
+                        self.state.capture_high_water = 0;
+                        self.state.capture_backpressure_count = 0;
+                        self.state.capture_backpressure_micros = 0;
+                        self.state.durable_flush_count = 0;
+                        self.state.durable_commits.clear();
+                        self.state.storage_error = None;
+                        self.state.storage_wait_millis = 0;
+                        self.state.producer_wait_millis = 0;
                         self.launch.cancelled_launch = false;
                         self.state.capture_loss_possible = false;
                         if !resume { self.state.native_conversation = None; }
@@ -1177,7 +1203,6 @@ impl AgentSession {
                     storage.commands.try_send(crate::persistence::Command::Delete(id)).map_err(|e| format!("Cleanup busy: {e}; retry"))?;
                 }
                 Request::RetryStorage => {
-                    self.history.history_sealed = false;
                     self.retry_requested = true;
                     self.history.final_flush = false;
                 }
