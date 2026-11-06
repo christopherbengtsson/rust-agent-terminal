@@ -3840,7 +3840,9 @@ fn paced_session_measurement17() {
     std::thread::sleep(Duration::from_secs(2));
     drop(crash_dashboard);
     let mut crash_control = Controller::connect(&fixture);
+    let counter_request_ns = measurement_clock();
     let acknowledged = crash_control.request(serde_json::json!("Screen"));
+    let counter_received_ns = measurement_clock();
     let processes = String::from_utf8(
         Command::new("ps")
             .args(["-Ao", "pid,ppid,command"])
@@ -3861,6 +3863,7 @@ fn paced_session_measurement17() {
         .parse()
         .unwrap();
     fixture.assert_one_owner_and_child();
+    let kill_injected_ns = measurement_clock();
     // SAFETY: both PIDs were observed in this isolated runtime, never the default owner.
     unsafe {
         assert_eq!(libc::kill(crash_owner, libc::SIGKILL), 0);
@@ -3891,7 +3894,7 @@ fn paced_session_measurement17() {
     let refused = restored.request(serde_json::json!({"Launch":"crash17-must-not-restart"}));
     assert!(refused["error"].as_str().unwrap().contains("uncertain"));
     log(
-        serde_json::json!({"kind":"crash","owner":crash_owner,"child":crash_child,"acknowledged":acknowledged,"restored":restored.greeting,"replacement":refused}),
+        serde_json::json!({"kind":"crash","counter_request_ns":counter_request_ns,"counter_received_ns":counter_received_ns,"kill_injected_ns":kill_injected_ns,"owner":crash_owner,"child":crash_child,"acknowledged":acknowledged,"restored":restored.greeting,"replacement":refused}),
     );
     assert_no_owned_coding(&fixture);
     measurement_shutdown(&mut restored);

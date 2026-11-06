@@ -121,8 +121,9 @@ for session in report['raw_continuity']:
 for session in report['raw_continuity']:
     for run,count in session['complete_records'].items():
         if run in emission:
-            emission[run]['completed_write_records_not_captured']=emission[run]['records']-count
-            emission[run]['completed_write_bytes_not_captured']=emission[run]['bytes']-count*1024-session['trailing_incomplete_bytes']
+            emission[run]['ledger_minus_captured_records']=emission[run]['records']-count
+            emission[run]['ledger_minus_captured_bytes']=emission[run]['bytes']-count*1024-session['trailing_incomplete_bytes']
+report['emission_accounting_limit']='Producer ledger follows each completed stdout write; TERM/crash can fall before that ledger write. One at-most-1024-byte in-flight producer record is uncertain. Positive ledger-minus-captured payload bytes are confirmed completed writes missing at capture; captured controls/ACK/startup are separate.'
 # Before/after comparisons include identity, committed extents and SHA256, not
 # uncommitted file tails. No claim about emitted-but-unread kernel bytes.
 crash=root/'crash-before-restore'
@@ -135,8 +136,20 @@ if crash.exists():
     observation=next(e for e in events if e['kind']=='crash')
     report['crash']=observation
     recovered=report['crash_raw_continuity'][-1]['durable']
-    report['crash']['accepted_minus_recovered']=observation['acknowledged']['accepted_bytes']-recovered
+    report['crash']['last_observed_accepted_minus_recovered']=observation['acknowledged']['accepted_bytes']-recovered
+    report['crash']['confirmed_accepted_loss_lower_bound']=max(0,observation['acknowledged']['accepted_bytes']-recovered)
+    report['crash']['counter_limit']='Accepted count is the final acknowledged Screen observation before SIGKILL; raw request/response/kill timestamps bound the sampling gap. Output can advance in that gap, so exact accepted-at-kill loss is unknown; negative observed-minus-recovered means later commits survived, not negative loss.'
     assert recovered>=observation['acknowledged']['durable_bytes']
+fault_start=next((e['started_ns'] for e in events if e['kind']=='fault-window-start'),None)
+fault_stop=next((e['injected_ns'] for e in events if e['kind']=='stop' and e.get('mode')=='full-storage'),None)
+if fault_start and fault_stop:
+    samples=collections.defaultdict(list)
+    for event in events:
+        if event['kind']=='rss' and fault_start<=event['sample_ns']<fault_stop:
+            for line in event['ps'].splitlines():
+                fields=line.split(None,4)
+                if len(fields)==5:samples[fields[0]].append(int(fields[2]))
+    report['fault_rss_KiB']={pid:{'samples':len(values),'distribution':distribution(values),'first_last_median':[statistics.median(values[:10]),statistics.median(values[-10:])]} for pid,values in samples.items()}
 report['disk_samples']=[e for e in events if e['kind']=='disk']
 report['sampler_us']=distribution([e['sampler_us'] for e in events if e['kind']=='rss'])
 report['phases']=[e for e in events if e['kind'] in ('phase','retry','stop','finished')]
