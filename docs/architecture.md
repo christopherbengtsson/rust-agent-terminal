@@ -69,17 +69,19 @@ dashboard controls it at a time; see
 necessary because the product requires agents to survive terminal
 or dashboard loss. The scripted prototype below implements supervisor/session
 ownership, durable persistence and conservative explicit crash reconciliation.
-The supervisor enforces one active session per worktree and owns transport,
-controller election and Git admission. Its concrete `session::agent_session`
-owner retains launch deduplication, stable session identity, provisional execution,
+The supervisor enforces one active or uncertain execution per canonical worktree
+and owns transport, controller election and Git admission. Its bounded session
+collection preserves each concrete `session::agent_session` owner, which retains
+launch deduplication, stable session identity, provisional execution,
 native controls, lifecycle transitions and final capture/durability obligations.
 The owner is a Rust value advanced by the supervisor, with private launch,
 execution and history records; it adds no session thread or event bus. It returns
-an observation snapshot and derived adoption eligibility, without exposing phase
+an observation snapshot and derived execution/capture reservation, without exposing phase
 flags. The sole storage worker's completions are drained once and dispatched to
-that owner. Existing bounded creation, input, receipt, capture and cleanup workers
-retain their roles. Ordinary quit requests supervisor shutdown, which combines
-Git-job completion with the session owner's confirmed shutdown; an unexpectedly
+the owner holding the matching operation obligation. Existing bounded creation,
+input, receipt, capture and cleanup workers retain their roles. Ordinary quit
+requests supervisor shutdown, which combines Git-job completion with every
+session owner's confirmed shutdown; an unexpectedly
 lost client does not. On
 supervisor failure/reboot, saved sessions become interrupted and require explicit
 recovery, never automatic coding restarts. Claude Code and Codex adapters use
@@ -195,9 +197,11 @@ The implementation still assumes a shared local host in these places:
   use the execution host's local filesystem. Native tools inherit supervisor
   PATH/authentication; recovery and child cleanup rely on host boot/start identity
   and OS-specific process evidence. Linux fixtures do not qualify VPS support.
-- Some requests target the single currently adopted session implicitly, and
-  history browsing uses an index. Those local prototype conveniences are not a
-  complete stable-ID interface for multiple projects or machines. GitHub workflows
+- The current dashboard freezes an owner UUID and expected managed session UUID
+  in each coding control request. Selection is separate; late input, resize,
+  Stop or reconciliation cannot target a replacement conversation. Legacy wire
+  variants retain their selected-owner adapter. History supports explicit session
+  UUIDs, with legacy index navigation retained. GitHub workflows
   and editor/diff artifacts are planned; no implemented artifact contract or
   checkout-independent editor integration is claimed.
 
@@ -209,15 +213,15 @@ be decided with evidence.
 
 ## Milestone 2 migration boundaries (planned)
 
-The completed Milestone 1 implementation still has one global runtime/current
-adoption and singleton capture accounting. The persistence writer flushes its
-single active transcript handle when the session identity changes; simply
-allowing several PTYs would cause frequent commits under interleaved output.
-Early Milestone 2 work must establish retained workspace/session records,
-explicitly targeted requests/observations and fair bounded per-session capture/
-durability accounting while preserving one writer. Search/indexing must not
-monopolize that worker. Move synchronous adoption path/Git work out of the shared
-supervisor loop before adding potentially slow fetch/mutation operations. See
+Milestone 1 began with one global runtime/current adoption and singleton capture
+accounting. Tickets 03, 05 and 06 now provide execution-owned asynchronous Git
+identity, retained workspace/session records, targeted coding controls and fair
+bounded per-session capture/durability accounting behind one writer. Each live
+stream has its own queue, transcript handle, accepted/written/durable counters,
+backpressure and error. Rotating streams does not force a commit. Final flush
+waits only for its owned EOF's accepted prefix; another producer neither permits
+nor delays that completion. Search/indexing must also interleave finite work with
+capture. Mutation/fetch work remains execution-owned and bounded. See
 the [Milestone 1 implementation audit](../.scratch/milestone-2-coding-coordination/interview.md#milestone-1-implementation-audit-prerequisites-within-milestone-2).
 
 The Milestone 2 interview retains one active coding session per worktree and
@@ -601,14 +605,28 @@ unattributable/conflicting records. It does not change transcript extents, seals
 tombstones, native IDs or request outcomes. The current app path bytes are retained
 only for their explicit task, never assigned to unrelated historical sessions.
 
-The supervisor separately owns registry snapshots/registration operations and the
-selected runtime's `AgentSession`. Explicit registration uses its bounded Git
+The supervisor separately owns registry snapshots/registration operations and its
+collection of session owners. Only explicit adoption or runtime selection changes
+the durable selected workspace; metadata saves from another running owner cannot
+replace it. Startup retains the latest session per canonical workspace plus every
+unresolved execution (at most 1024 saved session records, failing closed beyond
+that bound), without launching tools or allocating capture queues for history.
+Up to 32 unsettled execution/capture owners are admitted. Each stream retains
+64 queued blocks of at most 4096 bytes, one worker block and one producer block
+(270336 accepted bytes before the reader's separate finite 1 MiB Stop tail).
+The control queue stays independently bounded at 16 commands. Successful sealing
+releases that stream's queue/handle/metrics; an unfinished tail remains reserved.
+Actual write/fsync syscall stalls still stall the sole writer for all streams.
+Native launch gates and Claude/Codex hook endpoints use distinct private short
+`/tmp/rat-<uid>-<nonce>` directories so simultaneous launches cannot replace one
+another's endpoints and macOS's 104-byte Unix socket pathname bound is respected.
+Their runtime directories are removed on owner drop. Explicit registration uses its bounded Git
 verification worker and an attributed storage command; only its matching committed
 completion publishes rows. Registration does not retarget the active session.
 Adoption selects an existing canonical workspace's retained task mapping. Registry
 reads and legacy migration never launch/resume native tools. Dashboard `w` opens a
-stable-ID picker (including compact terminals); `A` registers, Enter discovers,
-`a` explicitly adopts, and `h` reads the selected workspace's latest session by UUID.
+stable-ID picker (including compact terminals); `A` registers, Enter opens an
+existing runtime (or discovers a workspace without one), `a` explicitly adopts, and `h` reads the selected workspace's latest session by UUID.
 Discovery remains a separate context, so registration/adoption cannot mislabel
 previous worktree results as a different repository. An independent registry
 protocol capability is checked before sending any command to a live supervisor;

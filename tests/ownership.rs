@@ -6632,3 +6632,153 @@ fn prompt_editor_and_manual_rename_are_usable_in_normal_and_small_dashboard_ptys
         control.request(serde_json::json!("Shutdown"));
     }
 }
+
+#[test]
+fn keyboard_switches_live_workspaces_and_reconnects_in_normal_and_small_ptys() {
+    use std::os::unix::ffi::OsStrExt;
+    let fixture = Fixture::new();
+    let second = fixture.temp.path().join("second-repository");
+    std::fs::create_dir(&second).unwrap();
+    assert!(
+        Command::new("git")
+            .args(["init", "-b", "main"])
+            .arg(&second)
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    let mut dashboard = fixture.open();
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted:");
+    dashboard.send(b"l");
+    dashboard.wait("fixture>");
+    dashboard.send(b"workspace-A-visible\r");
+    dashboard.wait("received: workspace-A-visible");
+    dashboard.kill();
+    let mut control = Controller::connect(&fixture);
+    let target_a = control.greeting["control_target"].clone();
+    let id_a = control.greeting["session_identity"]["session"].clone();
+    control.request(serde_json::json!({"Adopt": second.as_os_str().as_bytes()}));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let state = control.request(serde_json::json!("Screen"));
+        if state["adoption_pending"] == false && state["adopted"] == second.to_str().unwrap() {
+            break;
+        }
+        assert!(Instant::now() < deadline, "{state}");
+    }
+    let b = control.request(serde_json::json!({"Launch":"live-ui-b"}));
+    let target_b = b["control_target"].clone();
+    let id_b = b["session_identity"]["session"].clone();
+    control.request(serde_json::json!({"Input":b"workspace-B-visible\r".to_vec()}));
+    drop(control);
+    let capture = |dashboard: &Dashboard, cols: u16, rows: u16, name: &str| {
+        if let Some(directory) = std::env::var_os("RAT_CONCURRENT_UI_EVIDENCE") {
+            let mut cells = Vec::new();
+            for row in 0..rows {
+                for col in 0..cols {
+                    let cell = dashboard.screen.screen().cell(row, col).unwrap();
+                    cells.push(serde_json::json!({"row":row,"col":col,"text":cell.contents(),"fg":format!("{:?}",cell.fgcolor()),"bg":format!("{:?}",cell.bgcolor()),"bold":cell.bold(),"wide":cell.is_wide_continuation()}));
+                }
+            }
+            let directory = PathBuf::from(directory);
+            std::fs::create_dir_all(&directory).unwrap();
+            std::fs::write(directory.join(format!("m2-06-{name}-{cols}.json")),serde_json::to_vec_pretty(&serde_json::json!({"source":"real dashboard outer PTY cells switching two scripted coding sessions; no native terminal application compatibility claim","cols":cols,"rows":rows,"cells":cells,"hide_cursor":true})).unwrap()).unwrap();
+        }
+    };
+    for (cols, rows) in [(160, 40), (60, 18)] {
+        let reconnect_deadline = Instant::now() + Duration::from_secs(8);
+        dashboard = loop {
+            let mut candidate = Dashboard::open_geometry(
+                &fixture.repository,
+                &fixture.state(),
+                None,
+                None,
+                rows,
+                cols,
+            );
+            let visible = candidate.wait_any(&[
+                "workspace-B-visible",
+                "Another dashboard controls this supervisor",
+            ]);
+            if visible.contains("workspace-B-visible") {
+                break candidate;
+            }
+            candidate.kill();
+            assert!(
+                Instant::now() < reconnect_deadline,
+                "prior controller EOF not released"
+            );
+        };
+        dashboard.send(&[0x1d]);
+        dashboard.wait("Focus: dashboard");
+        dashboard.send(b"w");
+        dashboard.wait("retained workspaces");
+        dashboard.send(b"k\r");
+        let a_screen = dashboard.wait("workspace-A-visible");
+        assert!(!a_screen.contains("workspace-B-visible"));
+        dashboard.send(b"A-after-switch\r");
+        dashboard.wait("received: A-after-switch");
+        if cols == 160 {
+            capture(&dashboard, cols, rows, "A");
+        }
+        if let Some(directory) = std::env::var_os("RAT_CONCURRENT_UI_EVIDENCE") {
+            let directory = PathBuf::from(directory);
+            std::fs::create_dir_all(&directory).unwrap();
+            std::fs::write(
+                directory.join(format!("m2-06-A-{cols}.txt")),
+                dashboard.screen.screen().contents(),
+            )
+            .unwrap();
+            std::fs::write(
+                directory.join(format!("m2-06-A-{cols}.ansi")),
+                dashboard.screen.screen().state_formatted(),
+            )
+            .unwrap();
+        }
+        dashboard.send(&[0x1d]);
+        dashboard.wait("Focus: dashboard");
+        dashboard.send(b"w");
+        dashboard.wait("retained workspaces");
+        dashboard.send(b"j\r");
+        let b_screen = dashboard.wait("workspace-B-visible");
+        assert!(!b_screen.contains("workspace-A-visible"));
+        assert!(
+            !b_screen.contains("Session changed before command delivery"),
+            "selection must wait for B's identity before automatic resize: {b_screen}"
+        );
+        if cols == 60 {
+            capture(&dashboard, cols, rows, "B");
+        }
+        if let Some(directory) = std::env::var_os("RAT_CONCURRENT_UI_EVIDENCE") {
+            let directory = PathBuf::from(directory);
+            std::fs::write(
+                directory.join(format!("m2-06-B-{cols}.txt")),
+                dashboard.screen.screen().contents(),
+            )
+            .unwrap();
+            std::fs::write(
+                directory.join(format!("m2-06-B-{cols}.ansi")),
+                dashboard.screen.screen().state_formatted(),
+            )
+            .unwrap();
+        }
+        dashboard.kill();
+        let mut control = Controller::connect(&fixture);
+        assert_eq!(control.greeting["control_target"], target_b);
+        assert_eq!(control.greeting["session_identity"]["session"], id_b);
+        let a = control.request(serde_json::json!({"SelectSession":target_a}));
+        assert_eq!(a["session_identity"]["session"], id_a);
+        assert_eq!(a["lifecycle"], "Running");
+        control.request(serde_json::json!({"SelectSession":target_b}));
+    }
+    let mut control = Controller::connect(&fixture);
+    let mut state = control.request(serde_json::json!("Shutdown"));
+    let deadline = Instant::now() + Duration::from_secs(8);
+    while state["stopped"] != true {
+        assert!(Instant::now() < deadline, "{state}");
+        state = control.request(serde_json::json!("Screen"));
+    }
+}
