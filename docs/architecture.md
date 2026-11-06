@@ -206,6 +206,9 @@ resource measurements alongside responsiveness results.
 
 ## Scripted PTY prototype (ticket 01)
 
+This section records ticket 01; the subsequent ticket sections describe the
+current extensions to launch, rendering, lifecycle and recovery.
+
 `session` now contains the fixture runtime, supervisor mode, private Unix-socket
 protocol, and dashboard transport worker. `App::input` owns focus and returns
 explicit refresh/session effects. The event loop dispatches without waiting;

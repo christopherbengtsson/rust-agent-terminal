@@ -85,7 +85,7 @@ Symlink checkout aliases and paths inside a checkout adopt its canonical Git
 worktree root. A new launch while running is refused; Enter attaches to the existing
 child. The surviving supervisor retains launch-request outcomes: reconnect
 recovers the original request and its success or failure, and retrying that exact
-request does not execute again. An explicit `l` after an acknowledged outcome is
+request does not execute again. An explicit `c` or `l` after an acknowledged outcome is
 a new request. This recovery applies to dashboard loss; supervisor loss needs the
 separate crash-reconciliation work. See the [reconnect proof](docs/proofs/07-dashboard-reconnect.md).
 

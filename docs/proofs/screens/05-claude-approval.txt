@@ -1,0 +1,32 @@
+
+✻ Crunched for 2s · done 1:46 PM
+
+❯ Run exactly this harmless command with Bash: printf approval-proof. Do not write any files or run
+  other commands.
+
+  Ran 1 shell command
+
+⏺ The command printed approval-proof. I ran only that command and wrote no files.
+
+✻ Baked for 2s · done 1:47 PM
+
+❯ Run exactly this Bash command in this temporary proof checkout: printf approval-proof >
+  approval-marker. Do not write outside this checkout or run other commands.
+
+⏺ Writing approval-proof text to approval-marker in the checkout
+  ⎿  $ printf approval-proof > approval-marker
+ 
+────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Bash command
+ Tip: auto mode handles these prompts for you — choose "switch to auto mode" below
+ Write approval-proof text to approval-marker in the checkout
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ printf approval-proof > approval-marker
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ Do you want to proceed?
+ ❯ 1. Yes
+   2. Yes, and always allow access to /private/tmp/rat-claude-proof-checkout from this project
+   3. Yes, and switch to auto mode · auto mode handles these prompts for you
+   4. No
+
+ Esc to cancel · Tab to amend
