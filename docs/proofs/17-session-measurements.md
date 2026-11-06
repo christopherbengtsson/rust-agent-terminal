@@ -95,3 +95,26 @@ explicitly labeled nonquiescent and never treated as durability snapshots.
 
 Final results are recorded after the declared full run; this protocol alone
 closes no measurement gate.
+
+## Independent fault-input receipt supplement
+
+Final02's full-storage ACK was right-censored, and its fixture had no complete
+input receipt. The legacy scripted-child loop flushed stdout after every stdin
+byte, so a producer holding stdout under backpressure stopped the input reader
+after its first byte. That absence is retained as unconfirmed input delivery,
+not an input usability pass. A real-PTY regression first failed for the missing
+receipt, then passed after ordinary stdin bytes stopped acquiring stdout;
+command/Ctrl-C output still flushes. There is one bounded input line and one
+possibly blocked ACK, with no new queue or output bypass.
+
+The separately predeclared supplement uses the same production runtime prefix
+and changed scripted fixture, with 30 seconds of synthetic ENOSPC saturation,
+20 navigation samples, one unique input receipt and a two-second visible-ACK
+censor window. Repair/retry must then display that same ACK. It repeats public
+History checks and confirmed clean flush. It does not replace Final02's valid
+healthy/resource measurements or relabel blocked output as a healthy attach.
+
+```sh
+RAT_FAULT17_DIR=/private/tmp/unique-new-fault-run cargo test --locked --test ownership full_storage_input_receipt_measurement17 -- --exact --ignored --nocapture
+python3 docs/proofs/17-analyze.py /private/tmp/unique-new-fault-run
+```

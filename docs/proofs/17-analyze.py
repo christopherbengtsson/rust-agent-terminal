@@ -158,16 +158,22 @@ report['disk_samples']=[e for e in events if e['kind']=='disk']
 report['sampler_us']=distribution([e['sampler_us'] for e in events if e['kind']=='rss'])
 report['phases']=[e for e in events if e['kind'] in ('phase','retry','stop','finished')]
 gates={}
-for key, expected in [('navigation/dashboard-focused',events[0]['navigation_samples']),('attach/attached',events[0]['attach_samples'])]:
+for key, expected in ([] if events[0].get('fault_supplement') else [('navigation/dashboard-focused',events[0]['navigation_samples']),('attach/attached',events[0]['attach_samples'])]):
     d=report['latency_us'][key]
     target=100000 if key.startswith('navigation') else 1000000
     gates[key]={'pass':d['entirely_active']['n']==expected and d['entirely_active'].get('max',target+1)<target,'expected_samples':expected,'active_samples':d['entirely_active']['n'],'target_us':target}
-for run in range(1,5):
+for run in ([] if events[0].get('fault_supplement') else range(1,5)):
     d=report['commits'].get(f'run{run}',{})
     gates[f'healthy-storage/run{run}']={'pass':d.get('interval_us',{}).get('n',0)>0 and d['interval_us']['max']<=1000000 and d['oldest_accepted_us']['max']<=1000000,'target_us':1000000}
-for mode in ['slow-storage','full-storage']:
+for mode in (['full-storage'] if events[0].get('fault_supplement') else ['slow-storage','full-storage']):
     d=report['latency_us'].get('navigation/'+mode,{}).get('all',{})
     gates['navigation/'+mode]={'pass':d.get('n',0)>0 and d.get('max',100001)<100000,'target_us':100000}
+if events[0].get('fault_supplement'):
+    sample=next(e for e in events if e['kind']=='attach' and e['mode']=='full-storage')
+    received=inputs[sample['nonce']]['received_ns']
+    recovered=next(e for e in events if e['kind']=='fault-recovered')
+    report['fault_input']={'injection_to_receipt_us':(received-sample['injected_ns'])/1000,'focus_us':(sample['focus_ns']-sample['injected_ns'])/1000,'visible_ack_right_censored_us':(sample['censor_ns']-sample['injected_ns'])/1000,'repair_retry_to_visible_ack_us':(recovered['visible_ns']-recovered['retry_ns'])/1000}
+    gates['fault-native-input-receipt']={'pass':sample['injected_ns']<=received<sample['censor_ns'] and sample['visible_ns'] is None,'visible_ack':'right-censored until repair; not an attach target pass'}
 finished=next((e for e in events if e['kind']=='finished'),None)
 gates['harness-final']={'pass':finished is not None and not finished['failures'],'failures':finished['failures'] if finished else ['no final receipt']}
 report['gates']=gates

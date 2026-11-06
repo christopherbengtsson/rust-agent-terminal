@@ -1508,7 +1508,8 @@ pub fn scripted_child() -> io::Result<()> {
     let mut native_active = false;
     let mut paced: Option<std::thread::JoinHandle<io::Result<()>>> = None;
     for byte in io::stdin().lock().bytes() {
-        match byte? {
+        let byte = byte?;
+        match byte {
             3 => {
                 line.clear();
                 if native_active {
@@ -1809,7 +1810,11 @@ pub fn scripted_child() -> io::Result<()> {
                 }
             }
         }
-        io::stdout().flush()?;
+        // Ordinary input collection must not acquire stdout: a producer can
+        // legitimately be blocked there by preserved-history backpressure.
+        if matches!(byte, 3 | b'\r') {
+            io::stdout().flush()?;
+        }
     }
     print!("\x1b[?2004l");
     io::stdout().flush()
