@@ -16,3 +16,16 @@ Blocked by: None
 
 Prepared from the agreed Milestone 2 spec and architecture exploration. No
 implementation or new validation evidence is claimed by this ticket.
+
+Implementation checkpoint: `a877c48`, `3d5b216`, merged with attributed durable
+operations at `6e1f7f8` (integration `2b2a255`). Immediate child/PTY/gate ownership,
+bounded asynchronous creation, cancellation and retained cleanup reservations
+are implemented. The four new real-process regressions pass after that merge:
+five setup failure boundaries, actual verification failure/repair, cancellation
+while a gated child is still owned by the creation worker, and a restart check
+preventing prior-session EOF proof from sealing an uninstalled capture.
+Locked build, formatting, warnings-denied all-target Clippy and diff checks pass.
+Full validation details and the intermediate full-suite failures/corrections are
+in [the fixture proof](../../../docs/proofs/m2-02-partial-spawn-ownership.md).
+Native interaction qualification is not inferred from fixtures. Resolution awaits
+the coordinator's serial final integration all-target check.
