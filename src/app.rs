@@ -249,10 +249,49 @@ impl App {
             return Some(self.session_effect(Request::Key(key)));
         }
         if let Some(view) = &mut self.diff {
+            if let Some(entry) = &mut view.base_entry {
+                match key.code {
+                    KeyCode::Esc => view.base_entry = None,
+                    KeyCode::Enter => {
+                        view.base_selection = Some(entry.as_bytes().to_vec());
+                        view.base_entry = None;
+                        view.whole = true;
+                        view.snapshot = None;
+                        view.scroll = 0;
+                        return Some(Effect::Session(view.refresh()));
+                    }
+                    KeyCode::Backspace => {
+                        entry.pop();
+                    }
+                    KeyCode::Char('u') if key.modifiers == KeyModifiers::CONTROL => entry.clear(),
+                    KeyCode::Char(c)
+                        if !key
+                            .modifiers
+                            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+                            && entry.len() + c.len_utf8() <= 32768
+                            && !c.is_control() =>
+                    {
+                        entry.push(c)
+                    }
+                    _ => {}
+                }
+                return None;
+            }
             if key.modifiers.is_empty() {
                 match key.code {
                     KeyCode::Esc | KeyCode::Char('f') => {
                         self.diff = None;
+                        return None;
+                    }
+                    KeyCode::Char('w') if !view.loading => {
+                        view.whole = !view.whole;
+                        view.snapshot = None;
+                        view.scroll = 0;
+                        view.horizontal = 0;
+                        return Some(Effect::Session(view.refresh()));
+                    }
+                    KeyCode::Char('b') if !view.loading => {
+                        view.base_entry = Some(String::new());
                         return None;
                     }
                     KeyCode::Char('r') => {
@@ -802,7 +841,7 @@ impl App {
 
     pub fn keyboard_help(&self) -> &'static str {
         if self.diff.is_some() {
-            "Working: j/k file · arrows scroll · PgUp/PgDn · r refresh · f/Esc back · s stop · q quit · d detach"
+            "j/k file · arrows scroll · w Working/Whole workspace · b local base · r refresh · f/Esc back · s stop · q quit · d detach"
         } else if self.first_prompt.is_some() {
             "First prompt (optional): Enter starts native agent · Esc cancels without launch"
         } else if self.rename_workspace.is_some() {
@@ -825,6 +864,12 @@ impl App {
     }
 
     pub fn paste(&mut self, text: String) -> Option<Effect> {
+        if let Some(entry) = self.diff.as_mut().and_then(|view| view.base_entry.as_mut()) {
+            if entry.len() + text.len() <= 32768 && !text.chars().any(char::is_control) {
+                entry.push_str(&text);
+            }
+            return None;
+        }
         if self.first_prompt.is_some() || self.rename_workspace.is_some() {
             let limit = if self.first_prompt.is_some() {
                 4084

@@ -5812,7 +5812,7 @@ fn slow_adoption_and_saturated_discovery_leave_polling_stop_and_exit_usable() {
 #[test]
 fn dashboard_refuses_legacy_live_owner_before_sending_new_git_requests() {
     use std::os::unix::{fs::PermissionsExt, net::UnixListener};
-    for protocol in [0, 1] {
+    for (protocol, diff_protocol) in [(0, 0), (1, 0), (1, 1)] {
         let fixture = Fixture::new();
         std::fs::create_dir(fixture.state()).unwrap();
         std::fs::set_permissions(fixture.state(), std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -5826,7 +5826,7 @@ fn dashboard_refuses_legacy_live_owner_before_sending_new_git_requests() {
             stream
                 .set_read_timeout(Some(Duration::from_secs(3)))
                 .unwrap();
-            let old = serde_json::json!({"git_jobs_protocol":protocol,"adopted":null,"identity":null,"screen":"","formatted":"","rows":24,"cols":100,"output_bytes":0,"error":null,"stopped":false,"lifecycle":"Idle","control_denied":false});
+            let old = serde_json::json!({"git_jobs_protocol":protocol,"diff_protocol":diff_protocol,"registry_protocol":1,"sessions_protocol":1,"prompt_naming_protocol":1,"adopted":null,"identity":null,"screen":"","formatted":"","rows":24,"cols":100,"output_bytes":0,"error":null,"stopped":false,"lifecycle":"Idle","control_denied":false});
             serde_json::to_writer(&mut stream, &old).unwrap();
             stream.write_all(b"\n").unwrap();
             let mut unexpected = [0; 1];
@@ -7104,4 +7104,247 @@ fn working_diff_jobs_are_workspace_owned_read_only_bounded_and_stop_cancellable(
     assert!(retry["working_diff"]["result"]["Ok"].is_object());
     control.request_now(serde_json::json!("Shutdown"));
     cleanup_wait15(&mut control, |state| state["stopped"] == true);
+}
+
+#[test]
+fn whole_workspace_base_selection_is_durable_and_refresh_tracks_exact_local_commits() {
+    let fixture = Fixture::new();
+    let git = |args: &[&str]| {
+        let result = Command::new("git")
+            .arg("-C")
+            .arg(&fixture.repository)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        String::from_utf8_lossy(&result.stdout).trim().to_owned()
+    };
+    git(&["config", "user.name", "Test"]);
+    git(&["config", "user.email", "test@example.com"]);
+    std::fs::write(fixture.repository.join("file"), "base\n").unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-qm", "base"]);
+    let original = git(&["rev-parse", "HEAD"]);
+    git(&["branch", "base"]);
+    std::fs::write(fixture.repository.join("file"), "committed\n").unwrap();
+    git(&["commit", "-qam", "work"]);
+    let head = git(&["rev-parse", "HEAD"]);
+    let mut owner = Command::new(env!("CARGO_BIN_EXE_agent-terminal"))
+        .arg("--supervisor")
+        .arg(fixture.state())
+        .spawn()
+        .unwrap();
+    struct Owner<'a>(&'a mut std::process::Child);
+    impl Drop for Owner<'_> {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    let owner_guard = Owner(&mut owner);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !fixture.state().join("supervisor.sock").exists() {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let mut control = Controller::connect(&fixture);
+    assert_eq!(control.greeting["diff_protocol"], 2);
+    control.request(serde_json::json!({"Adopt":fixture.repository.as_os_str().as_encoded_bytes()}));
+    let adopted = cleanup_wait15(&mut control, |s| s["registry"]["selected"].is_string());
+    let workspace = adopted["registry"]["selected"].as_str().unwrap().to_owned();
+    let inspect = |request: &str, base: Option<&[u8]>| serde_json::json!({"InspectWorking":{"request":request,"workspace":workspace,"selected":null,"whole":true,"base":base}});
+    control.request(inspect("missing", None));
+    let missing = cleanup_wait15(&mut control, |s| s["working_diff"]["request"] == "missing");
+    assert!(
+        missing["working_diff"]["result"]["Err"]
+            .as_str()
+            .unwrap()
+            .contains("selected local base")
+    );
+    std::fs::write(fixture.state().join("proof-storage-registry"), b"error").unwrap();
+    control.request(inspect("failed-save", Some(b"refs/heads/base")));
+    let failed = cleanup_wait15(&mut control, |s| {
+        s["working_diff"]["request"] == "failed-save"
+    });
+    assert!(
+        failed["working_diff"]["result"]["Err"]
+            .as_str()
+            .unwrap()
+            .contains("base not saved")
+    );
+    assert!(failed["registry"]["comparison_bases"][&workspace].is_null());
+    std::fs::remove_file(fixture.state().join("proof-storage-registry")).unwrap();
+    control.request(inspect("selected", Some(b"refs/heads/base")));
+    let selected = cleanup_wait15(&mut control, |s| s["working_diff"]["request"] == "selected");
+    assert_eq!(
+        selected["registry"]["comparison_bases"][&workspace]["commit"],
+        original
+    );
+    let snapshot = &selected["working_diff"]["result"]["Ok"];
+    assert!(snapshot["content"].as_str().unwrap().contains("+committed"));
+    assert!(
+        snapshot["comparison"]
+            .as_str()
+            .unwrap()
+            .contains(&format!("HEAD {head}"))
+    );
+    assert!(
+        snapshot["save_base"].is_null(),
+        "only publish after the attributed base commit"
+    );
+    assert!(
+        selected["identity"].is_null(),
+        "inspection does not start coding"
+    );
+    control.request_now(serde_json::json!("Shutdown"));
+    cleanup_wait15(&mut control, |s| s["stopped"] == true);
+    drop(control);
+    owner_guard.0.wait().unwrap();
+    drop(owner_guard);
+    git(&["branch", "-f", "base", "HEAD"]);
+    let mut next = Command::new(env!("CARGO_BIN_EXE_agent-terminal"))
+        .arg("--supervisor")
+        .arg(fixture.state())
+        .spawn()
+        .unwrap();
+    let _guard = Owner(&mut next);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !fixture.state().join("supervisor.sock").exists() {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let mut control = Controller::connect(&fixture);
+    assert_eq!(
+        control.greeting["registry"]["comparison_bases"][&workspace]["commit"],
+        original
+    );
+    control.request(inspect("restored", None));
+    let restored = cleanup_wait15(&mut control, |s| s["working_diff"]["request"] == "restored");
+    assert!(
+        restored["working_diff"]["result"]["Ok"]["comparison"]
+            .as_str()
+            .unwrap()
+            .contains("Base moved since selection")
+    );
+    assert_eq!(
+        restored["working_diff"]["result"]["Ok"]["files"]
+            .as_array()
+            .unwrap()
+            .len(),
+        0
+    );
+    control.request_now(serde_json::json!("Shutdown"));
+    cleanup_wait15(&mut control, |s| s["stopped"] == true);
+}
+
+#[test]
+fn whole_workspace_dashboard_switches_bases_and_reopens_working_in_normal_and_small_ptys() {
+    let fixture = Fixture::new();
+    let git = |args: &[&str]| {
+        let result = Command::new("git")
+            .arg("-C")
+            .arg(&fixture.repository)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+    };
+    git(&["config", "user.name", "Test"]);
+    git(&["config", "user.email", "test@example.com"]);
+    std::fs::write(fixture.repository.join("zeta"), "base\n").unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-qm", "base"]);
+    git(&["branch", "base"]);
+    std::fs::write(fixture.repository.join("zeta"), "committed\n").unwrap();
+    git(&["commit", "-qam", "work"]);
+    std::fs::write(fixture.repository.join("zeta"), "staged\n").unwrap();
+    git(&["add", "zeta"]);
+    std::fs::write(fixture.repository.join("zeta"), "unstaged\n").unwrap();
+    std::fs::write(fixture.repository.join("alpha"), "first file\n").unwrap();
+    let capture = |dashboard: &Dashboard, cols, rows, phase: &str| {
+        if let Some(directory) = std::env::var_os("RAT_DIFF_EVIDENCE") {
+            std::fs::create_dir_all(&directory).unwrap();
+            let screen = dashboard.screen.screen().contents();
+            std::fs::write(
+                Path::new(&directory).join(format!("m2-14-whole-pty-{cols}-{phase}.txt")),
+                screen,
+            )
+            .unwrap();
+            let mut cells = Vec::new();
+            for row in 0..rows {
+                for col in 0..cols {
+                    let cell = dashboard.screen.screen().cell(row, col).unwrap();
+                    cells.push(serde_json::json!({"row":row,"col":col,"text":cell.contents(),"fg":format!("{:?}",cell.fgcolor()),"bg":format!("{:?}",cell.bgcolor()),"bold":cell.bold(),"wide":cell.is_wide_continuation()}));
+                }
+            }
+            std::fs::write(Path::new(&directory).join(format!("m2-14-whole-pty-{cols}-{phase}.json")),serde_json::to_vec_pretty(&serde_json::json!({"source":"actual dashboard outer PTY; controlled concurrent filesystem edits and local-ref movement; no coding child launched","cols":cols,"rows":rows,"cells":cells,"hide_cursor":true})).unwrap()).unwrap();
+        }
+    };
+    for (cols, rows) in [(160, 40), (60, 18)] {
+        let mut dashboard = Dashboard::open_geometry(
+            &fixture.repository,
+            &fixture.state(),
+            None,
+            None,
+            rows,
+            cols,
+        );
+        dashboard.wait_any(&["Discovery complete", "Adopted:"]);
+        dashboard.send(b"a");
+        dashboard.wait("Adopted:");
+        dashboard.send(b"w");
+        dashboard.wait(" / Workspace ");
+        dashboard.send(b"f");
+        dashboard.wait("first file");
+        dashboard.send(b"w");
+        dashboard.wait_any(&["selected local base", "Branch refs/heads/main"]);
+        dashboard.send(b"b");
+        dashboard.wait("Local base (full");
+        dashboard.send(b"refs/heads/base\r");
+        let screen = dashboard.wait("Branch refs/heads/main");
+        assert!(screen.contains("Whole workspace"), "{screen}");
+        assert!(screen.contains("Snapshot; not live"), "{screen}");
+        assert!(
+            screen.contains("w Working/Whole") || screen.contains("w Working/Whole workspace"),
+            "{screen}"
+        );
+        capture(&dashboard, cols, rows, "header");
+        dashboard.send(b"j");
+        dashboard.wait("committed + staged + unstaged");
+        dashboard.send(b"\x1b[H");
+        for _ in 0..12 {
+            dashboard.send(b"\x1b[B");
+        }
+        dashboard.wait("+unstaged");
+        capture(&dashboard, cols, rows, "patch");
+        std::fs::write(fixture.repository.join("zeta"), "agent current\n").unwrap();
+        dashboard.send(b"r");
+        dashboard.wait("+agent current");
+        git(&["branch", "-f", "base", "HEAD"]);
+        dashboard.send(b"r");
+        dashboard.send(b"\x1b[H");
+        for _ in 0..4 {
+            dashboard.send(b"\x1b[B");
+        }
+        dashboard.wait("Base moved since selection");
+        capture(&dashboard, cols, rows, "moved");
+        dashboard.send(b"\x1b");
+        dashboard.wait("Focus: dashboard");
+        dashboard.send(b"f");
+        let screen = dashboard.wait("first file");
+        assert!(screen.contains("Working"), "{screen}");
+        assert!(!screen.contains("┌ Whole workspace ·"), "{screen}");
+        dashboard.send(b"q");
+        dashboard.child.wait().unwrap();
+        std::fs::write(fixture.repository.join("zeta"), "unstaged\n").unwrap();
+        git(&["branch", "-f", "base", "HEAD~1"]);
+    }
 }

@@ -1,0 +1,18 @@
+┌ Whole workspace · Workspace 024f3df4 ────────────────────┐
+│Workspace 024f3df4-4581-4b05-a89a-5fbaca9c8571            │
+│Checkout /private/tmp/.tmpUNtYDa/checkout with spaces     │
+│Request 547d0b7e-fc69-4a1e-81d1-d90544f41c61              │
+│Snapshot; not live · 1794003651909 · r refresh            │
+│Files (2) · j/k                                           │
+│> zeta                                                    │
+│    committed + staged + unstaged                         │
+│Content · line 13 · column 1                              │
+│-base                                                     │
+│+unstaged                                                 │
+│                                                          │
+└──────────────────────────────────────────────────────────┘
+┌ Status · semantic status: unknown ·  ────────────────────┐
+│Adopted: /private/tmp/.tmpUNtYDa/checkout with spaces ·   │
+└──────────────────────────────────────────────────────────┘
+w Working/Whole · b base · j/k file · arrows scroll         
+r refresh · f/Esc back · s stop · q quit · d detach         

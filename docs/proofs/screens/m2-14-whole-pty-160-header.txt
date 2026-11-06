@@ -1,0 +1,40 @@
+┌ Reviews ───────────────────────────────────────────┐┌ Whole workspace · Workspace 024f3df4 ──────────────────────────────────────────────────────────────────┐
+│Unavailable · milestone 1                           ││Workspace 024f3df4-4581-4b05-a89a-5fbaca9c8571                                                          │
+└────────────────────────────────────────────────────┘│Checkout /private/tmp/.tmpUNtYDa/checkout with spaces                                                   │
+┌ Agent terminal · Worktrees ────────────────────────┐│Request 2c7be43b-7c20-4efc-8966-73fa07d7b8d1                                                            │
+│Repository: /private/tmp/.tmpUNtYDa/checkout with   ││Snapshot; not live · 1794003649481 · r refresh                                                          │
+└────────────────────────────────────────────────────┘│Files (2) · j/k                  Content · line 1 · column 1                                            │
+┌ Project / worktrees (1) ───────────────────────────┐│> alpha                          Whole workspace                                                        │
+│> └ main  /private/tmp/.tmpUNtYDa/checkout with spac││    new file                     Branch refs/heads/main                                                 │
+│    └ adopted · c/x start · C/X prompt · R rename   ││  zeta                           HEAD 7d8846528cd1375d585a14aff1392b2ee8179b4d                          │
+│                                                    ││    committed + staged + unstagedLocal base refs/heads/base f54122cd97f056c127a9e6bddaa59b25d8894808    │
+│                                                    ││                                 Common ancestor f54122cd97f056c127a9e6bddaa59b25d8894808               │
+│                                                    ││                                                                                                        │
+│                                                    ││                                 New file (not in index)                                                │
+│                                                    ││                                 first file                                                             │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+└────────────────────────────────────────────────────┘│                                                                                                        │
+┌ Selection ─────────────────────────────────────────┐│                                                                                                        │
+│Path: /private/tmp/.tmpUNtYDa/checkout with spaces  ││                                                                                                        │
+│Branch: main  HEAD:                                 ││                                                                                                        │
+│7d8846528cd1375d585a14aff1392b2ee8179b4d            ││                                                                                                        │
+│                                                    ││                                                                                                        │
+└────────────────────────────────────────────────────┘└────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌ Status · semantic status: unknown ·  ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│Adopted: /private/tmp/.tmpUNtYDa/checkout with spaces · ready: c Claude / x Codex / l fixture                                                                 │
+│History: metadata committed · durable bytes 0                                                                                                                 │
+│Evidence: unavailable ·                                                                                                                                       │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+j/k file · arrows scroll · w Working/Whole workspace · b local base · r refresh · f/Esc back · s stop · q quit · d detach                                       
