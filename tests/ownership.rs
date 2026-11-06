@@ -179,9 +179,16 @@ impl Fixture {
         );
     }
     fn reopen_after_release(&self, needle: &str) -> Dashboard {
+        self.reopen_with_path_after_release(needle, None)
+    }
+    fn reopen_with_path_after_release(
+        &self,
+        needle: &str,
+        path: Option<&std::ffi::OsStr>,
+    ) -> Dashboard {
         let deadline = Instant::now() + Duration::from_secs(8);
         loop {
-            let mut dashboard = self.open();
+            let mut dashboard = Dashboard::open_with_path(&self.repository, &self.state(), path);
             let screen =
                 dashboard.wait_any(&[needle, "Another dashboard controls this supervisor"]);
             if screen.contains(needle) {
@@ -1648,9 +1655,7 @@ os.execv(sys.argv[0]+'.child',[sys.argv[0]+'.child'])
     }
     kill_owner(&fixture);
     drop(control);
-    let mut dashboard =
-        Dashboard::open_with_path(&fixture.repository, &fixture.state(), Some(&path));
-    dashboard.wait("Process: Exited");
+    let mut dashboard = fixture.reopen_with_path_after_release("Process: Exited", Some(&path));
     dashboard.kill();
     let control = Controller::connect(&fixture);
     assert_eq!(
@@ -1659,10 +1664,11 @@ os.execv(sys.argv[0]+'.child',[sys.argv[0]+'.child'])
     );
     assert_eq!(control.greeting["identity"], old_identity);
     assert_no_owned_coding(&fixture);
+    let mut refused = Dashboard::open_with_path(&fixture.repository, &fixture.state(), Some(&path));
+    refused.wait("Another dashboard controls this supervisor");
+    refused.kill();
     drop(control);
-    let mut dashboard =
-        Dashboard::open_with_path(&fixture.repository, &fixture.state(), Some(&path));
-    dashboard.wait("Process: Exited");
+    let mut dashboard = fixture.reopen_with_path_after_release("Process: Exited", Some(&path));
     dashboard.send(b"v");
     dashboard.wait("resumed-original-id-without-followup");
     dashboard.wait("fixture>");
@@ -2185,9 +2191,7 @@ fn prior_boot_native_record_stays_interrupted_until_explicit_reconcile_then_resu
     wait_reconciled(&mut control);
     assert_no_owned_coding(&fixture);
     drop(control);
-    let mut dashboard =
-        Dashboard::open_with_path(&fixture.repository, &fixture.state(), Some(&path));
-    dashboard.wait("Process: Interrupted");
+    let mut dashboard = fixture.reopen_with_path_after_release("Process: Interrupted", Some(&path));
     dashboard.send(b"v");
     dashboard.wait("native-recovery-args:<--resume><11111111-2222-4333-8444-555555555555>");
     dashboard.wait("fixture>");

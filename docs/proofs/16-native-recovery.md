@@ -131,3 +131,43 @@ is checked at the scripted native-style PTY seam. Claude semantic-status gates
 remain separately open; successful resume does not establish them. The dashboard
 keeps the existing native pane and one-active-session layout, with `v resume`
 and explicit new-conversation choices in normal/small keyboard help.
+
+## Final verification and remaining combined check
+
+After merging integration `6da639d` (final Codex status, bounded subscriber
+frames, owned-PTY cleanup and error-first disconnect diagnostics), locked build,
+format check and warnings-denied all-target Clippy passed. `cargo test --locked
+--bin agent-terminal` passed 22 tests; the one ignored terminal subprocess probe
+was exercised by the passing restoration driver. The native-filter ownership
+run passed all eight scenarios in 15.66s, including original-ID persistence,
+explicit resume, prior-boot restoration, unavailable recovery and survivor
+exclusion. The unchanged unsafe-private-directory check passed in 0.81s.
+
+An initial pre-ticket-13 aggregate run passed 27/28 ownership scenarios; its
+bounded-history read exposed a truncated socket frame under the old write-timeout
+path. Ticket 13's retained partial-frame cursor corrected that failure.
+
+Two later full `cargo test --locked --all-targets` attempts each passed 31/32
+ownership scenarios, including bounded-history continuity and the sustained
+capture workload. The first failed because a disconnected diagnostic wrapped
+an exact screen-string assertion; ticket 13's error-first display fixed it,
+without changing the assertion. The second exposed a **harness ownership race**:
+a new custom-PATH dashboard arrived before the supervisor consumed the prior raw
+controller's EOF. Its actual screen said `Another dashboard controls this
+supervisor`; no native-ID mismatch occurred. Eight focused repetitions had
+passed, illustrating why pass counts alone did not diagnose that race.
+
+The correction reuses ticket 07's bounded retry on that explicit public refusal,
+now with a custom-PATH parameter. The native recovery scenario deliberately opens
+a second dashboard while the raw controller is still held, observes refusal,
+then closes the controller and reacquires through that helper. UUID equality,
+metadata-commit acknowledgement and original-history assertions remain intact;
+there is no arbitrary release sleep. The corrected scenario passed alone in
+3.31s and within the final eight-scenario run. The prior-boot fixture uses the
+same release helper. No production recovery policy was relaxed.
+
+A final combined all-target run after this harness-only correction is left to
+the integration merger, avoiding another duplicate multi-minute resource
+workload. Earlier failed aggregate runs are not represented as passing that
+combined check. No physical reboot, active real-native supervisor-crash recovery,
+other native versions or full resume-management workflow is established here.
