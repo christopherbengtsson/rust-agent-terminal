@@ -41,6 +41,7 @@ pub enum Request {
     Paste(String),
     Screen,
     Stop,
+    RetryStorage,
     Resize { rows: u16, cols: u16 },
     Shutdown,
 }
@@ -67,6 +68,20 @@ pub struct Observation {
     pub connection_lost: bool,
     #[serde(default)]
     pub capture_pending_bytes: usize,
+    #[serde(default)]
+    /// Owner-lifetime bytes read from PTY, including the producer block waiting
+    /// for queue space. Baseline at launch before comparing current-session durable bytes.
+    pub accepted_bytes: u64,
+    #[serde(default)]
+    pub written_bytes: u64,
+    #[serde(default)]
+    pub storage_wait_millis: u64,
+    #[serde(default)]
+    pub producer_wait_millis: u64,
+    #[serde(default)]
+    pub storage_error: Option<String>,
+    #[serde(default)]
+    pub capture_loss_possible: bool,
     #[serde(default)]
     pub capture_high_water: usize,
     #[serde(default)]
@@ -330,7 +345,11 @@ struct Delivery {
 }
 impl Delivery {
     fn new(state: &mut Observation) -> io::Result<Self> {
-        let mut bytes = serde_json::to_vec(state)?;
+        let mut visible = state.clone();
+        if visible.metadata_pending {
+            visible.launch_result = None;
+        }
+        let mut bytes = serde_json::to_vec(&visible)?;
         bytes.push(b'\n');
         if bytes.len() > MAX_FRAME {
             return Err(io::Error::other("Supervisor snapshot exceeds frame cap"));
@@ -431,6 +450,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let mut save_pending = 1usize;
     let mut pending_launch: Option<Request> = None;
     let mut prepared_ready = false;
+    let mut cancelled_launch = false;
     let mut gate_release: Option<SyncSender<()>> = None;
     let mut gate_receipt: Option<Receiver<crate::recovery::Receipt>> = None;
     let mut outcome_reply = false;
@@ -449,6 +469,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let mut codex_monitor: Option<crate::codex_status::Monitor> = None;
     let mut shutdown = false;
     let mut native_exit = false;
+    let mut retry_requested = false;
     let screen = Arc::new(Mutex::new(ScreenState {
         parser: vt100::Parser::new(ROWS.try_into().unwrap(), COLS.try_into().unwrap(), 0),
         output_bytes: 0,
@@ -461,19 +482,28 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
         while let Ok(event) = storage.events.try_recv() {
             use crate::persistence::Completion;
             match event {
-                Completion::Prepared => {
+                Completion::Retried => {}
+                Completion::Prepared(request) => {
                     save_pending = save_pending.saturating_sub(1);
-                    prepared_ready = true;
+                    prepared_ready = !cancelled_launch
+                        && request == state.launch_request
+                        && pending_launch.is_some();
                 }
-                Completion::Authorized => {
+                Completion::Authorized(request) => {
                     save_pending = save_pending.saturating_sub(1);
-                    if let Some(release) = gate_release.take() {
+                    if !cancelled_launch
+                        && request == state.launch_request
+                        && let Some(release) = gate_release.take()
+                    {
                         let _ = release.try_send(());
                     }
                 }
                 Completion::Saved => {
                     save_pending = save_pending.saturating_sub(1);
                     if save_pending == 0 {
+                        if metadata_failed {
+                            state.error = None;
+                        }
                         metadata_failed = false;
                     }
                 }
@@ -500,9 +530,6 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                         state.error = Some(format!(
                             "Launch/storage outcome not durable: {error}; stop or repair storage before retrying"
                         ));
-                        if controller.is_some() && delivery.is_none() {
-                            delivery = Some(Delivery::new(&mut state)?);
-                        }
                     }
                     flush_pending = false;
                     shutdown = false;
@@ -519,6 +546,10 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             gate_receipt = None;
             crate::recovery::crash_barrier(directory, "before-result");
             match result {
+                _ if cancelled_launch => {
+                    state.error =
+                        Some("Launch cancelled by Stop; metadata may still be pending".into());
+                }
                 crate::recovery::Receipt::Executed => {
                     let verified = state
                         .execution
@@ -582,9 +613,6 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             outcome_reply = false;
             state.metadata_pending = false;
             screen.lock().unwrap().snapshot(&mut state);
-            if controller.is_some() && delivery.is_none() {
-                delivery = Some(Delivery::new(&mut state)?);
-            }
         }
         if let Some(done) = &capture_done
             && done.try_recv().is_ok()
@@ -592,7 +620,33 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             eof = true;
             capture_done = None;
         }
+        if retry_requested {
+            let command = if metadata_failed {
+                crate::persistence::Command::Save(
+                    crate::persistence::metadata(&state),
+                    checkout.as_ref().map(|p| path_bytes(p)),
+                    task_identity.clone(),
+                )
+            } else {
+                crate::persistence::Command::Retry
+            };
+            if storage.commands.try_send(command).is_ok() {
+                if metadata_failed {
+                    save_pending += 1;
+                }
+                retry_requested = false;
+            }
+        }
         let progress = storage.progress.lock().unwrap().clone();
+        state.accepted_bytes = progress.accepted;
+        state.written_bytes = progress.written;
+        state.storage_wait_millis = progress
+            .operation
+            .map_or(0, |(_, since)| since.elapsed().as_millis() as u64);
+        state.producer_wait_millis = progress
+            .producer_wait
+            .map_or(0, |since| since.elapsed().as_millis() as u64);
+        state.storage_error = progress.error.clone();
         state.capture_pending_bytes = progress.pending_bytes;
         state.capture_high_water = progress.pending_high_water;
         state.capture_backpressure_count = progress.backpressure_count;
@@ -602,9 +656,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
         state.durable_completed_millis = progress.completed_millis;
         state.sync_commit_micros = progress.last_flush_micros;
         state.accepted_to_durable_millis = progress.accepted_to_durable_millis;
-        if let Some(error) = progress.error {
-            state.error = Some(error);
-        }
+
         state.metadata_pending = save_pending > 0 || metadata_failed;
         if (shutdown || matches!(state.lifecycle, Lifecycle::Exited | Lifecycle::Stopped))
             && child.is_none()
@@ -723,11 +775,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         // Accept/reject independently of the active client's commands or output.
-        for _ in 0..if pending_launch.is_some() || gate_receipt.is_some() || outcome_reply {
-            0
-        } else {
-            32
-        } {
+        for _ in 0..32 {
             match listener.accept() {
                 Ok((mut incoming, _)) => {
                     incoming.set_nonblocking(true)?;
@@ -779,11 +827,6 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                 return Ok(());
             }
         }
-        if (pending_launch.is_some() && !prepared_ready) || gate_receipt.is_some() || outcome_reply
-        {
-            thread::sleep(Duration::from_millis(5));
-            continue;
-        }
         if !(prepared_ready && pending_launch.is_some()) {
             let Some(stream) = controller.as_mut() else {
                 thread::sleep(Duration::from_millis(5));
@@ -830,7 +873,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             }
         };
         let mut deferred = false;
-        if !matches!(request, Request::Screen) {
+        if !matches!(request, Request::Screen) && !metadata_failed {
             state.error = None;
         }
         let save_history =
@@ -868,10 +911,25 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             _ => None,
         };
         let result = (|| -> Result<(), Box<dyn std::error::Error>> {
+            if !continuing
+                && (pending_launch.is_some() || gate_receipt.is_some() || outcome_reply)
+                && launch_request.as_deref() == Some(state.launch_request.as_str())
+            {
+                deferred = true;
+                return Ok(());
+            }
+            if matches!(&request, Request::QueryLaunch(id) if id == &state.launch_request)
+                && (pending_launch.is_some() || gate_receipt.is_some() || outcome_reply)
+            {
+                return Ok(());
+            }
             if let Some(recorded) = &recorded {
                 state.launch_result = Some(recorded.clone());
                 state.error = recorded.error.clone();
                 return Ok(());
+            }
+            if !continuing && child.is_some() && launch_request.is_some() {
+                return Err("A session already exists; attach to it".into());
             }
             if (pending_launch.is_some() || gate_receipt.is_some())
                 && matches!(
@@ -902,7 +960,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                         root.pop();
                     }
                     let path = PathBuf::from(std::ffi::OsString::from_vec(root)).canonicalize()?;
-                    if (child.is_some() || stopping.is_some()) && checkout.as_ref() != Some(&path) {
+                    if (child.is_some() || stopping.is_some() || !eof || capture_done.is_some() || storage.progress.lock().unwrap().pending_bytes > 0) && checkout.as_ref() != Some(&path) {
                         return Err(
                             "Stop the existing session before adopting another checkout".into()
                         );
@@ -929,6 +987,9 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                 }
                 Request::QueryLaunch(_) => return Err("Launch request unknown to this supervisor; do not replay uncertain activity after supervisor loss".into()),
                 Request::Launch(request) | Request::LaunchClaude(request) | Request::LaunchCodex(request) | Request::Resume(request) => {
+                    if !continuing && child.is_none() && stopping.is_none() && (!eof || capture_done.is_some() || flush_pending || storage.progress.lock().unwrap().pending_bytes > 0 || metadata_failed || (matches!(state.lifecycle, Lifecycle::Stopped | Lifecycle::Exited) && !final_flush)) {
+                        return Err("Previous session history is still pending; repair storage and press y to retry before starting another session".into());
+                    }
                     if state.execution.is_some() && !continuing && child.is_none() { return Err("Interrupted execution is uncertain; u reconciles process evidence. Verified reboot resolves unknown descendants; no automatic coding restart.".into()); }
                     if request.is_empty() || request.len() > 128 {
                         return Err("Launch request must contain 1–128 bytes".into());
@@ -946,6 +1007,8 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                         return Err("Native resume unavailable: no supported saved conversation identity. h opens retained history; c Claude / x Codex explicitly starts a new conversation.".into());
                     }
                     if !continuing {
+                        cancelled_launch = false;
+                        state.capture_loss_possible = false;
                         if !resume { state.native_conversation = None; }
                         state.execution = Some(crate::recovery::Execution::prepared()?);
                         state.reconciled = false;
@@ -1033,6 +1096,8 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                         }
 
                     }
+                    #[cfg(debug_assertions)]
+                    if !claude && !codex { command.env("RAT_PROOF_STORAGE_DIR", directory); }
                     command.env("TERM", "xterm-256color");
                     command.cwd(path);
                     crate::recovery::wrap(&mut command, &gate_path, &nonce)?;
@@ -1203,7 +1268,22 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     storage.commands.try_send(crate::persistence::Command::History(index, offset)).map_err(|e| format!("History busy: {e}; retry"))?;
                 }
                 Request::Screen => {}
+                Request::RetryStorage => {
+                    retry_requested = true;
+                    final_flush = false;
+                }
                 Request::Stop | Request::Shutdown => {
+                    if state.storage_wait_millis >= 250 || state.producer_wait_millis > 0 || state.storage_error.is_some() { state.capture_loss_possible = true; }
+                    if pending_launch.is_some() || gate_receipt.is_some() {
+                        let result = LaunchResult { request: state.launch_request.clone(), identity: state.identity.clone(), error: Some("Launch cancelled by Stop; metadata may still be pending".into()) };
+                        launches.insert(result.request.clone(), result.clone());
+                        state.launch_result = Some(result);
+                    }
+                    let cancelled_preparation = pending_launch.is_some() && child.is_none() && gate_receipt.is_none();
+                    cancelled_launch = true;
+                    pending_launch = None;
+                    prepared_ready = false;
+                    if cancelled_preparation { state.execution = None; }
                     gate_release = None;
                     if child.is_none() && state.execution.is_some() {
                         return Err("Interrupted execution remains uncertain; u reconciles evidence, d detaches. A missing native leader may require verified reboot before replacement or confirmed shutdown.".into());
@@ -1275,7 +1355,8 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                 state.output_bytes,
             );
         }
-        if !deferred && !outcome_reply && controller.is_some() {
+        if !continuing && controller.is_some() {
+            state.metadata_pending = save_pending > 0 || metadata_failed;
             delivery = Some(Delivery::new(&mut state)?);
             state.subscriber_frame_high_water = state
                 .subscriber_frame_high_water
@@ -1461,6 +1542,14 @@ pub fn scripted_child() -> io::Result<()> {
                         stdout.write_all(&[b'q'; 4096])?;
                     }
                     stdout.write_all(b"\x07osc13-complete\r\nfixture> ")?;
+                } else if let Some(length) = line.strip_prefix(b"pad14 ") {
+                    let length = std::str::from_utf8(length)
+                        .ok()
+                        .and_then(|value| value.parse::<usize>().ok())
+                        .filter(|length| *length <= 65536)
+                        .ok_or_else(|| io::Error::other("Invalid proof padding"))?;
+                    io::stdout().write_all(&vec![b'R'; length])?;
+                    print!("fixture> ");
                 } else if line == b"flood13" {
                     flood_run += 1;
                     let start_ns = fixture_clock()?;
@@ -1468,11 +1557,29 @@ pub fn scripted_child() -> io::Result<()> {
                     let mut max_write_micros = 0;
                     let payload = "X".repeat(111);
                     let mut stdout = io::stdout().lock();
+                    let mut ledger = std::env::var_os("RAT_PROOF_STORAGE_DIR")
+                        .map(PathBuf::from)
+                        .filter(|path| path.join("proof-storage-ledger").is_file())
+                        .and_then(|path| {
+                            OpenOptions::new()
+                                .create(true)
+                                .append(true)
+                                .open(path.join("proof-emitted.jsonl"))
+                                .ok()
+                        });
                     for number in 0..32768 {
                         let record = format!("flood13:{number:06}:{payload}\r\n");
                         let write = Instant::now();
                         stdout.write_all(record.as_bytes())?;
-                        max_write_micros = max_write_micros.max(write.elapsed().as_micros());
+                        let micros = write.elapsed().as_micros();
+                        max_write_micros = max_write_micros.max(micros);
+                        if let Some(ledger) = ledger.as_mut() {
+                            writeln!(
+                                ledger,
+                                "{}",
+                                serde_json::json!({"record":number,"bytes":record.len(),"write_us":micros,"elapsed_us":since.elapsed().as_micros()})
+                            )?;
+                        }
                     }
                     writeln!(
                         stdout,

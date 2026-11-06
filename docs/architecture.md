@@ -525,3 +525,41 @@ choices remain explicit. Readable historical segments stay independent of native
 records and checkout existence. This is only a most-recent-conversation proof
 path, not full resume/search/archive management. See the [native and separate
 reboot-style fixture evidence](proofs/16-native-recovery.md).
+
+
+### Slow and failing history storage (ticket 14)
+
+The sole persistence worker supports explicit RetryStorage (`y`) through a
+supervisor-side latch, independent of the 64-block capture queue and retained
+even when the 16-slot storage command queue is full. No replacement writer is
+started. A stalled syscall must return before that worker can retry; controls
+and process-stop work continue separately. Append errors retain the exact block
+and retry with a 100ms pause rather than spinning. Each attempt seeks the
+unchanged logical offset, so a real partial write is overwritten identically.
+Opening a chunk always retries its directory-sync obligation, including an
+existing empty chunk left by a failed directory sync. Storage error clearing
+requires successful append and the subsequent successful durability boundary.
+
+Observations expose owner-lifetime accepted PTY bytes (including the blocked
+producer block), current-session logical written/durable prefixes, pending/high
+water bytes, operation age and ongoing producer-wait age. Relaunch comparisons
+must baseline owner-lifetime counters. A written prefix is not a durable prefix.
+Final flush progress is published before its completion event and shutdown ACK.
+Stop can confirm process cleanup while history remains pending; replacement
+launch/adoption cannot strand that prior capture tail. Stop during capture
+trouble retains a possible-loss notice: accepted bytes are retained, while
+unread native/kernel output may be lost when the process terminates. There is
+no output discard or tcflush path, and backpressure does not suspend arbitrary
+agent work or descendants.
+
+Prepare/Authorize/result persistence now return honest provisional observations
+(`metadata_pending`, no launch_result) so the existing half-duplex client can
+send Stop, Shutdown, Screen and RetryStorage. The supervisor continues admitting
+and servicing connections throughout these stages. Prepared/Authorized events
+carry request identity; Stop cancels only the current owner's pending intent
+and drops its release sender. Late commits cannot start a canceled request.
+Authorization must still commit before gate release, and only committed results
+are acknowledged. Restored uncertain execution remains reserved and cannot be
+cleared by Stop. Same-request durable outcomes and unknown-request recovery
+remain in force. See `docs/proofs/14-storage-faults.md` for fault boundaries,
+raw observations, kernel-output loss and the macOS exit-verification finding.

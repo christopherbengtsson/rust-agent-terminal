@@ -40,6 +40,7 @@ Errors appear in the dashboard, where you can retry or quit.
 | Enter | Attach to the existing managed session |
 | Ctrl-] | Return from attached focus to dashboard navigation |
 | `s` | In dashboard focus, stop the fixture and keep the dashboard open |
+| `y` | Retry history storage after repair; the sole writer retains pending bytes |
 | `d` | In dashboard focus, detach and exit while preserving execution |
 | `q` / Esc / Ctrl-C | In dashboard focus, request supervisor shutdown and quit after confirmed stop |
 
@@ -177,7 +178,12 @@ The supervisor stores SQLite metadata and 64 KiB transcript chunks under
 Metadata is marked unconfirmed until its commit succeeds. Ordinary quit waits
 for process cleanup, PTY EOF, transcript file synchronization and the metadata
 commit. A failed write keeps quit visibly incomplete; repair storage and retry
-`q`. There is no automatic history deletion. Supervisor loss restores interrupted
+`q`, or press `y` to retry capture without requesting quit. Long storage operations
+and producer backpressure are visible; navigation and Stop remain available.
+Stopping during a storage stall retains accepted bytes for repair but can lose
+unread output in the native PTY/kernel during process termination; the dashboard
+keeps that possible-loss notice. Another launch waits for the old capture tail
+and final flush. There is no automatic history deletion. Supervisor loss restores interrupted
 records without starting coding; unresolved execution blocks replacement launch.
 An abrupt failure can lose output beyond the committed prefix. See
 [the history proof](docs/proofs/08-durable-history.md) for tested boundaries and

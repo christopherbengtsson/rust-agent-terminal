@@ -272,6 +272,42 @@ impl Ui {
                 app.session.durable_bytes
             )
         };
+        let message = if app.session.capture_pending_bytes > 0 {
+            format!(
+                "{message}\nCapture: accepted {} · written {} · pending {} · storage wait {} ms · producer wait {} ms · y retry / s stop{}",
+                app.session.accepted_bytes,
+                app.session.written_bytes,
+                app.session.capture_pending_bytes,
+                app.session.storage_wait_millis,
+                app.session.producer_wait_millis,
+                app.session
+                    .storage_error
+                    .as_ref()
+                    .map_or(String::new(), |e| format!("\n{e}"))
+            )
+        } else {
+            message
+        };
+        let message = if let Some(error) = &app.session.storage_error {
+            format!(
+                "{error}\nPending {} bytes · y retry / s stop\n{message}",
+                app.session.capture_pending_bytes
+            )
+        } else if app.session.storage_wait_millis >= 250 {
+            format!(
+                "History storage pending {} ms · {} bytes retained · y retry / s stop\n{message}",
+                app.session.storage_wait_millis, app.session.capture_pending_bytes
+            )
+        } else {
+            message
+        };
+        let message = if app.session.capture_loss_possible {
+            format!(
+                "Stopped during capture trouble: unread agent output may have been lost. Accepted bytes retained; y retry history.\n{message}"
+            )
+        } else {
+            message
+        };
         let message = if app.session.error.is_some() && !app.session.connection_lost {
             format!(
                 "{message}\n{}",
@@ -415,6 +451,29 @@ fn visible(text: &str) -> String {
 mod tests {
     use super::*;
     use ratatui::{Terminal, backend::TestBackend};
+
+    #[test]
+    fn stopped_capture_fault_keeps_possible_loss_and_retry_visible() {
+        let mut app = App::new("repo".into());
+        app.session.lifecycle = crate::session::Lifecycle::Stopped;
+        app.session.capture_loss_possible = true;
+        app.session.capture_pending_bytes = 4096;
+        app.session.storage_error =
+            Some("History capture blocked: No space; y retry or s stop".into());
+        let mut terminal = Terminal::new(TestBackend::new(160, 40)).unwrap();
+        terminal
+            .draw(|frame| Ui::default().draw(frame, &app))
+            .unwrap();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(text.contains("unread agent output may have been lost"));
+        assert!(text.contains("y retry"));
+    }
 
     #[test]
     fn native_cells_keep_style_width_and_cursor() {
