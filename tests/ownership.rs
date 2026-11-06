@@ -266,6 +266,7 @@ impl Drop for Fixture {
                     .file_name()
                     .to_string_lossy()
                     .starts_with("proof-storage-")
+                    || entry.file_name() == "proof-launch-receipt"
                 {
                     let _ = std::fs::remove_file(entry.path());
                 }
@@ -3032,4 +3033,45 @@ fn storage_abrupt_loss_preserves_durable_prefix_and_excludes_unsynced_tail() {
         controller.greeting["durable_bytes"],
         raw.len() - prefix.len()
     );
+}
+
+#[test]
+fn launch_receipt_wait_remains_provisional_between_authorization_and_result_save() {
+    let fixture = Fixture::new();
+    let mut dashboard = fixture.open();
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted");
+    dashboard.kill();
+    let mut controller = Controller::connect(&fixture);
+    let marker = fixture.state().join("proof-launch-receipt");
+    std::fs::write(&marker, "hold receipt on its worker").unwrap();
+    let provisional = controller.request_now(serde_json::json!({"Launch":"receipt-gap-14"}));
+    assert_eq!(provisional["metadata_pending"], true);
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let receipt_wait = loop {
+        let state = controller.request_now(serde_json::json!("Screen"));
+        if state["screen"].as_str().unwrap().contains("fixture>") {
+            break state;
+        }
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    assert_eq!(
+        receipt_wait["metadata_pending"], true,
+        "exec receipt/result is still unconfirmed"
+    );
+    assert!(receipt_wait["launch_result"].is_null());
+    controller.request_now(serde_json::json!("Stop"));
+    std::fs::remove_file(marker).unwrap();
+    let mut state = controller.request_now(serde_json::json!("Shutdown"));
+    let deadline = Instant::now() + Duration::from_secs(4);
+    while state["stopped"] != true {
+        assert!(
+            Instant::now() < deadline,
+            "cancelled receipt did not finish: {state}"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+        state = controller.request_now(serde_json::json!("Screen"));
+    }
 }

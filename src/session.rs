@@ -657,7 +657,11 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
         state.sync_commit_micros = progress.last_flush_micros;
         state.accepted_to_durable_millis = progress.accepted_to_durable_millis;
 
-        state.metadata_pending = save_pending > 0 || metadata_failed;
+        state.metadata_pending = save_pending > 0
+            || metadata_failed
+            || pending_launch.is_some()
+            || gate_receipt.is_some()
+            || outcome_reply;
         if (shutdown || matches!(state.lifecycle, Lifecycle::Exited | Lifecycle::Stopped))
             && child.is_none()
             && stopping.is_none()
@@ -671,7 +675,13 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
         {
             flush_pending = true;
         }
-        state.stopped = shutdown && final_flush && save_pending == 0 && !metadata_failed;
+        state.stopped = shutdown
+            && final_flush
+            && save_pending == 0
+            && !metadata_failed
+            && pending_launch.is_none()
+            && gate_receipt.is_none()
+            && !outcome_reply;
         if let Ok(error) = input_errors.try_recv() {
             state.error = Some(format!("Native input failed: {error}; stop or retry"));
         }
@@ -1131,6 +1141,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     let (receipt, result) = mpsc::sync_channel(1);
                     gate_release = Some(release);
                     gate_receipt = Some(result);
+                    let proof_receipt_pause = directory.join("proof-launch-receipt");
                     thread::spawn(move || {
                         let result = (|| -> io::Result<crate::recovery::Receipt> {
                             let deadline = std::time::Instant::now() + Duration::from_secs(2);
@@ -1155,6 +1166,9 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                             Ok(crate::recovery::Receipt::Executed)
                         })().unwrap_or_else(|e| crate::recovery::Receipt::Unknown(e.to_string()));
                         let _ = fs::remove_file(gate_path);
+                        #[cfg(debug_assertions)]
+                        while proof_receipt_pause.exists() { thread::sleep(Duration::from_millis(10)); }
+                        let _ = proof_receipt_pause;
                         let _ = receipt.send(result);
                     });
                     storage.commands.try_send(crate::persistence::Command::Authorize(crate::persistence::metadata(&state), Some(path_bytes(path)), task_identity.clone()))?;
@@ -1285,7 +1299,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     prepared_ready = false;
                     if cancelled_preparation { state.execution = None; }
                     gate_release = None;
-                    if child.is_none() && state.execution.is_some() {
+                    if child.is_none() && stopping.is_none() && state.execution.is_some() {
                         return Err("Interrupted execution remains uncertain; u reconciles evidence, d detaches. A missing native leader may require verified reboot before replacement or confirmed shutdown.".into());
                     }
                     shutdown |= matches!(request, Request::Shutdown);
@@ -1356,7 +1370,11 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             );
         }
         if !continuing && controller.is_some() {
-            state.metadata_pending = save_pending > 0 || metadata_failed;
+            state.metadata_pending = save_pending > 0
+                || metadata_failed
+                || pending_launch.is_some()
+                || gate_receipt.is_some()
+                || outcome_reply;
             delivery = Some(Delivery::new(&mut state)?);
             state.subscriber_frame_high_water = state
                 .subscriber_frame_high_water
