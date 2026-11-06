@@ -17,6 +17,9 @@ pub struct App {
     pub session: crate::session::Observation,
     pub attached: bool,
     pub history_open: bool,
+    pub cleanup_open: bool,
+    pub cleanup_selected: usize,
+    pub cleanup_preview: Option<crate::cleanup::Entry>,
     pub history_scroll: u16,
     history_index: usize,
     history_offset: u64,
@@ -36,6 +39,9 @@ impl App {
             session: Default::default(),
             attached: false,
             history_open: false,
+            cleanup_open: false,
+            cleanup_selected: 0,
+            cleanup_preview: None,
             history_scroll: 0,
             history_index: 0,
             history_offset: 0,
@@ -101,6 +107,80 @@ impl App {
                 return None;
             }
             return Some(Effect::Session(Request::Key(key)));
+        }
+        if key.modifiers.is_empty() && key.code == KeyCode::Char('g') {
+            self.cleanup_open = true;
+            self.cleanup_preview = None;
+            self.cleanup_selected = 0;
+            self.history_open = false;
+            self.session.cleanup = None;
+            return Some(Effect::Session(Request::Cleanup { page: 0 }));
+        }
+        if self.cleanup_open
+            && (key.modifiers.is_empty()
+                || (key.code == KeyCode::Char('D') && key.modifiers == KeyModifiers::SHIFT))
+        {
+            match key.code {
+                KeyCode::Esc => {
+                    if self.cleanup_preview.take().is_none() {
+                        self.cleanup_open = false;
+                    }
+                    return None;
+                }
+                KeyCode::Char('D') => {
+                    if let Some(preview) = self.cleanup_preview.take() {
+                        self.history_index = 0;
+                        self.history_offset = 0;
+                        self.history_scroll = 0;
+                        self.session.history = None;
+                        return Some(Effect::Session(Request::DeleteHistory { id: preview.id }));
+                    }
+                    return None;
+                }
+                KeyCode::Enter if self.cleanup_preview.is_none() => {
+                    if let Some(entry) = self
+                        .session
+                        .cleanup
+                        .as_ref()
+                        .and_then(|page| page.entries.get(self.cleanup_selected))
+                    {
+                        if entry.eligible {
+                            self.cleanup_preview = Some(entry.clone());
+                        } else {
+                            self.error = Some(entry.status.clone());
+                        }
+                    }
+                    return None;
+                }
+                KeyCode::Char('j') | KeyCode::Down if self.cleanup_preview.is_none() => {
+                    self.cleanup_selected = (self.cleanup_selected + 1).min(
+                        self.session
+                            .cleanup
+                            .as_ref()
+                            .map_or(0, |page| page.entries.len().saturating_sub(1)),
+                    );
+                    return None;
+                }
+                KeyCode::Char('k') | KeyCode::Up if self.cleanup_preview.is_none() => {
+                    self.cleanup_selected = self.cleanup_selected.saturating_sub(1);
+                    return None;
+                }
+                KeyCode::Char('n' | 'p') if self.cleanup_preview.is_none() => {
+                    let page = self.session.cleanup.as_ref()?;
+                    let index = if key.code == KeyCode::Char('n') && page.next {
+                        page.index + 1
+                    } else if key.code == KeyCode::Char('p') {
+                        page.index.saturating_sub(1)
+                    } else {
+                        return None;
+                    };
+                    self.cleanup_selected = 0;
+                    self.session.cleanup = None;
+                    return Some(Effect::Session(Request::Cleanup { page: index }));
+                }
+                KeyCode::Char('y' | 's' | 'q') => {}
+                _ => return None,
+            }
         }
         if key.modifiers.is_empty() {
             match key.code {
@@ -241,12 +321,14 @@ impl App {
     pub fn keyboard_help(&self) -> &'static str {
         if self.attached {
             "Native input · Ctrl-C interrupt · Ctrl-] / Ctrl-5 dashboard (keeps session running)"
+        } else if self.cleanup_open {
+            "Cleanup: j/k select · n/p page · Enter preview · D confirm selected deletion · Esc cancel/back · g refresh · y capture retry · s stop · q quit"
         } else if self.session.lifecycle == crate::session::Lifecycle::Interrupted {
-            "u reconcile · v resume · h history · d detach · q quit/stop · j/k select · r refresh"
+            "u reconcile · v resume · g cleanup · h history · d detach · q quit/stop · j/k select · r refresh"
         } else if self.history_open {
-            "q quit/stop/retry · s stop · y retry history · h live · n/p session · [/] page · j/k scroll · d detach"
+            "q quit/stop/retry · s stop · y retry history · g cleanup · h live · n/p session · [/] page · j/k scroll · d detach"
         } else {
-            "q quit/stop · y retry history · v resume · c new Claude · x new Codex · a adopt · Enter attach · h history · s stop · d detach · j/k · r refresh"
+            "q quit/stop · y retry history · v resume · c new Claude · x new Codex · a adopt · Enter attach · g cleanup · h history · s stop · d detach · j/k · r refresh"
         }
     }
 

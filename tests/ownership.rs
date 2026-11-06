@@ -3075,3 +3075,42 @@ fn launch_receipt_wait_remains_provisional_between_authorization_and_result_save
         state = controller.request_now(serde_json::json!("Screen"));
     }
 }
+
+#[test]
+fn explicit_cleanup_warns_previews_cancels_and_deletes_only_selected_history() {
+    let fixture = Fixture::new();
+    let sentinel = fixture.repository.join("working-change");
+    std::fs::write(&sentinel, b"keep checkout").unwrap();
+    let mut dashboard = fixture.open();
+    dashboard.wait("Discovery complete");
+    std::fs::write(fixture.state().join("proof-storage-available"), b"0").unwrap();
+    dashboard.wait("Low storage");
+    dashboard.send(b"al");
+    dashboard.wait("fixture>");
+    dashboard.send(b"\x1ds");
+    dashboard.wait("Process: Stopped");
+    dashboard.send(b"g");
+    dashboard.wait("History cleanup");
+    dashboard.wait("allocated bytes");
+    dashboard.send(b"\r");
+    dashboard.wait("Confirm selected history deletion");
+    dashboard.send(b"\x1b");
+    dashboard.wait("History cleanup");
+    dashboard.send(b"\r");
+    dashboard.wait("Confirm selected history deletion");
+    dashboard.send(b"D");
+    dashboard.wait("History deletion completed");
+    assert_eq!(std::fs::read(&sentinel).unwrap(), b"keep checkout");
+    dashboard.wait("Low storage");
+    dashboard.send(b"\x1b");
+    dashboard.wait("h history");
+    dashboard.send(b"q");
+    let deadline = Instant::now() + Duration::from_secs(8);
+    while dashboard.child.try_wait().unwrap().is_none() {
+        assert!(
+            Instant::now() < deadline,
+            "cleanup dashboard failed to quit"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}

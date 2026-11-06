@@ -5,7 +5,10 @@ use serde::{Deserialize, Serialize};
 use std::{
     fs::{File, OpenOptions},
     io::{self, Read, Seek, SeekFrom, Write},
-    os::unix::fs::OpenOptionsExt,
+    os::{
+        fd::AsRawFd,
+        unix::{ffi::OsStrExt, fs::OpenOptionsExt},
+    },
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
@@ -29,6 +32,7 @@ pub struct HistoryPage {
 }
 #[derive(Clone, Debug, Default)]
 pub struct Progress {
+    pub capacity: crate::cleanup::Capacity,
     pub accepted: u64,
     pub written: u64,
     pub operation: Option<(&'static str, Instant)>,
@@ -85,6 +89,8 @@ pub fn metadata(state: &Observation) -> Box<Observation> {
     saved.formatted = String::new();
     saved.decoded = None;
     saved.history = None;
+    saved.cleanup = None;
+    saved.cleanup_message = None;
     saved.status = crate::native_status::Status::default();
     Box::new(saved)
 }
@@ -93,11 +99,17 @@ pub enum Command {
     Authorize(Box<Observation>, Option<Vec<u8>>, String),
     Save(Box<Observation>, Option<Vec<u8>>, String),
     History(usize, u64),
+    Cleanup(usize),
+    Delete(String),
+    Seal(String),
     Retry,
     Flush,
 }
 pub enum Completion {
     Retried,
+    Sealed,
+    Cleanup(crate::cleanup::Page),
+    Deleted(String),
     Prepared(String),
     Authorized(String),
     Saved,
@@ -136,12 +148,16 @@ impl Worker {
             if ready_tx.send(restored).is_err() { return; }
             let mut pending: Option<(String, Vec<u8>, Instant)> = None;
             let mut since = Instant::now();
+            let mut capacity_since = Instant::now() - Duration::from_secs(1);
             loop {
                 // Reserve control capacity independently from capture traffic.
                 if let Ok(command) = control.try_recv() {
-                    let kind = match &command { Command::Save(..) | Command::Prepare(..) | Command::Authorize(..) => "metadata", Command::History(..) => "history", Command::Retry => "retry", Command::Flush => "flush" };
+                    let kind = match &command { Command::Save(..) | Command::Prepare(..) | Command::Authorize(..) => "metadata", Command::History(..) => "history", Command::Cleanup(..) | Command::Delete(..) | Command::Seal(..) => "cleanup", Command::Retry => "retry", Command::Flush => "flush" };
                     status.lock().unwrap().operation = Some((kind, Instant::now()));
                     let result = match command {
+                        Command::Cleanup(index) => store.start_cleanup(index).map(|_| Completion::Sealed),
+                        Command::Delete(id) => store.start_delete(&id).map(|_| Completion::Sealed),
+                        Command::Seal(id) => store.seal(&id).map(|_| Completion::Sealed),
                         Command::Retry => { since = Instant::now() - FLUSH; Ok(Completion::Retried) },
                         Command::Prepare(state, checkout, task) => store.fault("prepare").and_then(|_| store.save(&state, checkout, task)).map(|_| Completion::Prepared(state.launch_request.clone())),
                         Command::Authorize(state, checkout, task) => store.fault("authorize").and_then(|_| store.save(&state, checkout, task)).map(|_| Completion::Authorized(state.launch_request.clone())),
@@ -167,6 +183,17 @@ impl Worker {
                     store.publish(&mut status.lock().unwrap());
                     let event = result.unwrap_or_else(|e: Box<dyn std::error::Error + Send + Sync>| Completion::Error(kind, e.to_string()));
                     if tx.send(event).is_err() { break; }
+                }
+                if capacity_since.elapsed() >= Duration::from_secs(1) {
+                    status.lock().unwrap().capacity = crate::cleanup::Capacity::sample(&store.directory);
+                    capacity_since = Instant::now();
+                }
+                if store.cleanup_job.is_some() {
+                    match store.cleanup_step() {
+                        Ok(Some(event)) => { if tx.send(event).is_err() { break; } },
+                        Ok(None) => {},
+                        Err(error) => { store.cleanup_job = None; let _ = tx.send(Completion::Error("cleanup", format!("History cleanup incomplete: {error}; g reopen then explicitly retry selected history"))); }
+                    }
                 }
                 if pending.is_none() {
                     match capture.recv_timeout(Duration::from_millis(5)) {
@@ -210,7 +237,13 @@ impl Worker {
         ))
     }
 }
+enum CleanupJob {
+    List(crate::cleanup::Page, std::fs::ReadDir),
+    Delete(String, std::fs::ReadDir),
+}
 struct Store {
+    cleanup_job: Option<CleanupJob>,
+    directory_handle: File,
     directory: PathBuf,
     db: Connection,
     active: Option<(String, File, u64)>,
@@ -224,7 +257,10 @@ struct Store {
 }
 impl Store {
     fn publish(&self, progress: &mut Progress) {
-        progress.written = self.active.as_ref().map_or(0, |(_, _, offset)| *offset);
+        progress.written = self
+            .active
+            .as_ref()
+            .map_or(self.total, |(_, _, offset)| *offset);
         progress.durable = self.total;
         progress.last_flush_micros = self.sync_micros;
         progress.flush_count = self.completions;
@@ -232,6 +268,11 @@ impl Store {
         progress.accepted_to_durable_millis = self.accepted_to_durable_millis;
     }
     fn open(directory: PathBuf) -> Result<Self> {
+        // Anchor cleanup to the validated directory inode, never a mutable saved path.
+        let directory_handle = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW)
+            .open(&directory)?;
         let path = directory.join("history.sqlite3");
         // Create privately before SQLite opens it; the parent is already validated.
         OpenOptions::new()
@@ -246,7 +287,7 @@ impl Store {
             "PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL; PRAGMA fullfsync=ON;",
         )?;
         let version: u32 = db.pragma_query_value(None, "user_version", |r| r.get(0))?;
-        if version > 2 {
+        if version > 3 {
             return Err("History schema is newer than this executable".into());
         }
         if version == 0 {
@@ -262,7 +303,19 @@ impl Store {
             tx.execute_batch("CREATE TABLE IF NOT EXISTS requests (id TEXT PRIMARY KEY, result TEXT NOT NULL); PRAGMA user_version=2;")?;
             tx.commit()?;
         }
-        Ok(Self {
+        if version < 3 {
+            let tx = db.transaction()?;
+            tx.execute_batch(
+                "ALTER TABLE sessions ADD COLUMN created INTEGER;
+                ALTER TABLE sessions ADD COLUMN sealed INTEGER NOT NULL DEFAULT 0;
+                ALTER TABLE sessions ADD COLUMN history_state TEXT NOT NULL DEFAULT 'retained';
+                PRAGMA user_version=3;",
+            )?;
+            tx.commit()?;
+        }
+        let mut store = Self {
+            cleanup_job: None,
+            directory_handle,
             directory,
             db,
             active: None,
@@ -273,7 +326,261 @@ impl Store {
             completions: 0,
             completed_millis: 0,
             accepted_to_durable_millis: 0,
-        })
+        };
+        // Only a previously committed explicit intent authorizes restart work.
+        store.resume_delete()?;
+        Ok(store)
+    }
+    fn seal(&mut self, id: &str) -> Result<()> {
+        let json: String =
+            self.db
+                .query_row("SELECT state FROM sessions WHERE id=?1", [id], |r| r.get(0))?;
+        let state: Observation = serde_json::from_str(&json)?;
+        if state.execution.is_some()
+            || !matches!(state.lifecycle, Lifecycle::Stopped | Lifecycle::Exited)
+        {
+            return Err("History still has active or uncertain execution".into());
+        }
+        if self
+            .active
+            .as_ref()
+            .is_some_and(|(active, _, _)| active == id)
+        {
+            if self.oldest.is_some() {
+                return Err("History final flush still pending".into());
+            }
+            self.active = None;
+        }
+        self.db
+            .execute("UPDATE sessions SET sealed=1 WHERE id=?1", [id])?;
+        Ok(())
+    }
+    fn start_cleanup(&mut self, index: usize) -> Result<()> {
+        if self.cleanup_job.is_some() {
+            return Err("Cleanup busy; retry shortly".into());
+        }
+        let mut statement = self.db.prepare("SELECT id,identity,state,created,sealed,history_state FROM sessions WHERE history_state!='deleted' ORDER BY sealed DESC, created IS NULL, created ASC, id ASC LIMIT ?1 OFFSET ?2")?;
+        let mut rows = statement.query(params![
+            crate::cleanup::LIST_SIZE + 1,
+            index.saturating_mul(crate::cleanup::LIST_SIZE)
+        ])?;
+        let mut page = crate::cleanup::Page {
+            index,
+            ..Default::default()
+        };
+        while let Some(row) = rows.next()? {
+            if page.entries.len() == crate::cleanup::LIST_SIZE {
+                page.next = true;
+                break;
+            }
+            let state: Observation = serde_json::from_str(&row.get::<_, String>(2)?)?;
+            let sealed: bool = row.get(4)?;
+            let history_state: String = row.get(5)?;
+            let eligible = sealed
+                && state.execution.is_none()
+                && matches!(state.lifecycle, Lifecycle::Stopped | Lifecycle::Exited);
+            page.entries.push(crate::cleanup::Entry {
+                id: row.get(0)?,
+                identity: row.get(1)?,
+                checkout: state.adopted.unwrap_or_default(),
+                created: row.get(3)?,
+                bytes: Some(0),
+                eligible,
+                status: if history_state == "deleting" {
+                    "incomplete deletion; explicitly retry".into()
+                } else if eligible {
+                    "stopped; final history committed".into()
+                } else {
+                    "unavailable: capture/execution not sealed".into()
+                },
+            });
+        }
+        self.cleanup_job = Some(CleanupJob::List(page, std::fs::read_dir(&self.directory)?));
+        Ok(())
+    }
+    fn start_delete(&mut self, id: &str) -> Result<()> {
+        if uuid::Uuid::parse_str(id)?.to_string() != id {
+            return Err("Invalid managed session UUID".into());
+        }
+        if self.cleanup_job.is_some() {
+            return Err("Cleanup busy; retry shortly".into());
+        }
+        let (json, sealed, history): (String, bool, String) = self.db.query_row(
+            "SELECT state,sealed,history_state FROM sessions WHERE id=?1",
+            [id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )?;
+        let state: Observation = serde_json::from_str(&json)?;
+        if history == "deleted" {
+            return Err("History already deleted".into());
+        }
+        if !sealed
+            || state.execution.is_some()
+            || !matches!(state.lifecycle, Lifecycle::Stopped | Lifecycle::Exited)
+        {
+            return Err("History deletion refused: active, uncertain or unflushed session".into());
+        }
+        // The accepted EOF/final-flush seal closed any retained file handle.
+        if self
+            .active
+            .as_ref()
+            .is_some_and(|(active, _, _)| active == id)
+            || self.oldest.is_some()
+                && self
+                    .active
+                    .as_ref()
+                    .is_some_and(|(active, _, _)| active == id)
+        {
+            return Err("History capture still owns selected transcript".into());
+        }
+        self.fault("delete-intent")?;
+        let tx = self.db.transaction()?;
+        tx.execute(
+            "UPDATE sessions SET history_state='deleting' WHERE id=?1",
+            [id],
+        )?;
+        tx.commit()?;
+        self.cleanup_job = Some(CleanupJob::Delete(
+            id.into(),
+            std::fs::read_dir(&self.directory)?,
+        ));
+        Ok(())
+    }
+    fn resume_delete(&mut self) -> Result<()> {
+        let id: Option<String> = self
+            .db
+            .query_row(
+                "SELECT id FROM sessions WHERE history_state='deleting' ORDER BY id LIMIT 1",
+                [],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if let Some(id) = id {
+            self.start_delete(&id)?;
+        }
+        Ok(())
+    }
+    fn matching_chunk(name: &std::ffi::OsStr, id: &str) -> bool {
+        let Some(name) = name.to_str() else {
+            return false;
+        };
+        let Some(ordinal) = name
+            .strip_prefix(id)
+            .and_then(|name| name.strip_prefix('-'))
+            .and_then(|name| name.strip_suffix(".transcript"))
+        else {
+            return false;
+        };
+        // Canonical format only; never use a saved arbitrary path or checkout.
+        ordinal.len() >= 8
+            && ordinal.bytes().all(|c| c.is_ascii_digit())
+            && ordinal
+                .parse::<u64>()
+                .is_ok_and(|number| format!("{number:08}") == ordinal)
+    }
+    fn chunk_metadata(&self, name: &std::ffi::OsStr) -> Result<(u64, bool)> {
+        let name = std::ffi::CString::new(name.as_bytes())?;
+        let mut meta = std::mem::MaybeUninit::<libc::stat>::uninit();
+        // SAFETY: anchored directory fd, single relative name, initialized output on success.
+        if unsafe {
+            libc::fstatat(
+                self.directory_handle.as_raw_fd(),
+                name.as_ptr(),
+                meta.as_mut_ptr(),
+                libc::AT_SYMLINK_NOFOLLOW,
+            )
+        } != 0
+        {
+            return Err(io::Error::last_os_error().into());
+        }
+        // SAFETY: fstatat succeeded.
+        let meta = unsafe { meta.assume_init() };
+        Ok((
+            (meta.st_blocks.max(0) as u64).saturating_mul(512),
+            meta.st_mode & libc::S_IFMT == libc::S_IFREG && meta.st_nlink == 1,
+        ))
+    }
+    fn unlink_chunk(&self, name: &std::ffi::OsStr) -> Result<()> {
+        let name = std::ffi::CString::new(name.as_bytes())?;
+        // SAFETY: name is one validated relative filename, anchored to our private directory.
+        if unsafe { libc::unlinkat(self.directory_handle.as_raw_fd(), name.as_ptr(), 0) } != 0 {
+            return Err(io::Error::last_os_error().into());
+        }
+        Ok(())
+    }
+    fn cleanup_step(&mut self) -> Result<Option<Completion>> {
+        let Some(mut job) = self.cleanup_job.take() else {
+            return Ok(None);
+        };
+        for _ in 0..64 {
+            let next = match &mut job {
+                CleanupJob::List(_, scan) | CleanupJob::Delete(_, scan) => scan.next(),
+            };
+            let Some(entry) = next else {
+                return match job {
+                    CleanupJob::List(page, _) => Ok(Some(Completion::Cleanup(page))),
+                    CleanupJob::Delete(id, _) => {
+                        self.fault("delete-directory-sync")?;
+                        self.directory_handle.sync_all()?;
+                        self.fault("delete-complete")?;
+                        let tx = self.db.transaction()?;
+                        tx.execute(
+                            "UPDATE sessions SET history_state='deleted',durable=0 WHERE id=?1",
+                            [&id],
+                        )?;
+                        tx.commit()?;
+                        let current: String =
+                            self.db
+                                .query_row("SELECT state FROM app WHERE id=1", [], |r| r.get(0))?;
+                        let current: Observation = serde_json::from_str(&current)?;
+                        if current
+                            .identity
+                            .as_deref()
+                            .and_then(|identity| session_id(identity).ok())
+                            .as_deref()
+                            == Some(&id)
+                        {
+                            self.total = 0;
+                        }
+                        self.resume_delete()?;
+                        Ok(Some(Completion::Deleted(id)))
+                    }
+                };
+            };
+            let entry = entry?;
+            let name = entry.file_name();
+            match &mut job {
+                CleanupJob::List(page, _) => {
+                    for row in &mut page.entries {
+                        if Self::matching_chunk(&name, &row.id) {
+                            match self.chunk_metadata(&name) {
+                                Ok((allocated, true)) => {
+                                    row.bytes =
+                                        row.bytes.map(|bytes| bytes.saturating_add(allocated))
+                                }
+                                _ => {
+                                    row.bytes = None;
+                                    row.eligible = false;
+                                    row.status = "unavailable: unsafe or unreadable chunk".into();
+                                }
+                            }
+                        }
+                    }
+                }
+                CleanupJob::Delete(id, _) if Self::matching_chunk(&name, id) => {
+                    let (_, safe) = self.chunk_metadata(&name)?;
+                    if !safe {
+                        return Err("Unsafe transcript object; deletion remains incomplete".into());
+                    }
+                    self.fault("delete-unlink")?;
+                    self.unlink_chunk(&name)?;
+                    self.fault("delete-after-unlink")?;
+                }
+                _ => {}
+            }
+        }
+        self.cleanup_job = Some(job);
+        Ok(None)
     }
     fn restore(&mut self) -> Result<Restored> {
         let launches = self
@@ -381,12 +688,14 @@ impl Store {
         state.formatted.clear();
         state.decoded = None;
         state.history = None;
+        state.cleanup = None;
+        state.cleanup_message = None;
         state.error = None;
         let json = serde_json::to_string(&state)?;
         let tx = self.db.transaction()?;
         tx.execute("INSERT INTO app VALUES(1,?1,?2,?3) ON CONFLICT(id) DO UPDATE SET state=excluded.state,checkout=excluded.checkout,task=excluded.task", params![json,path,task])?;
         if let Some(identity) = state.identity.as_ref() {
-            tx.execute("INSERT INTO sessions(id,identity,state) VALUES(?1,?2,?3) ON CONFLICT(id) DO UPDATE SET state=excluded.state", params![session_id(identity)?,identity,json])?;
+            tx.execute("INSERT INTO sessions(id,identity,state,created) VALUES(?1,?2,?3,unixepoch()) ON CONFLICT(id) DO UPDATE SET state=excluded.state", params![session_id(identity)?,identity,json])?;
         }
         if let Some(result) = &state.launch_result {
             tx.execute(
@@ -401,6 +710,14 @@ impl Store {
         self.directory.join(format!("{id}-{chunk:08}.transcript"))
     }
     fn append(&mut self, id: &str, bytes: &[u8], accepted: Instant) -> Result<usize> {
+        let retained: bool = self.db.query_row(
+            "SELECT history_state='retained' FROM sessions WHERE id=?1",
+            [id],
+            |r| r.get(0),
+        )?;
+        if !retained {
+            return Err("Selected transcript has a deletion tombstone".into());
+        }
         if bytes.len() > 4096 {
             return Err("Capture block exceeds 4096 bytes".into());
         }
@@ -479,7 +796,7 @@ impl Store {
         let (id, identity, durable, json): (String, String, u64, String) = self
             .db
             .query_row(
-                "SELECT id,identity,durable,state FROM sessions ORDER BY rowid DESC LIMIT 1 OFFSET ?1",
+                "SELECT id,identity,durable,state FROM sessions WHERE history_state='retained' ORDER BY rowid DESC LIMIT 1 OFFSET ?1",
                 [index],
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
             )
@@ -490,7 +807,10 @@ impl Store {
         let mut raw = Vec::with_capacity(PAGE as usize);
         let mut position = offset;
         while position < end {
-            let mut file = File::open(self.file(&id, position / CHUNK))?;
+            let mut file = OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_NOFOLLOW)
+                .open(self.file(&id, position / CHUNK))?;
             file.seek(SeekFrom::Start(position % CHUNK))?;
             let length = (end - position).min(CHUNK - position % CHUNK);
             let mut bytes = vec![0; length as usize];

@@ -1,4 +1,5 @@
 mod app;
+mod cleanup;
 mod codex_status;
 mod events;
 mod git;
