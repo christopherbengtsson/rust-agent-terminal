@@ -2199,3 +2199,71 @@ fn prior_boot_native_record_stays_interrupted_until_explicit_reconcile_then_resu
     dashboard.send(&[0x1d]);
     dashboard.send(b"q");
 }
+
+#[test]
+fn oversized_osc_is_captured_without_growing_live_screen_history() {
+    let fixture = Fixture::new();
+    let mut dashboard = fixture.open();
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted");
+    dashboard.send(b"l");
+    dashboard.wait("fixture>");
+    dashboard.kill();
+    let owner = owner_pid(&fixture);
+    let rss = || -> u64 {
+        String::from_utf8(
+            Command::new("ps")
+                .args(["-p", &owner, "-o", "rss="])
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap()
+    };
+    let mut control = Controller::connect(&fixture);
+    let before = control.greeting["output_bytes"].as_u64().unwrap();
+    let before_rss = rss();
+    control.request(serde_json::json!({"Input":b"osc13\r".to_vec()}));
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let after = loop {
+        let state = control.request(serde_json::json!("Screen"));
+        if state["screen"].as_str().unwrap().contains("osc13-complete")
+            && state["durable_bytes"] == state["output_bytes"]
+        {
+            break state;
+        }
+        assert!(Instant::now() < deadline, "oversized OSC never drained");
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert_eq!(
+        after["output_bytes"].as_u64().unwrap() - before,
+        8_388_638,
+        "raw capture includes the entire oversized control and final marker"
+    );
+    let after_rss = rss();
+    eprintln!(
+        "OSC13 supervisor RSS before/after: {before_rss}/{after_rss} KiB, captured8MiB control"
+    );
+    assert!(
+        after_rss <= before_rss + 4096,
+        "live OSC parser retained payload-sized memory: {before_rss}->{after_rss}KiB"
+    );
+    let page = loop {
+        let state = control.request(serde_json::json!({"History":{"index":0,"offset":before}}));
+        if state["history"]["offset"].as_u64() == Some(before) {
+            break state["history"].clone();
+        }
+        assert!(Instant::now() < deadline);
+    };
+    assert!(
+        page["text"]
+            .as_str()
+            .unwrap()
+            .starts_with("\\u{1b}]2;qqqqqq")
+    );
+    control.request(serde_json::json!("Shutdown"));
+}

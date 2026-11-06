@@ -469,7 +469,9 @@ The exact transcript is independently captured through 64 x 4096-byte slots,
 with a worker block and a waiting producer block: at most 270336 pending owned
 raw bytes. Capture blocks on saturation and reports pending high-water and actual
 backpressure count/wait time. Screens retain zero scrollback and at most 200x80
-cells per primary/alternate screen; protocol frames remain capped at 4MiB.
+cells per primary/alternate screen. vt100 defaults are disabled so vte uses a
+fixed 1024-byte OSC payload rather than a growable control-string Vec; the exact
+raw control remains in durable history. Protocol frames remain capped at 4MiB.
 Connection loss keeps the last identity/lifecycle, labels process state unknown
 and revokes semantic status. `d` exits locally even after transport loss; reopen
 resynchronizes without launching. `q` still requires confirmed stop and flush.
