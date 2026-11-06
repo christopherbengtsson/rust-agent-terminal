@@ -1,4 +1,5 @@
 mod app;
+mod child_scope;
 mod cleanup;
 mod codex_status;
 mod events;

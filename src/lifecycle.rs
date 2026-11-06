@@ -1,4 +1,4 @@
-//! Bounded process-group termination runs away from transport and UI loops.
+//! Bounded owned-scope termination runs away from transport and UI loops.
 use std::{
     io,
     process::{Command, Stdio},
@@ -11,19 +11,20 @@ pub struct Outcome {
     pub child: Option<Child>,
     pub error: Option<String>,
 }
-pub fn stop(mut child: Child, group: i32) -> Receiver<Outcome> {
+pub fn stop(mut child: Child, scope: crate::child_scope::Scope) -> Receiver<Outcome> {
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
         let result = (|| -> io::Result<()> {
+            let started = Instant::now();
+            scope.freeze(started + Duration::from_millis(500))?;
             // macOS can report EPERM transiently while a signalled PTY leader
-            // is exiting. Preserve the error, but let actual reaping and group
+            // is exiting. Preserve the error, but let actual reaping and scope
             // absence establish success within the same bounded deadline.
-            let mut signal_error = match signal(group, libc::SIGTERM) {
+            let mut signal_error = match scope.signal_and_running(Some(libc::SIGTERM)).map(|_| ()) {
                 Ok(()) => None,
                 Err(error) if error.raw_os_error() == Some(libc::EPERM) => Some(error),
                 Err(error) => return Err(error),
             };
-            let started = Instant::now();
             let mut escalated = false;
             loop {
                 let exited = child
@@ -31,13 +32,15 @@ pub fn stop(mut child: Child, group: i32) -> Receiver<Outcome> {
                     .map_err(|e| io::Error::other(format!("wait child: {e}")))?
                     .is_some();
                 if exited
-                    && !group_running(group)
-                        .map_err(|e| io::Error::other(format!("verify group: {e}")))?
+                    && !scope
+                        .signal_and_running(None)
+                        .map_err(|e| io::Error::other(format!("verify owned scope: {e}")))?
+                    && !group_running(scope.leader())?
                 {
                     return Ok(());
                 }
                 if !escalated && started.elapsed() >= Duration::from_millis(500) {
-                    match signal(group, libc::SIGKILL) {
+                    match scope.signal_and_running(Some(libc::SIGKILL)).map(|_| ()) {
                         Ok(()) => {}
                         Err(error) if error.raw_os_error() == Some(libc::EPERM) => {
                             signal_error = Some(error)
@@ -70,21 +73,7 @@ pub fn stop(mut child: Child, group: i32) -> Receiver<Outcome> {
     });
     rx
 }
-fn signal(group: i32, signal: i32) -> io::Result<()> {
-    if group <= 1 {
-        return Err(io::Error::other("Invalid managed process group"));
-    }
-    // SAFETY: kill only receives integer identifiers; negative targets the managed group.
-    if unsafe { libc::kill(-group, signal) } == 0 {
-        return Ok(());
-    }
-    let error = io::Error::last_os_error();
-    if error.raw_os_error() == Some(libc::ESRCH) {
-        Ok(())
-    } else {
-        Err(error)
-    }
-}
+
 fn group_running(group: i32) -> io::Result<bool> {
     // Zombies cannot execute. A dead leader alone does not prove descendant cleanup.
     let mut inspection = Command::new("ps")

@@ -477,7 +477,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let mut child: Option<Box<dyn portable_pty::Child + Send + Sync>> = None;
     let mut writer: Option<SyncSender<Vec<u8>>> = None;
     let (write_errors, input_errors) = mpsc::sync_channel(1);
-    let mut process_group = 0;
+    let mut owned_scope: Option<crate::child_scope::Scope> = None;
     let mut stopping: Option<Receiver<crate::lifecycle::Outcome>> = None;
     let mut monitor: Option<crate::native_status::Monitor> = None;
     let mut codex_monitor: Option<crate::codex_status::Monitor> = None;
@@ -751,7 +751,10 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     writer = None;
                     state.lifecycle = Lifecycle::Stopping;
                     stop_drain.store(true, Ordering::Release);
-                    stopping = Some(crate::lifecycle::stop(child.take().unwrap(), process_group));
+                    stopping = Some(crate::lifecycle::stop(
+                        child.take().unwrap(),
+                        owned_scope.as_ref().unwrap().clone(),
+                    ));
                 }
                 Ok(None) => {}
                 Err(error) => {
@@ -771,6 +774,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                 state.error = Some(error);
                 shutdown = false;
             } else {
+                owned_scope = None;
                 state.lifecycle = if native_exit {
                     Lifecycle::Exited
                 } else {
@@ -1189,11 +1193,12 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                         .into(),
                     );
                     drop(pty.slave);
-                    process_group = launched
+                    let process_group = launched
                         .process_id()
                         .ok_or("Missing managed process identity")?
                         .try_into()?;
                     state.execution.as_mut().ok_or("Missing durable intent")?.identify(process_group)?;
+                    owned_scope = Some(crate::child_scope::Scope::new(process_group)?);
                     let (release, authorized) = mpsc::sync_channel(1);
                     let (receipt, result) = mpsc::sync_channel(1);
                     gate_release = Some(release);
@@ -1409,7 +1414,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                             native_exit = false;
                             state.lifecycle = Lifecycle::Stopping;
                             stop_drain.store(true, Ordering::Release);
-                            stopping = Some(crate::lifecycle::stop(active, process_group));
+                            stopping = Some(crate::lifecycle::stop(active, owned_scope.as_ref().unwrap().clone()));
                         } else {
                             final_flush = false;
                         }
@@ -1547,6 +1552,19 @@ pub fn scripted_child() -> io::Result<()> {
                     loop {
                         thread::sleep(Duration::from_secs(60));
                     }
+                } else if line == b"tool-child" {
+                    use std::os::unix::process::CommandExt;
+                    let mut command = Command::new("python3");
+                    command.args(["-c", "import os,signal,time\nsignal.signal(signal.SIGHUP,signal.SIG_IGN)\nsignal.signal(signal.SIGTERM,signal.SIG_IGN)\nopen('tool-child.pid','w').write(str(os.getpid()))\nfor i in range(300):\n with open('tool-child.heartbeat','a') as f: f.write('beat\\n')\n time.sleep(.02)\n"]);
+                    command.process_group(0);
+                    command
+                        .stdin(std::process::Stdio::null())
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null());
+                    let mut descendant = command.spawn()?;
+                    thread::spawn(move || {
+                        let _ = descendant.wait();
+                    });
                 } else if line == b"descendant" {
                     // Both leader and descendant refuse TERM so bounded KILL is exercised.
                     ignore_term();
