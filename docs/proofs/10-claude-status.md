@@ -1,189 +1,169 @@
-# Ticket 10: Claude status evidence — partial proof, support gate open
+# Ticket 10: bounded Claude native status evidence
 
-2026-11-06, macOS 26.2 (25C56), arm64; stable Rust 1.99.1. This changes
-semantic observations, not process ownership, connection ownership, archival or
-native policy. **Ticket 10 remains unresolved.** Native input and Bash approval
-have evidence; working, completed-turn and interruption classifiers remain open.
-This is not a claim that those remaining signals are impossible.
+2026-11-06, macOS 26.2 (25C56), arm64, stable Rust 1.99.1. The five required
+semantic observations were demonstrated with Claude Code **2.1.318** in native
+PTY mode. Unknown remains the result outside the demonstrated bounds. Process
+ownership, connection state, history, native resume and archival stay separate.
 
-## Native execution and receipts
-
-The real dashboard and separate supervisor used macOS PTYs at 160×40, with a
-104×32 child pane, portable-pty 0.9.0, vt100 0.18.1 and Ratatui 0.30.2. No
-Terminal.app/iTerm compatibility or graphical screenshots are claimed. The
-isolated adopted checkout was `/private/tmp/rat-claude-proof-checkout`; private
-supervisor directories were `/private/tmp/r10s`, `/private/tmp/r10s2` and
-`/private/tmp/r10s3`. Earlier proof instances were explicitly shut down before
-the final instance. Native credentials remained with Claude.
-
-The launch PATH resolved through a proof-only symlink to the canonical existing
+The canonical binary was
 `~/.local/share/claude/versions/2.1.318`, SHA-256
-`677a2ea7bf576cedd20e191d973914ed8a41796f53a63b1923381ddc4d5b5e7d`
-(recorded in ticket 05). The UI reported 2.1.318. The installed default symlink
-had updated to 2.1.319; it was not changed by this proof. Native model: Haiku 5.5,
-medium effort. No model/version substitution was inferred from old research.
+`677a2ea7bf576cedd20e191d973914ed8a41796f53a63b1923381ddc4d5b5e7d`.
+The installed default 2.1.319 symlink was preserved and is not covered. Native UI
+reported Haiku 5.5, medium effort. The outer real dashboard ran in a 160×40 macOS
+PTY with a 104×32 child pane, portable-pty 0.9.0, vt100 0.18.1 (bounded OSC parser),
+and Ratatui 0.30.2. These are parsed PTY captures, not graphical-terminal images.
 
-For each invocation the supervisor creates private `status.sock` and
-`status-settings.json` in its own state directory, generates a fresh native
-session UUID and generation token, then adds `--session-id` and `--settings`.
-The passive command helper returns no decisions, context, stdout or stderr and
-always exits successfully. It does not replace settings sources, disable hooks,
-change permissions or authentication, or edit user/repository configuration.
-The existing nonblocking SessionStart failure referencing
-`${CLAUDE_PLUGIN_ROOT}/hooks/run-hook.cmd` remained visible in the first monitored
-session, alongside a successful independent monitor SessionStart receipt.
+## Native observations
 
-The [official hook reference](https://code.claude.com/docs/en/hooks) describes
-pre-decision events, concurrent/custom hooks, and Stop continuation. Consequently
-receipts alone are insufficient evidence of a pending human dialog or final
-completion. The implemented attention mapping also requires the live native
-modal. Generic Notification does not close an open tool interval.
+The real dashboard explicitly adopted/launched the empty isolated checkout.
+The public supervisor connection then drove native input and recorded parsed
+screens, output boundaries, semantic observations and process lifecycle. Initial
+runs used `/private/tmp/rat10c-checkout` and `/private/tmp/r10c`; final merged-code
+checks used `/private/tmp/rat10final-checkout` and `/private/tmp/r10final` after
+merging integration `e2cfef3` (ticket branch merge `06b1149`). Native settings and
+credentials remained native. Proof-only PATH symlinks selected the canonical
+binary without changing the user's installed default.
 
-| Scenario | Actual receipt and native screen | Product observation |
+[Raw observation excerpts](10-native-observations.jsonl) retain native event
+summaries and parsed screens at state/event transitions, plus the final sample
+of each scenario. They omit repeated unchanged polls. Companion text captures
+make the positive states and important negatives easier to inspect.
+
+| Scenario | Actual native evidence | Visible outcome |
 | --- | --- | --- |
-| Startup | SessionStart, matching generated session; native 2.1.318 banner | Unknown; startup/liveness does not imply working |
-| AskUserQuestion | PreToolUse with unique tool-use ID; PermissionRequest naming AskUserQuestion without a tool-use ID; delayed Notification; native question modal with options and selection/cancel footer | **Input needed**; [receipt and parsed screen](screens/10-claude-input.txt) |
-| Answer question | Enter selected Alpha; matching PostToolUse ID, PostToolBatch, Stop; native answer and done marker | Tool interval closes; semantic status becomes unknown |
-| Bash approval | PreToolUse Bash ID, PermissionRequest Bash without an ID; delayed Notification; exact native Bash permission modal | **Approval needed**; [receipt and parsed screen](screens/10-claude-approval.txt) |
-| One-time approval | Enter selected Yes once; matching PostToolUse, PostToolBatch, Stop; native answer/done marker | Approval clears; unknown rather than treating Stop as final completion |
-| Command failure | Requested standalone `sleep 30`; Claude's own native tool harness blocked that command and the agent explained the failure, without a product approval rejection; process remained Running | Unknown; [receipt and screen](screens/10-claude-command-failure.txt). No workaround was attempted |
-| Native Ctrl-C | Repeated the ticket 05 counting prompt (1–1000, no tools requested); this session nevertheless ran one Bash tool, emitted PreToolUse/PostToolUse/PostToolBatch, then displayed `Interrupted · What should Claude do instead?` after Ctrl-C, without Stop | Unknown; [receipt and parsed screen](screens/10-claude-interrupted.txt). Native acknowledgement exists, but no classifier/quoted-marker negative proof is claimed |
-| Long response attempt | Requested 1–100000 without tools; native agent chose to give 20 lines and a normal answer instead | Stop + native done marker observed; this did not establish an active long-response interval |
+| Startup/pre-output thinking | SessionStart/UserPromptSubmit, live process, animated thinking footer without new response | Unknown; liveness, submission and a spinner alone are insufficient |
+| Streamed long explanation | Current UserPromptSubmit; new `⏺ Rust Ownership…` response; native `esc to interrupt` footer; advancing parsed output | **Working**; [capture](screens/10-claude-working-final.txt) |
+| Model interruption | Controller waited for Working, sent real Ctrl-C; a new `⎿ Interrupted · What should Claude do instead?` appeared with idle composer; no Stop receipt | **Interrupted**; [capture](screens/10-claude-interrupted-final.txt) |
+| Short response completes | Current-turn Stop; later parsed boundary; new native `✻ … for … · done …` marker and idle bordered composer | **Turn completed**; [capture](screens/10-claude-completed-final.txt) |
+| Native question | Unique main-agent AskUserQuestion PreToolUse, matching PermissionRequest without tool ID, actual question/options/footer | **Input needed**; [capture](screens/10-claude-input-final.txt) |
+| Native Bash permission | Unique Bash PreToolUse and correlated PermissionRequest; actual Bash permission modal | **Approval needed**; [capture](screens/10-claude-approval-final.txt) |
+| One-time approval | Enter selected Yes once; exact PostToolUse closes interval; marker file contains `classifier-ten` | Attention clears; no always-allow or policy bypass was selected |
+| One-shot Stop continuation | First Stop while a proof-only native Stop hook asked for continuation; native subsequently answered `continued-stop-ten`, then emitted a second Stop/new final done/idle structure | First Stop **Unknown**; only second/final Stop becomes **Completed**; [capture](screens/10-claude-stop-continuation.txt) |
+| Blocked submission | Proof-only UserPromptSubmit hook exited 2; native displayed its blocked-operation explanation/restored composer | All captured samples **Unknown**, including monitor UserPromptSubmit receipt |
+| Blocked tool | Proof-only PreToolUse hook exited 2; native displayed Not run / permission denied | Pending tool interval **Unknown**; earlier genuine streamed explanation can be Working and later genuine final Stop can complete |
+| Failed intermediate command | Native Bash ran `false`, emitted PostToolUseFailure; agent explained exit status 1 | Process remained **Running**; no failed-session state was invented; [capture](screens/10-claude-failed-command-final.txt) |
+| Question Ctrl-C/Escape | Ctrl-C alone did not close this native question. Documented Escape cancellation displayed the same native interrupted phrase and a done-looking marker, without final Stop | **Unknown**, never Interrupted merely from dialog cancellation; [capture](screens/10-claude-modal-cancel-final.txt) |
+| Quoted old markers | Native answer quoted old done/interrupted examples; earlier native acknowledgments were also still visible in history | Neither quote nor old history created an Interrupted or pre-Stop Completed observation; actual final current-turn Stop may legitimately complete |
 
-The marker command was exactly `printf status-final > status-final-marker` in
-the isolated checkout. Manual mode was selected only for the native proof, and
-only the one-time Yes was chosen; no always-allow choice was selected. Ordinary
-attach, question input, approval input and detach used the real dashboard. Text
-captures contain sanitized hook identities and parsed child screen content;
-fixture rendering checks establish the actual label presentation separately.
+The isolated one-shot blocker script was attached only through the temporary
+checkout's `.claude/settings.local.json`. Its Stop handler consumed an armed
+one-shot file and returned `{"decision":"block","reason":"…continue…"}`.
+Submission/tool handlers consumed their respective one-shot files and exited 2.
+No user/global/repository-under-development hook or permission policy was edited.
+The standalone sleep command rejected in the earlier partial proof was not retried
+through a workaround. Long native generation used a harmless explanation prompt.
 
-## Signal validity and conservative invalidation
+## Attribution and conservative bounds
 
-A receipt must fit 2048 bytes, match the fresh generation token/native session,
-come from a main-agent context and contain a recognized event. The helper reads
-at most 65537 input bytes and discards prompt/tool payloads, results and native
-transcript paths. It retains only recognized event names, AskUserQuestion/Bash
-names and bounded tool/prompt identities. There are at most 16 pending tools and
-16 recent receipt summaries. The supervisor consumes at most 32 datagrams per
-pass. Backlog uncertainty, malformed/wrong-session receipts or channel errors
-revoke semantic confidence; overload never implies completion or failure.
+For each launch the supervisor adds private invocation-local settings, a fresh
+generation token and native session UUID. Resume preserves the original native
+UUID while creating a new monitor token. The passive command hook emits no
+policy decisions, stdout, stderr or context and always exits successfully. It
+reads at most 65537 bytes, accepts at most 65536, discards prompts/tool payloads,
+results, credentials and transcript paths, and projects bounded event/tool IDs.
+The [official hook reference](https://code.claude.com/docs/en/hooks) explains why
+pre-decision events and Stop continuation need independent UI corroboration.
 
-A PermissionRequest has no tool-use ID. It is attached only to exactly one
-pending main-agent tool of the same sanitized name and prompt identity. Ambiguous
-parallel calls remain unknown. PostToolUse/PostToolUseFailure closes the exact
-ID; UserPromptSubmit, SessionEnd and ConfigChange clear pending intervals. A
-question may pass through PermissionRequest; that event does not make it a Bash
-approval. Notifications do not reset the age of the pending tool.
+Receipts fit 2048 bytes, match token/session/main-agent attribution, have valid
+local timestamps within 30 seconds, cannot precede the current native-input or
+submitted-turn boundary, and agree with prompt identity when the native CLI
+provides one. Claude often omits prompt IDs; a bounded invocation-local submitted
+turn, input/time barriers and current UI provide the demonstrated correlation.
+This is per-version/scenario reliability, not perfect same-user security
+attestation against arbitrary full-screen or hook-protocol forgery.
 
-Attention requires the observed 2.1.318 native banner and a canonical executable
-whose version filename is `2.1.318`; other install layouts/versions remain unknown.
-The executable is resolved once from inherited PATH and launched through that
-canonical path, avoiding an updater symlink changing between attribution and
-spawn. These are compatibility checks, not a security attestation against a
-malicious same-user executable. Current main-agent tool evidence must be no more
-than 30 seconds old and agree with the current modal structure, option rows,
-borders and exact native footer. Input also requires the question heading;
-approval requires the Bash heading, proceed question and Yes option. A terminal
-phrase in ordinary output is insufficient. No generic prose-question detection
-is claimed. Narrow/changed modal layouts fail to unknown.
+The monitor consumes at most 32 datagrams per pass, retains at most 16 recent
+summaries and 16 pending tools, and uses the already bounded parsed viewport.
+Invalid, wrong-session, stale, ambiguous or overloaded receipts revoke confidence.
+An unrecognized tool still prevents a pending interval from being mistaken for
+active model output. A generic Notification cannot close a tool interval or
+refresh its original 30-second age.
 
-Forwarded native input revokes confidence until the parsed output boundary moves;
-a matching modal may then reestablish it. An unresponsive unchanged screen does
-not acknowledge input. Missing evidence starts unknown; fixture evidence expires
-after five seconds and native tool intervals after 30 seconds. Expiry only revokes
-confidence. It never means completed, idle or failed. Process stop/exit similarly
-clears semantic state. Persistence saves/restores unknown semantic state; live
-hook tokens/pending intervals do not survive supervisor restart. A monitor setup
-failure leaves native launch usable with unknown status.
+- Attention requires exactly one fresh matching pending tool, the demonstrated
+  modal heading/options/borders/footer, and a later parsed boundary after input.
+- Working requires current submitted-turn evidence no older than 30 seconds,
+  output advancing within five seconds, a response header different from the
+  submission/tool baseline, the actual active footer and no pending tool.
+  Pre-output thinking, blocked hooks, old response headers and silence stay
+  unknown. Long/wrapped responses whose identifying header has scrolled away
+  can also become unknown.
+- Completion requires current-turn Stop and an output boundary after its receipt,
+  a new done marker compared with the submission baseline, and the final idle
+  bordered composer. The region between marker and composer contains only blank,
+  border or demonstrated native update rows. Native continuation without final
+  corroboration cannot complete. New input/prompt/tool activity invalidates Stop
+  confidence. Completion expires within 30 seconds of supporting evidence.
+- Interruption requires an active native footer when Ctrl-C is requested, a later
+  output boundary within five seconds, an idle composer and a newly observed
+  acknowledgment at the native tail. Its count must exceed the pre-request count;
+  an already printed/quoted acknowledgment cannot satisfy the request. Dialog
+  cancellation and Ctrl-C alone do not qualify. Acknowledgment expires after
+  30 seconds and any later input revokes it. If scrolling makes a new marker
+  indistinguishable from an old one, the result is conservatively unknown.
 
-## Open proof gates and proposed resolution
+A native banner plus canonical filename `2.1.318` gates these specific shapes.
+Changed/narrow layouts, pre-output thinking, arbitrary prose questions,
+unrecognized permission tools, missing hooks, ambiguous concurrent calls, native
+composer suggestions/other update layouts, additional versions, graphical terminal
+apps and untested failure paths remain unknown. These bounds intentionally prefer
+unknown to inventing a result. Monitoring failure does not prevent ordinary
+native launch; process stop/exit clears semantics; persistence restores unknown
+rather than resurrecting old current-state claims. Native output/history capture
+remains independent of this ephemeral channel.
 
-- **Working:** UserPromptSubmit precedes processing and another hook may block it.
-  A PreToolUse request can also be blocked, as the native harness failure shows.
-  No current-generation spinner/tool-running structural classifier has passed
-  negative cases here. Add a bounded receipt-correlated native active-UI matcher;
-  test blocked submission/tool hooks and output quoting that UI before assigning
-  Working. A live process, output volume or silence cannot substitute.
-- **Completed:** Stop and the native done marker were both observed. Completion
-  is still unverified under a Stop hook that continues the turn, delayed receipts,
-  a new submitted prompt, and quoted old done markers. A future classifier should
-  require a current-turn receipt, the final native prompt/done structure after
-  hook resolution, and those continuation/quotation negatives. Stop alone remains
-  an observed fact, not a completed-turn status.
-- **Interrupted:** Ticket 05 established the native interrupted screen during a
-  long response. This monitor has no demonstrated general interruption hook.
-  Forwarded Ctrl-C alone is only a request; question Ctrl-C did not supply a
-  reliable new acknowledgement in the monitored scenario. Correlate a new native
-  interrupted UI acknowledgement with the input/output generation, then test model
-  generation, running tools and dialog cancellation separately. Do not infer
-  interruption from absent Stop, liveness, or a quiet PTY.
-- **Coverage:** plain-text follow-up questions, approval denial/autoapproval,
-  managed-hook suppression, blocked Stop/UserPromptSubmit, subagent concurrency,
-  API/auth failures, additional terminal apps and arbitrary native UI versions
-  remain unverified. Missing or ambiguous evidence stays unknown. Required gates
-  must pass before claiming native status support or resolving this ticket.
+## Regression tests and verification
 
-| Version | Native interaction | Status support |
-| --- | --- | --- |
-| Claude 2.1.318, canonical hash above | Ticket 05 + monitored question/approval/one-time answer here | Partial input/Bash approval; required semantic support gate open |
-| Claude 2.1.319 | Installed; no full runtime status proof | Unknown; no 318 modal confidence inherited |
-| Claude 2.1.74 | Stale exploratory research only | Unsupported by this proof |
+TDD used the already approved App/event/render and real dashboard/supervisor/
+scripted-PTY seams in temporary real Git repositories. Completion, active-response
+Working and acknowledged interruption each failed at the visible dashboard seam
+before their classifiers existed, then passed. Existing shared tests continue to
+exercise all labels, process/transport separation, wrong-session evidence, expiry,
+question/permission closure and an intermediate failed test while work continues.
+Additional scenarios cover Stop continuation, a new prompt with an old done
+marker, stale delayed Stop, native-looking quoted done/idle output without current
+receipts, an old acknowledgment across Ctrl-C, active-tool interruption and modal
+cancellation. Fixture evidence establishes handling, not native support.
 
-## Fixture/state verification and visual direction
+Readable text labels remain separate from Process and focus, in the sidebar and
+status/session borders. App/render tests cover normal and small layouts; the
+native screen stays prominent on the right and reviews remain honestly
+unavailable. This follows the reference image's readable-label direction with the
+already documented one-session/native-screen differences. No new graphical
+terminal screenshot or broader release-readiness claim is made.
 
-TDD used the already approved App/event and real dashboard/supervisor/scripted
-PTY seams in real temporary Git checkouts. The first state test failed to compile
-before semantic observations existed. PTY scenarios then failed before the
-fixture evidence commands, wrong-session rejection, failed-command handling and
-correlated native-style question/approval behavior existed, and passed after the
-corresponding implementations. A normal quoted native status phrase cannot create
-a semantic observation. Tests cover all six labels, missing/stale and unattributed
-evidence, closing a question interval, and a failing intermediate command while
-fixture working evidence remains current. These are adapter handling tests,
-not native support evidence.
+The full locked suite before the final parser merge passed: 22 unit tests, one
+ignored subprocess probe exercised by the passing restoration test, 32 ownership
+scenarios (193.43s), scripted interaction/status (26.03s), screen integration
+(8.66s). After merging final parser integration `e2cfef3`, locked build, formatting,
+warnings-denied all-target Clippy, 22 unit tests, the expanded scripted proof
+(26.64s) and screen proof (8.68s) passed. The final integrated resource/33-ownership
+union is covered by ticket 18; the already completed 140-second resource workload
+was not repeated merely for documentation edits. A subsequent submitted-turn boundary
+regression failed before the explicit timestamp/prompt guard, then passed (27.07s).
+All five native positives were then repeated with that final guard; the one-time
+approval produced `final-guard-ten` in `proof-guard-marker`, and explicit shutdown
+confirmed `stopped=true`. All proof supervisors were explicitly stopped. These runtimes are test durations,
+not performance promises.
 
-The normal dashboard keeps reviews above the project/worktree sidebar and the
-native terminal on the right. Labels are readable text independently of color;
-semantic status is separate from Process and input focus. Unknown/revocation
-reasons appear in the Status border and native evidence in its body. At small
-sizes the sidebar collapses and status remains in compact help; the first release
-still differs from the reference image by using one native session rather than
-an application message composer. No new graphical-terminal visual proof is
-claimed from these parsed screen/PTY tests.
+## Reproduce
 
-Final verification after merging integration `f511471`: `cargo build --locked`,
-`cargo fmt --all -- --check`, `cargo clippy --locked --all-targets -- -D warnings`
-and `cargo test --locked --all-targets` passed. Tests: 19 unit tests passed,
-one ignored subprocess probe exercised by its passing restoration test; 20
-ownership/history scenarios passed in 35.44s; scripted interaction/status proof
-passed in 15.72s; screen proof passed in 8.71s. These are verification runtimes,
-not performance promises. Status receipts are ephemeral; durable native output
-continues through ticket 08's independent history capture.
-
-## Reproduce the partial native attention proof
-
-1. Build with `cargo build --locked`. Use a fresh empty Git checkout and a
-   private isolated state directory. Put a symlink named `claude` to the recorded
-   canonical 2.1.318 executable first in the proof process's PATH; do not change
-   the user's installed symlink. Run `target/debug/agent-terminal <checkout>
-   --state-dir <private-proof-state>` in a 160×40 PTY.
-2. Adopt with `a`, launch with `c`, accept native folder trust only for that empty
-   checkout if needed. Ask: `Use AskUserQuestion to ask whether the proof marker
-   should be alpha or beta. Do not write files or run commands.` Observe Input
-   needed during the live modal within the 30-second validity window.
-3. Answer Alpha. Select manual mode through native Shift-Tab. Request exactly
-   `printf status-final > status-final-marker` in the isolated checkout. Observe
-   Approval needed in the Bash modal; Enter approves once. Check the resulting
-   marker and that neither attention state persists after its tool returns.
-4. Ctrl-] returns to the dashboard; `d` detaches. Reopen against the same state
-   directory to inspect the same session and current evidence. Older evidence
-   must be unknown rather than indefinitely claiming attention.
-5. To reproduce the native interruption screen, request `Count from 1 to 1000,
-   one number per line. Do not use tools.` and send Ctrl-C while active. Record
-   what the native tool actually does; this run invoked Bash despite the prompt.
-   The screen acknowledgement is captured, while product semantic status stays
-   unknown pending the negative-case classifier proof.
-6. Explicitly stop/quit the isolated proof supervisor. All three state directories
-   used above were shut down with confirmed `stopped=true`; no proof child was
-   intentionally left running. Do not stop or connect to the user's usual state
-   directory as part of a proof.
+1. Build `cargo build --locked`. Create an empty temporary Git checkout and a
+   private state directory; prepend a proof-only `claude` symlink to the recorded
+   canonical binary. Run the real dashboard in a 160×40 PTY, adopt and launch with
+   `a`, `c`, and explicitly trust only that empty checkout if native trust asks.
+2. Request a detailed Rust ownership explanation without tools. Observe Unknown
+   during pre-output thinking, then Working during a new streamed response. Send
+   Ctrl-C only after active output and check a new native acknowledgment before
+   accepting Interrupted. Send a short exact-response prompt and observe final
+   Stop/new done/idle composer before accepting Completed.
+3. Ask through AskUserQuestion and observe Input. Escape cancels that modal;
+   native interrupted-looking text by itself must remain unknown. Select native
+   manual mode with Shift-Tab, request the harmless temporary marker command,
+   observe Approval and choose Yes once; verify attention clears.
+4. In a separately isolated checkout/settings layer, use one-shot native blockers
+   to reproduce blocked submission/tool and Stop continuation. Record the actual
+   receipts/screens: first Stop is insufficient. Quote old markers in a later
+   native response and verify no outcome appears solely from those strings.
+5. Ctrl-] returns to dashboard navigation; detach/reopen keeps the same managed
+   session. Explicitly stop/shut down every isolated supervisor after the proof.
+   Never connect to or stop the user's usual supervisor directory.
