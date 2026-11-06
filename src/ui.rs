@@ -65,7 +65,9 @@ impl Ui {
             reviews,
         );
         let focus = if app.attached { "session" } else { "dashboard" };
-        let title = if frame.area().width < 80 || frame.area().height < 22 {
+        let title = if app.history_open {
+            " Retained history · controls escaped · n/p session · [/] page ".to_owned()
+        } else if frame.area().width < 80 || frame.area().height < 22 {
             let tag = app
                 .session
                 .identity
@@ -91,7 +93,29 @@ impl Ui {
             session,
         );
         let viewport = Self::session_viewport(frame.area());
-        if let Some(screen) = app.session.decoded.as_ref() {
+        if app.history_open {
+            let text = app
+                .session
+                .history
+                .as_ref()
+                .map(|page| {
+                    format!(
+                        "{}\n{} · recorded {:?} · byte {}\n{}",
+                        visible(&page.identity),
+                        visible(&page.checkout),
+                        page.lifecycle,
+                        page.offset,
+                        page.text
+                    )
+                })
+                .unwrap_or_else(|| "Loading retained history…".into());
+            frame.render_widget(
+                Paragraph::new(text)
+                    .wrap(Wrap { trim: false })
+                    .scroll((app.history_scroll, 0)),
+                viewport,
+            );
+        } else if let Some(screen) = app.session.decoded.as_ref() {
             draw_screen(frame, viewport, screen, app.attached);
         } else {
             frame.render_widget(
@@ -224,6 +248,15 @@ impl Ui {
                 Color::Green,
             )
         };
+        let message = format!(
+            "{message}\nHistory: {} · durable bytes {}",
+            if app.session.metadata_pending {
+                "metadata unconfirmed"
+            } else {
+                "metadata committed"
+            },
+            app.session.durable_bytes
+        );
         let message = if app.session.error.is_some() {
             format!(
                 "{message}\n{}",

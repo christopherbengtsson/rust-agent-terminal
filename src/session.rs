@@ -32,6 +32,7 @@ pub enum Request {
     Launch(String),
     LaunchClaude(String),
     QueryLaunch(String),
+    History { index: usize, offset: u64 },
     Input(Vec<u8>),
     Key(crossterm::event::KeyEvent),
     Paste(String),
@@ -49,6 +50,7 @@ pub enum Lifecycle {
     Exited,
     Stopped,
     StopFailed,
+    Interrupted,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LaunchResult {
@@ -58,6 +60,24 @@ pub struct LaunchResult {
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Observation {
+    #[serde(default)]
+    pub history: Option<crate::persistence::HistoryPage>,
+    #[serde(default)]
+    pub history_index: usize,
+    #[serde(default)]
+    /// Durable raw prefix for the current session; output_bytes is owner-lifetime.
+    /// Baseline output_bytes at each launch before comparing these counters.
+    pub durable_bytes: u64,
+    #[serde(default)]
+    pub metadata_pending: bool,
+    #[serde(default)]
+    pub durable_flush_count: u64,
+    #[serde(default)]
+    pub durable_completed_millis: u64,
+    #[serde(default)]
+    pub sync_commit_micros: u64,
+    #[serde(default)]
+    pub accepted_to_durable_millis: u64,
     #[serde(default)]
     pub launch_request: String,
     #[serde(default)]
@@ -300,15 +320,54 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let listener = UnixListener::bind(&socket)?;
     fs::set_permissions(&socket, fs::Permissions::from_mode(0o600))?;
     listener.set_nonblocking(true)?;
-    let mut state = Observation {
-        launch_request: uuid::Uuid::new_v4().to_string(),
-        ..Observation::default()
+    let (storage, restored) = match crate::persistence::Worker::start(directory) {
+        Ok(ready) => ready,
+        Err(error) => {
+            let failure = Observation {
+                error: Some(format!(
+                    "History storage unavailable: {error}; repair storage then reopen the dashboard"
+                )),
+                control_denied: true,
+                ..Observation::default()
+            };
+            let deadline = std::time::Instant::now() + Duration::from_secs(3);
+            while std::time::Instant::now() < deadline {
+                if let Ok((mut incoming, _)) = listener.accept() {
+                    let _ = send_observation(&mut incoming, &failure);
+                    break;
+                }
+                thread::sleep(Duration::from_millis(5));
+            }
+            fs::remove_file(&socket)?;
+            return Ok(());
+        }
     };
-    // Retain every result for this owner lifetime. Exhaustion fails closed rather
-    // than evicting an outcome and making a retry execute twice.
+    let mut state = restored.state;
+    let mut task_identity = restored.task;
+    if state.launch_request.is_empty() {
+        state.launch_request = uuid::Uuid::new_v4().to_string();
+    }
     let mut launches: HashMap<String, LaunchResult> = HashMap::new();
-    let mut checkout = None;
-    let mut task_identity = uuid::Uuid::new_v4().to_string();
+    for result in restored.launches {
+        launches.insert(result.request.clone(), result);
+    }
+    let mut checkout = restored
+        .checkout
+        .map(|bytes| PathBuf::from(std::ffi::OsString::from_vec(bytes)));
+    storage
+        .commands
+        .try_send(crate::persistence::Command::Save(
+            crate::persistence::metadata(&state),
+            checkout.as_ref().map(|p| path_bytes(p)),
+            task_identity.clone(),
+        ))?;
+    let mut save_pending = 1usize;
+    state.metadata_pending = true;
+    let mut metadata_failed = false;
+    let mut flush_pending = false;
+    let mut final_flush = false;
+    let mut capture_done: Option<Receiver<()>> = None;
+    let mut eof = true;
     let mut child: Option<Box<dyn portable_pty::Child + Send + Sync>> = None;
     let mut writer: Option<SyncSender<Vec<u8>>> = None;
     let (write_errors, input_errors) = mpsc::sync_channel(1);
@@ -324,6 +383,68 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let mut controller: Option<UnixStream> = None;
     let mut pending = Vec::new();
     loop {
+        while let Ok(event) = storage.events.try_recv() {
+            use crate::persistence::Completion;
+            match event {
+                Completion::Saved => {
+                    save_pending = save_pending.saturating_sub(1);
+                    if save_pending == 0 {
+                        metadata_failed = false;
+                    }
+                }
+                Completion::History(page) => state.history = Some(page),
+                Completion::Flushed => {
+                    flush_pending = false;
+                    final_flush = true;
+                }
+                Completion::Error(kind, error) => {
+                    if kind == "history" {
+                        state.error = Some(error);
+                        continue;
+                    }
+                    if kind == "metadata" {
+                        save_pending = save_pending.saturating_sub(1);
+                        metadata_failed = true;
+                    }
+                    flush_pending = false;
+                    shutdown = false;
+                    final_flush = false;
+                    state.error = Some(format!(
+                        "History storage failed: {error}; not saved, retry quit"
+                    ));
+                }
+            }
+        }
+        if let Some(done) = &capture_done
+            && done.try_recv().is_ok()
+        {
+            eof = true;
+            capture_done = None;
+        }
+        let progress = storage.progress.lock().unwrap().clone();
+        state.durable_bytes = progress.durable;
+        state.durable_flush_count = progress.flush_count;
+        state.durable_completed_millis = progress.completed_millis;
+        state.sync_commit_micros = progress.last_flush_micros;
+        state.accepted_to_durable_millis = progress.accepted_to_durable_millis;
+        if let Some(error) = progress.error {
+            state.error = Some(error);
+        }
+        state.metadata_pending = save_pending > 0 || metadata_failed;
+        if (shutdown || matches!(state.lifecycle, Lifecycle::Exited | Lifecycle::Stopped))
+            && child.is_none()
+            && stopping.is_none()
+            && eof
+            && !flush_pending
+            && !final_flush
+            && storage
+                .commands
+                .try_send(crate::persistence::Command::Flush)
+                .is_ok()
+        {
+            flush_pending = true;
+        }
+        state.stopped = shutdown && final_flush && save_pending == 0 && !metadata_failed;
         if let Ok(error) = input_errors.try_recv() {
             state.error = Some(format!("Native input failed: {error}; stop or retry"));
         }
@@ -361,7 +482,24 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                 } else {
                     Lifecycle::Stopped
                 };
-                state.stopped = shutdown;
+                final_flush = false;
+                if storage
+                    .commands
+                    .try_send(crate::persistence::Command::Save(
+                        crate::persistence::metadata(&state),
+                        checkout.as_ref().map(|p| path_bytes(p)),
+                        task_identity.clone(),
+                    ))
+                    .is_ok()
+                {
+                    save_pending += 1;
+                    state.metadata_pending = true;
+                } else {
+                    metadata_failed = true;
+                    state.metadata_pending = true;
+                    state.error = Some("Lifecycle metadata not saved; retry quit".into());
+                    shutdown = false;
+                }
             }
         }
         if state.stopped && controller.is_none() {
@@ -433,6 +571,17 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
         if !matches!(request, Request::Screen) {
             state.error = None;
         }
+        let save_history =
+            matches!(&request, Request::History { index, .. } if *index != state.history_index);
+        let save = save_history
+            || matches!(
+                request,
+                Request::Adopt(_)
+                    | Request::Launch(_)
+                    | Request::LaunchClaude(_)
+                    | Request::Stop
+                    | Request::Shutdown
+            );
         let claude = matches!(&request, Request::LaunchClaude(_));
         let launch_request = match &request {
             Request::Launch(id) | Request::LaunchClaude(id) => Some(id.clone()),
@@ -472,7 +621,12 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                             "Stop the existing session before adopting another checkout".into()
                         );
                     }
+                    if state.lifecycle == Lifecycle::Interrupted && checkout.as_ref() != Some(&path) {
+                        return Err("Interrupted execution is uncertain; inspect history before changing adoption".into());
+                    }
                     if checkout.as_ref() != Some(&path) {
+                        state.identity = None;
+                        state.lifecycle = Lifecycle::Idle;
                         task_identity = uuid::Uuid::new_v4().to_string();
                     }
                     state.adopted = Some(path.display().to_string());
@@ -480,11 +634,12 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                 }
                 Request::QueryLaunch(_) => return Err("Launch request unknown to this supervisor; do not replay uncertain activity after supervisor loss".into()),
                 Request::Launch(request) | Request::LaunchClaude(request) => {
+                    if state.lifecycle == Lifecycle::Interrupted { return Err("Interrupted execution is uncertain; inspect history, do not replace until reconciled".into()); }
                     if request.is_empty() || request.len() > 128 {
                         return Err("Launch request must contain 1–128 bytes".into());
                     }
                     if launches.len() >= 1024 {
-                        return Err("Launch request capacity reached; stop and restart the supervisor explicitly".into());
+                        return Err("Launch request capacity reached; retained outcomes are preserved and further launch is blocked".into());
                     }
                     state.launch_request = request.clone();
                     if child.is_some() || stopping.is_some() {
@@ -542,6 +697,14 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     state.lifecycle = Lifecycle::Running;
                     state.stopped = false;
                     native_exit = false;
+                    state.history_index = 0;
+                    let session = uuid::Uuid::new_v4().to_string();
+                    state.identity = Some(format!("task={} session={} request={request}", task_identity, session));
+                    let capture = storage.output.clone();
+                    let (finished, done) = mpsc::sync_channel(1);
+                    capture_done = Some(done);
+                    eof = false;
+                    final_flush = false;
                     let mut source = pty.master.try_clone_reader()?;
                     master = Some(Arc::new(Mutex::new(pty.master)));
                     let parser = screen.clone();
@@ -551,16 +714,14 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                             if n == 0 {
                                 break;
                             }
+                            // Transfer capture ownership before parsing; never block with parser lock.
+                            if capture.send((session.clone(), bytes[..n].to_vec(), std::time::Instant::now())).is_err() { break; }
                             let mut screen = parser.lock().unwrap();
                             screen.parser.process(&bytes[..n]);
                             screen.output_bytes = screen.output_bytes.saturating_add(n as u64);
                         }
+                        let _ = finished.send(());
                     });
-                    state.identity = Some(format!(
-                        "task={} session={} request={request}",
-                        task_identity,
-                        uuid::Uuid::new_v4()
-                    ));
                     child = Some(launched);
                 }
                 Request::Input(bytes) => {
@@ -619,6 +780,10 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                         .parser
                         .set_size(rows.try_into().unwrap(), cols.try_into().unwrap());
                 }
+                Request::History { index, offset } => {
+                    state.history_index = index;
+                    storage.commands.try_send(crate::persistence::Command::History(index, offset)).map_err(|e| format!("History busy: {e}; retry"))?;
+                }
                 Request::Screen => {}
                 Request::Stop | Request::Shutdown => {
                     shutdown |= matches!(request, Request::Shutdown);
@@ -629,7 +794,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                             state.lifecycle = Lifecycle::Stopping;
                             stopping = Some(crate::lifecycle::stop(active, process_group));
                         } else {
-                            state.stopped = shutdown;
+                            final_flush = false;
                         }
                     }
                 }
@@ -656,6 +821,24 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             };
             launches.insert(request, result.clone());
             state.launch_result = Some(result);
+        }
+        if save {
+            match storage.commands.try_send(crate::persistence::Command::Save(
+                crate::persistence::metadata(&state),
+                checkout.as_ref().map(|p| path_bytes(p)),
+                task_identity.clone(),
+            )) {
+                Ok(()) => {
+                    save_pending += 1;
+                    state.metadata_pending = true;
+                }
+                Err(error) => {
+                    metadata_failed = true;
+                    state.metadata_pending = true;
+                    state.error = Some(format!("Metadata not saved: {error}; retry"));
+                    shutdown = false;
+                }
+            }
         }
         screen.lock().unwrap().snapshot(&mut state);
         if send_observation(stream, &state).is_err() {
@@ -755,6 +938,18 @@ pub fn scripted_child() -> io::Result<()> {
                         thread::sleep(Duration::from_millis(5));
                     }
                     print!("fixture> ");
+                } else if line == b"history-bulk" {
+                    for number in 0..6000 {
+                        println!(
+                            "bulk08:{number:05}:abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789--\r"
+                        );
+                    }
+                    println!("history-bulk-complete\r");
+                    print!("fixture> ");
+                } else if line == b"history-controls" {
+                    print!(
+                        "erased-response-08\r\x1b[2Kreplacement-08\r\n\x1b[?1049halternate-response-08\x1b[?1049lafter-history-controls\r\nfixture> "
+                    );
                 } else if line == b"identity" {
                     println!("same-child pid={}\r", std::process::id());
                     print!("fixture> ");

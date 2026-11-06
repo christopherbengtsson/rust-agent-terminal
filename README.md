@@ -132,3 +132,22 @@ session refuses replacement regardless of the selected launch choice. Launch is
 experimental: see [the native proof](docs/proofs/05-claude-native.md) for the exact
 version and unresolved scenarios. Native tool usage can consume your account's
 allowance. No credential copying or product authentication store is used.
+
+Readable history is independent of a live child, native resume, and the checkout.
+In dashboard focus press `h` to open/close retained history, `n`/`p` for older/newer
+sessions, `[`/`]` for byte pages, and `j`/`k` to scroll the current page. History
+shows chronological captured output; carriage returns and escape controls appear
+as printable escapes, including text erased by redraws or alternate screens.
+Input keys/paste are not separately recorded, so hidden password input is not
+copied into history. Output itself can contain sensitive text.
+
+The supervisor stores SQLite metadata and 64 KiB transcript chunks under
+`~/Library/Application Support/rat/proof` (or the explicit isolated `--state-dir`).
+Metadata is marked unconfirmed until its commit succeeds. Ordinary quit waits
+for process cleanup, PTY EOF, transcript file synchronization and the metadata
+commit. A failed write keeps quit visibly incomplete; repair storage and retry
+`q`. There is no automatic history deletion. Supervisor loss restores interrupted
+records without starting coding; unresolved execution blocks replacement launch.
+An abrupt failure can lose output beyond the committed prefix. See
+[the history proof](docs/proofs/08-durable-history.md) for tested boundaries and
+preliminary healthy-storage observations.
