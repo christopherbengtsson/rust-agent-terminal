@@ -65,7 +65,9 @@ impl Ui {
             reviews,
         );
         let focus = if app.attached { "session" } else { "dashboard" };
-        let title = if frame.area().width < 80 || frame.area().height < 22 {
+        let title = if app.history_open {
+            " Retained history · controls escaped · n/p session · [/] page ".to_owned()
+        } else if frame.area().width < 80 || frame.area().height < 22 {
             let tag = app
                 .session
                 .identity
@@ -92,11 +94,33 @@ impl Ui {
             session,
         );
         let viewport = Self::session_viewport(frame.area());
-        if let Some(screen) = app.session.decoded.as_ref() {
+        if app.history_open {
+            let text = app
+                .session
+                .history
+                .as_ref()
+                .map(|page| {
+                    format!(
+                        "{}\n{} · recorded {:?} · byte {}\n{}",
+                        visible(&page.identity),
+                        visible(&page.checkout),
+                        page.lifecycle,
+                        page.offset,
+                        page.text
+                    )
+                })
+                .unwrap_or_else(|| "Loading retained history…".into());
+            frame.render_widget(
+                Paragraph::new(text)
+                    .wrap(Wrap { trim: false })
+                    .scroll((app.history_scroll, 0)),
+                viewport,
+            );
+        } else if let Some(screen) = app.session.decoded.as_ref() {
             draw_screen(frame, viewport, screen, app.attached);
         } else {
             frame.render_widget(
-                Paragraph::new("Adopt (a), then c Claude Code / l scripted fixture."),
+                Paragraph::new("Adopt (a), then c Claude Code / x Codex CLI / l scripted fixture."),
                 viewport,
             );
         }
@@ -136,7 +160,7 @@ impl Ui {
                     lines.push(Line::from(if app.session.identity.is_some() {
                         format!("  └ managed session · {}", app.session.status.state.label())
                     } else {
-                        "  └ adopted · c Claude / l fixture".into()
+                        "  └ adopted · c Claude / x Codex / l fixture".into()
                     }));
                 }
                 ListItem::new(lines)
@@ -210,7 +234,7 @@ impl Ui {
                     app.session
                         .identity
                         .as_deref()
-                        .unwrap_or("ready: c Claude / l fixture")
+                        .unwrap_or("ready: c Claude / x Codex / l fixture")
                 ),
                 Color::Cyan,
             )
@@ -225,6 +249,15 @@ impl Ui {
                 Color::Green,
             )
         };
+        let message = format!(
+            "{message}\nHistory: {} · durable bytes {}",
+            if app.session.metadata_pending {
+                "metadata unconfirmed"
+            } else {
+                "metadata committed"
+            },
+            app.session.durable_bytes
+        );
         let message = if app.session.error.is_some() {
             format!(
                 "{message}\n{}",
@@ -269,7 +302,7 @@ impl Ui {
                 &compact_help
             } else {
                 compact_help = format!(
-                    "a adopt · c Claude · l fixture · Enter attach · s stop · d detach\nq quit/stop · Process: {:?} · status: {}",
+                    "a adopt · c Claude · x Codex · l fixture · Enter attach · s stop · d detach\nq quit/stop · Process: {:?} · status: {}",
                     app.session.lifecycle,
                     app.session.status.state.label()
                 );
@@ -441,6 +474,7 @@ mod tests {
             } else {
                 assert!(text.contains("Focus: dashboard"));
                 assert!(text.contains("Enter attach"));
+                assert!(text.contains("x Codex"));
                 assert!(text.contains("quit/stop"));
             }
         }

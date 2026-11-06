@@ -1,0 +1,32 @@
+› Ask me to choose alpha or beta and wait for my answer. Do not use tools or write files.
+ 
+ 
+• Choose alpha or beta.
+ 
+  Worked for 2s • 13:58                                                                                 
+ 
+ 
+› alpha. Acknowledge my choice, then run exactly printf approval-proof > approval-marker in this proof
+  checkout using require_escalated permission with justification so I can approve it once. Do not run
+  other commands or write other files.
+ 
+ 
+• You chose alpha. I’ll request approval to write the marker.
+ 
+• Running printf approval-proof > approval-marker
+ 
+ 
+  Would you like to run the following command?
+ 
+  Environment: local
+ 
+  Reason: Do you approve writing approval-proof to approval-marker in this proof checkout?
+ 
+  $ printf approval-proof > approval-marker
+ 
+ 
+› 1. Yes, proceed (y)                                                                                   
+  2. Yes, and don't ask again for commands that start with `printf approval-proof > approval-marker` (p)
+  3. No, and tell Codex what to do differently (esc)
+ 
+  Press enter to confirm or esc to cancel                                                               

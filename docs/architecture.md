@@ -345,3 +345,54 @@ Client death releases the controlling connection without stopping children. A li
 controller continues to exclude every competing dashboard. See the
 [reconnect proof](proofs/07-dashboard-reconnect.md). Supervisor failure, uncertain
 survivors and launch reconciliation belong to ticket 09.
+
+### Experimental Codex native launch (ticket 11)
+
+Dashboard `x` sends the same request-identity launch contract as Claude `c` and
+fixture `l`. The supervisor executes `codex --no-daemon` directly in the adopted
+checkout using its inherited PATH and existing native authentication. Keeping
+Codex out of its shared daemon preserves managed process ownership; no shell
+interpolation or credential copy is involved. All launch choices share active
+worktree exclusion and replay their known request outcome. Changing tool requires
+stopping the active session and starts a new native conversation. Native setup
+and authentication remain in the CLI; help explains `codex login` and failed
+spawn preserves adoption. See [recorded native proof](proofs/11-codex-native.md)
+for version-specific observations. Semantic status remains separate/unknown until
+the Codex status ticket establishes evidence.
+
+### Durable readable history (ticket 08 implementation)
+
+A single `persistence` worker owns the supervisor's SQLite connection and raw
+transcript files. Its versioned schema migrates transactionally from empty state
+through version 1 (app/session metadata) to version 2 (launch outcomes). Records
+retain task/session/request identity and selected history position; checkout path
+bytes are retained for the current adopted task independently of checkout existence.
+The supervisor restores active records as interrupted and never starts a child
+from restored records. Replacement launch stays blocked pending ticket 09's
+execution reconciliation. Native launch phase/identity crash-window hardening
+remains ticket 09; completed metadata operations are not claims of exactly-once
+process execution.
+
+Capture transfers each at-most-4096-byte PTY read into a 64-slot lossless queue
+before applying it to the screen. The reader retains its current block while
+waiting and takes no screen lock during storage backpressure. The sole worker
+retains its current block on append failure. Fixed 65536-byte files rotate by
+stable UUID plus ordinal, independently of checkout paths. A 16-slot control
+queue and 16-slot completion queue are separate from append traffic. Metadata
+messages omit native screen buffers; bounded 2048-byte history pages are escaped
+before UI delivery. A stalled disk does not run on the dashboard/supervisor loop;
+shutdown remains pending while the sole worker is unavailable. This is bounded
+backpressure, not a claim that an agent stops all non-output work.
+
+The 250 ms flush timer synchronizes the transcript file with `File::sync_all`,
+then commits its byte extent in SQLite with `synchronous=FULL`, DELETE journaling,
+and `fullfsync=ON`. Newly created chunk entries are directory-synchronized before
+extent acknowledgement. Success/progress appears only after both operations.
+A stopped runtime drains to PTY EOF before the final flush; quit additionally
+waits for lifecycle metadata completion. Read/flush errors remain visible.
+Recovered history reads only committed extents; a surviving uncommitted tail is
+not counted or overwritten. Raw keys and paste are not copied into state.
+Chronological text retains escaped terminal operations rather than discarding
+redrawn/alternate-screen content. Reading requires neither the checkout nor the
+original native conversation. Power-loss, full-volume and sustained resource
+capacity proof remain separate gates; see `docs/proofs/08-durable-history.md`.

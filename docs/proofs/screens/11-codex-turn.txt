@@ -1,0 +1,32 @@
+ 
+  >_ OpenAI Codex (v0.167.0)
+     /private/tmp/rat-codex-proof-checkout
+ 
+ 
+› Reply exactly: native-proof λ 界. Do not use tools or write files.
+ 
+ 
+• native-proof λ 界
+ 
+  Worked for 3s • 13:57                                                                                 
+ 
+ 
+› Reply exactly: codex-proof λ 界. Do not use tools or write files.
+ 
+ 
+• codex-proof λ 界
+ 
+  Worked for 1s • 13:58                                                                                 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+› Ask Codex to do anything
+ 
+  GPT-6.1-Sol medium · /private/tmp/rat-codex-proof-checkout · Reply with exact text
+  ← for agents · ? for shortcuts
