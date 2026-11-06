@@ -855,7 +855,7 @@ fn missing_claude_keeps_adopted_checkout_and_allows_fixture_launch() {
     let deadline = Instant::now() + Duration::from_secs(4);
     loop {
         let state = controller.request(serde_json::json!("Screen"));
-        if state["lifecycle"] == "Exited"
+        if state["lifecycle"] == "Failed"
             && state["metadata_pending"] == false
             && state["accepted_bytes"] == state["durable_bytes"]
         {
@@ -868,7 +868,7 @@ fn missing_claude_keeps_adopted_checkout_and_allows_fixture_launch() {
         std::thread::sleep(Duration::from_millis(10));
     }
     drop(controller);
-    dashboard = fixture.reopen_with_path_after_release("Process: Exited", Some(tools.as_os_str()));
+    dashboard = fixture.reopen_with_path_after_release("Process: Failed", Some(tools.as_os_str()));
     dashboard.send(b"l");
     dashboard.wait("fixture>");
     fixture.assert_one_owner_and_child();
@@ -902,7 +902,7 @@ fn missing_codex_keeps_adopted_checkout_and_allows_fixture_launch() {
     let deadline = Instant::now() + Duration::from_secs(4);
     loop {
         let state = controller.request(serde_json::json!("Screen"));
-        if state["lifecycle"] == "Exited"
+        if state["lifecycle"] == "Failed"
             && state["metadata_pending"] == false
             && state["accepted_bytes"] == state["durable_bytes"]
         {
@@ -915,7 +915,7 @@ fn missing_codex_keeps_adopted_checkout_and_allows_fixture_launch() {
         std::thread::sleep(Duration::from_millis(10));
     }
     drop(controller);
-    dashboard = fixture.reopen_with_path_after_release("Process: Exited", Some(tools.as_os_str()));
+    dashboard = fixture.reopen_with_path_after_release("Process: Failed", Some(tools.as_os_str()));
     dashboard.send(b"l");
     dashboard.wait("fixture>");
     fixture.assert_one_owner_and_child();
@@ -1746,9 +1746,12 @@ fn failed_gate_exec_result_survives_supervisor_restart_without_retrying_native_c
     dashboard.wait("Adopted");
     dashboard.send(b"c");
     dashboard.wait("Claude Code launch failed:");
-    dashboard.wait("Process: Exited");
+    dashboard.wait("Process: Failed");
     dashboard.kill();
     let control = Controller::connect(&fixture);
+    assert_eq!(control.greeting["lifecycle"], "Failed");
+    assert_ne!(control.greeting["process_exit"]["code"], 0);
+    let outcome = control.greeting["process_exit"].clone();
     let failed = control.greeting["launch_result"].clone();
     let request = failed["request"].clone();
     assert!(
@@ -1760,9 +1763,10 @@ fn failed_gate_exec_result_survives_supervisor_restart_without_retrying_native_c
     kill_owner(&fixture);
     drop(control);
     let mut dashboard = fixture.open();
-    dashboard.wait("Process: Exited");
+    dashboard.wait("Process: Failed");
     dashboard.kill();
     let mut control = Controller::connect(&fixture);
+    assert_eq!(control.greeting["process_exit"], outcome);
     assert_eq!(
         control.request(serde_json::json!({"LaunchClaude":request}))["launch_result"],
         failed
