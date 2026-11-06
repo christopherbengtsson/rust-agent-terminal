@@ -1072,6 +1072,9 @@ fn lost_failed_launch_result_is_recovered_without_executing_after_adoption() {
             serde_json::json!({"Adopt":fixture.repository.as_os_str().as_encoded_bytes()}),
         );
         assert!(adopted["error"].is_null());
+        cleanup_wait15(&mut recovered, |state| {
+            state["adoption_pending"] == false && state["metadata_pending"] == false
+        });
         let retry = recovered.request(serde_json::json!({(launch):request}));
         assert_eq!(retry["launch_result"], failed["launch_result"]);
         assert_eq!(retry["error"], "Adopt a checkout before launch");
@@ -1221,6 +1224,7 @@ fn chronological_history_retains_erased_and_alternate_screen_text_safely() {
     dashboard.send(b"exit\r");
     dashboard.wait("Process: Exited");
     dashboard.send(b"h");
+    dashboard.send(b"v");
     let history = dashboard.wait("erased-response-08");
     assert!(history.contains("alternate-response-08"));
     assert!(history.contains("\\u{1b}[2K"));
@@ -3023,6 +3027,102 @@ fn transcript_bytes14(fixture: &Fixture) -> Vec<u8> {
         .into_iter()
         .flat_map(|path| std::fs::read(path).unwrap())
         .collect()
+}
+
+#[test]
+fn sealing_retains_final_capture_counters_before_receipt_and_after_reconnect() {
+    let fixture = Fixture::new();
+    let mut dashboard = fixture.open();
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted");
+    dashboard.send(b"l");
+    dashboard.wait("fixture>");
+    dashboard.kill();
+    let mut control = Controller::connect(&fixture);
+    let marker = fixture.state().join("proof-storage-completion");
+    std::fs::write(&marker, "seal").unwrap();
+    control.request(serde_json::json!("Stop"));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !marker.with_extension("ready").exists() {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let bytes = transcript_bytes14(&fixture);
+    assert!(!bytes.is_empty());
+    for _ in 0..5 {
+        let state = control.request(serde_json::json!("Screen"));
+        assert_eq!(state["accepted_bytes"], bytes.len() as u64);
+        assert_eq!(state["written_bytes"], bytes.len() as u64);
+        assert_eq!(state["durable_bytes"], bytes.len() as u64);
+        assert_eq!(state["capture_pending_bytes"], 0);
+    }
+    std::fs::remove_file(marker).unwrap();
+    cleanup_wait15(&mut control, |state| {
+        state["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|session| session["reserved"] == false)
+    });
+    drop(control);
+    let control = Controller::connect(&fixture);
+    for field in ["accepted_bytes", "written_bytes", "durable_bytes"] {
+        assert_eq!(control.greeting[field], bytes.len() as u64, "{field}");
+    }
+    let original = control.greeting["session_identity"]["session"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    drop(control);
+    kill_owner(&fixture);
+    let mut dashboard = fixture.open();
+    dashboard.wait("Process: Stopped");
+    dashboard.kill();
+    let mut control = Controller::connect(&fixture);
+    for field in ["accepted_bytes", "written_bytes", "durable_bytes"] {
+        assert_eq!(
+            control.greeting[field],
+            bytes.len() as u64,
+            "restored {field}"
+        );
+    }
+    let replacement = control.request(serde_json::json!({"Launch":"after-seal-counters"}));
+    let replacement = replacement["session_identity"]["session"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_ne!(replacement, original);
+    cleanup_wait15(&mut control, |state| {
+        state["screen"].as_str().unwrap_or("").contains("fixture>")
+    });
+    control.request(serde_json::json!("Stop"));
+    let final_state = cleanup_wait15(&mut control, |state| {
+        state["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|session| session["reserved"] == false)
+    });
+    let replacement_bytes: usize = cleanup_chunks15(&fixture, &replacement)
+        .iter()
+        .map(|(_, raw)| raw.len())
+        .sum();
+    assert!(replacement_bytes > 0);
+    for field in ["accepted_bytes", "written_bytes", "durable_bytes"] {
+        assert_eq!(
+            final_state[field], replacement_bytes as u64,
+            "replacement {field}"
+        );
+    }
+    assert_eq!(
+        cleanup_chunks15(&fixture, &original)
+            .into_iter()
+            .flat_map(|(_, raw)| raw)
+            .collect::<Vec<_>>(),
+        bytes
+    );
+    control.request(serde_json::json!("Shutdown"));
 }
 
 #[test]
@@ -7391,12 +7491,10 @@ fn dashboard_create_and_start_targets_new_checkout_and_retains_failed_launch_wit
     assert!(original["launch_result"]["error"].is_null(), "{original}");
     let target = original["control_target"].clone();
     drop(control);
-    let mut dashboard = Dashboard::open_with_path(
-        &fixture.repository,
-        &fixture.state(),
-        Some(tools.as_os_str()),
-    );
-    dashboard.wait("Process: Running");
+    let mut dashboard =
+        fixture.reopen_with_path_after_release("Process: Running", Some(tools.as_os_str()));
+    dashboard.send(&[0x1d]);
+    dashboard.wait("Focus: dashboard");
     dashboard.send(b"N");
     dashboard.wait("New independent workspace");
     // No title: explicitly choose local main, retain generated branch/folder,

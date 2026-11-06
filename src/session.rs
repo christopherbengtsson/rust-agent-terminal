@@ -306,6 +306,7 @@ struct Sessions {
     entries: Vec<(String, agent_session::AgentSession)>,
     selected: usize,
     directory: PathBuf,
+    selection_pending: Option<uuid::Uuid>,
 }
 impl std::ops::Deref for Sessions {
     type Target = agent_session::AgentSession;
@@ -377,15 +378,23 @@ impl Sessions {
             let target = owner.observation().control_target;
             entries.push((target, owner));
         }
-        if entries[0].1.checkout().is_some() {
+        let selection_pending = if entries[0].1.checkout().is_some() {
+            let operation = uuid::Uuid::new_v4();
             storage
                 .commands
-                .try_send(crate::persistence::Command::SelectWorkspace(selected_task))?;
-        }
+                .try_send(crate::persistence::Command::SelectWorkspace(
+                    operation,
+                    selected_task,
+                ))?;
+            Some(operation)
+        } else {
+            None
+        };
         Ok(Self {
             entries,
             selected: 0,
             directory: directory.to_owned(),
+            selection_pending,
         })
     }
 
@@ -394,6 +403,18 @@ impl Sessions {
         event: crate::persistence::Completion,
         storage: &crate::persistence::Worker,
     ) {
+        if let crate::persistence::Completion::Selected(operation, result) = event {
+            if self.selection_pending != Some(operation) {
+                return;
+            }
+            self.selection_pending = None;
+            if let Err(error) = result {
+                self.report_error(format!(
+                    "Workspace selection not saved: {error}; retry selection"
+                ));
+            }
+            return;
+        }
         // Attributed completions are ignored by owners without the matching
         // obligation. Projection replies belong to the selected owner only.
         if matches!(
@@ -443,12 +464,15 @@ impl Sessions {
         state.control_target = self.entries[self.selected].0.clone();
         state.sessions = summaries;
         state.creation.launches = creation_launches;
+        state.metadata_pending |= self.selection_pending.is_some();
         state
     }
     fn all_stopped(&mut self) -> bool {
-        self.entries
-            .iter_mut()
-            .all(|(_, owner)| owner.observation().stopped)
+        self.selection_pending.is_none()
+            && self
+                .entries
+                .iter_mut()
+                .all(|(_, owner)| owner.observation().stopped)
     }
     fn adopt_checkout(
         &mut self,
@@ -489,12 +513,16 @@ impl Sessions {
                 .1
                 .adopt(identity, true, task.clone(), storage);
             if select {
+                let operation = uuid::Uuid::new_v4();
                 storage
                     .commands
-                    .try_send(crate::persistence::Command::SelectWorkspace(task))
+                    .try_send(crate::persistence::Command::SelectWorkspace(
+                        operation, task,
+                    ))
                     .map_err(|error| {
                         format!("Workspace selection not saved: {error}; retry selection")
                     })?;
+                self.selection_pending = Some(operation);
             }
             return Ok(index);
         }
@@ -512,12 +540,16 @@ impl Sessions {
             .map_err(|e| e.to_string())?;
         owner.adopt(identity, false, task.clone(), storage);
         if select {
+            let operation = uuid::Uuid::new_v4();
             storage
                 .commands
-                .try_send(crate::persistence::Command::SelectWorkspace(task))
+                .try_send(crate::persistence::Command::SelectWorkspace(
+                    operation, task,
+                ))
                 .map_err(|error| {
                     format!("Workspace selection not saved: {error}; retry selection")
                 })?;
+            self.selection_pending = Some(operation);
         }
         let target = owner.observation().control_target;
         self.entries.push((target, owner));
@@ -574,16 +606,20 @@ impl Sessions {
             Request::SelectSession(target) => {
                 if let Some(index) = self.entries.iter().position(|(id, _)| *id == target) {
                     self.selected = index;
+                    let operation = uuid::Uuid::new_v4();
                     if let Err(error) =
                         storage
                             .commands
                             .try_send(crate::persistence::Command::SelectWorkspace(
+                                operation,
                                 self.entries[index].1.task().to_owned(),
                             ))
                     {
                         self.report_error(format!(
                             "Workspace selection not saved: {error}; retry selection"
                         ));
+                    } else {
+                        self.selection_pending = Some(operation);
                     }
                 } else {
                     self.report_error("Session target no longer exists".into());
@@ -598,6 +634,36 @@ impl Sessions {
             }
             request => (self.selected, request),
         };
+        let launch_request = match &request {
+            Request::Launch(id)
+            | Request::LaunchClaude(id)
+            | Request::LaunchCodex(id)
+            | Request::Resume(id)
+            | Request::QueryLaunch(id)
+            | Request::LaunchNative { request: id, .. } => Some(id),
+            _ => None,
+        };
+        if let Some(id) = launch_request
+            && self
+                .entries
+                .iter()
+                .enumerate()
+                .any(|(other, (_, owner))| other != index && owner.pending_launch_request(id))
+        {
+            self.entries[index].1.report_error("This launch request still has an unsettled result in another session; wait for its durable outcome before retrying".into());
+            return;
+        }
+        if let Some(id) = launch_request
+            && let Some(result) = self
+                .entries
+                .iter()
+                .find_map(|(_, owner)| owner.recorded_launch(id))
+        {
+            self.entries[index]
+                .1
+                .handle_recorded(request, result, storage, adopting);
+            return;
+        }
         if matches!(
             request,
             Request::LaunchNative { .. }
@@ -787,6 +853,15 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                 crate::persistence::Completion::Creations(_)
                 | crate::persistence::Completion::CreationSaved(..) => {}
                 crate::persistence::Completion::Registry(snapshot) => registry = snapshot,
+                crate::persistence::Completion::Selected(operation, result) => {
+                    session.complete(
+                        crate::persistence::Completion::Selected(operation, result.clone()),
+                        &storage,
+                    );
+                    if let Ok(snapshot) = result {
+                        registry = snapshot;
+                    }
+                }
                 crate::persistence::Completion::Registered(operation, result) => {
                     if registry_operation != Some(operation) {
                         continue;
@@ -1095,6 +1170,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     ))?);
                     registering = true;
                     adoption_pending = true;
+                    session.clear_error();
                     Ok(())
                 })();
                 if let Err(error) = result {
@@ -1114,6 +1190,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                         std::ffi::OsString::from_vec(bytes),
                     ))?);
                     adoption_pending = true;
+                    session.clear_error();
                     Ok(())
                 })();
                 if let Err(error) = result {
