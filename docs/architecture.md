@@ -364,7 +364,8 @@ the Codex status ticket establishes evidence.
 
 A single `persistence` worker owns the supervisor's SQLite connection and raw
 transcript files. Its versioned schema migrates transactionally from empty state
-through version 1 (app/session metadata) to version 2 (launch outcomes). Records
+through version 1 (app/session metadata), version 2 (launch outcomes), and
+version 3 (nullable creation age, final-capture seal and history tombstones). Records
 retain task/session/request identity and selected history position; checkout path
 bytes are retained for the current adopted task independently of checkout existence.
 The supervisor restores active records as interrupted and never starts a child
@@ -563,3 +564,51 @@ are acknowledged. Restored uncertain execution remains reserved and cannot be
 cleared by Stop. Same-request durable outcomes and unknown-request recovery
 remain in force. See `docs/proofs/14-storage-faults.md` for fault boundaries,
 raw observations, kernel-output loss and the macOS exit-verification finding.
+
+### Explicit retained-history cleanup (ticket 15)
+
+The sole storage worker samples `statvfs` on the state filesystem once per second;
+`f_bavail * f_frsize` uses a saturating u128 intermediate. Available bytes below
+1 GiB warn, equality does not; errors report unknown capacity. This separate
+capacity observation never clears a capture fault. `g` opens eight-row cleanup
+pages ordered by final-capture eligibility, known creation time ascending, then
+stable insertion order. New records capture their actual insertion timestamp;
+schema migration leaves legacy timestamps NULL. Allocated transcript size uses
+`fstatat(AT_SYMLINK_NOFOLLOW)` block counts, includes uncommitted chunks and is
+unavailable when any matching object cannot be safely inspected. Directory work
+processes at most 64 entries per worker pass, interleaved with capture/control.
+SQLite/shared metadata bytes are not attributed to individual sessions.
+
+The supervisor seals a segment only after its owned PTY has reached accepted EOF,
+final transcript sync/commit succeeded, metadata committed, execution stopped and
+capture queues drained. The worker checks saved stopped/exited state, closes its
+retained transcript handle and commits the seal. Restored Stopped alone cannot
+mint this proof. Legacy unsealed and uncertain/interrupted records stay visible
+but unavailable for deletion. Worker and supervisor recheck eligibility at
+confirmation. App stores a copy of the previewed UUID so reordered observations
+cannot retarget confirmation. Enter previews; Shift-D confirms; Esc returns
+without submitting deletion. Attached focus forwards native keys unchanged.
+
+A FULL SQLite transaction commits `history_state=deleting` before any unlink.
+Readable-history queries exclude deleting/deleted segments, append refuses their
+UUIDs, and later metadata saves cannot resurrect them. Only canonical UUID plus
+ordinal transcript names are considered. An O_DIRECTORY/O_NOFOLLOW directory
+handle anchors `fstatat` and `unlinkat` to the validated private state inode;
+symlinks, non-regular files and hard-linked chunks are refused. No checkout or
+record-supplied arbitrary file path is used for deletion. The worker incrementally
+unlinks selected chunks, synchronizes that directory handle, then commits
+`history_state=deleted` and resets that segment's durable extent. It retains all
+session/native-conversation metadata and durable launch outcomes. A failed intent
+changes no files; later failures keep the durable incomplete tombstone. Explicit
+retry or restart of an already-authorized intent safely scans surviving chunks;
+there is no pressure/age-triggered policy and no VACUUM or native-record pruning.
+
+Only after durable completion does the worker publish consistent current-segment
+accounting, re-sample capacity, and notify the supervisor to clear cached history
+and normalize selection. Other segments' counters/files remain intact. Cleanup
+messages persist in the status area and cleanup pane. Low space can persist;
+RetryStorage (`y`) and Stop (`s`) remain available. Cleanup success never clears
+pending bytes, a write/sync fault or possible-loss context. Test faults are debug
+files under the explicit isolated state directory, extending ticket 14 with
+available-capacity injection and delete intent/unlink/directory-sync/completion
+boundaries; production ignores them. See `docs/proofs/15-explicit-history-cleanup.md`.

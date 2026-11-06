@@ -40,6 +40,7 @@ Errors appear in the dashboard, where you can retry or quit.
 | Enter | Attach to the existing managed session |
 | Ctrl-] | Return from attached focus to dashboard navigation |
 | `s` | In dashboard focus, stop the fixture and keep the dashboard open |
+| `g` | Inspect history cleanup; `j`/`k` select, `n`/`p` page, Enter preview, `D` confirm selected deletion, Esc cancel/back |
 | `y` | Retry history storage after repair; the sole writer retains pending bytes |
 | `d` | In dashboard focus, detach and exit while preserving execution |
 | `q` / Esc / Ctrl-C | In dashboard focus, request supervisor shutdown and quit after confirmed stop |
@@ -188,6 +189,40 @@ records without starting coding; unresolved execution blocks replacement launch.
 An abrupt failure can lose output beyond the committed prefix. See
 [the history proof](docs/proofs/08-durable-history.md) for tested boundaries and
 preliminary healthy-storage observations.
+
+### Explicit history cleanup
+
+History remains until you explicitly delete a selected segment. The storage
+worker samples available space on the state directory's filesystem once per
+second and warns below **1 GiB (1,073,741,824 bytes)**; equality does not warn.
+An unreadable capacity sample is reported as unavailable, never zero or healthy.
+Press `g` in dashboard focus for an eight-session page with task/session identity,
+age, allocated transcript bytes and eligibility. Oldest known stopped sessions
+are suggested first; `n`/`p` page, `j`/`k` select, Enter previews the effect,
+`D` confirms that selected UUID, and Esc cancels/back. Attached native input keeps
+its own shortcuts. Age, exit, archival and pressure never authorize deletion.
+
+Only stopped/exited segments with a recorded accepted-PTY EOF, successful final
+flush and durable metadata, and no active/uncertain capture are eligible. Process
+Stopped alone is insufficient. Legacy session ages remain explicitly unknown;
+legacy stopped records without this final-capture proof stay unavailable rather
+than inventing an age or safe state. Interrupted execution remains unavailable.
+
+Deletion removes only the selected managed transcript chunks. Checkout files,
+task working changes, native tools' conversation records, session/native IDs and
+launch-request outcomes remain. A committed deletion intent hides that segment
+from readable history before bounded unlinking begins. Failed/partial deletion
+stays visibly incomplete; `g`, select, Enter, `D` explicitly retries it after
+repair. Restart resumes only previously committed explicit deletion intents.
+The directory is synchronized before the durable completed marker; completed
+cleanup refreshes history navigation and re-samples available capacity.
+
+Allocated bytes cover transcript files, including uncommitted tails; they do not
+attribute shared SQLite pages or promise the same increase in filesystem free
+space. Cleanup can leave capacity low or a capture fault unresolved. `y` retries
+capture/final storage after repair; `s` stops execution. Only a real successful
+write/sync/commit acknowledges capture recovery. See
+[the cleanup proof](docs/proofs/15-explicit-history-cleanup.md).
 
 ### Recovering an interrupted launch
 
