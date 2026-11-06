@@ -190,6 +190,26 @@ mod tests {
     }
 
     #[test]
+    fn ownership_refusal_preserves_checkout_discovery_and_navigation() {
+        let mut app = App::new(PathBuf::from("repo"));
+        app.apply(Event::WorktreesLoaded(Ok(vec![
+            worktree("a"),
+            worktree("b"),
+        ])));
+        app.observe_session(Observation {
+            control_denied: true,
+            error: Some("Another dashboard controls this supervisor".into()),
+            ..Observation::default()
+        });
+        assert_eq!(app.current().unwrap().path, PathBuf::from("a"));
+        app.input(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
+        assert_eq!(app.current().unwrap().path, PathBuf::from("b"));
+        assert_eq!(app.worktrees.len(), 2);
+        assert!(app.session.control_denied);
+        assert!(!app.attached);
+    }
+
+    #[test]
     fn empty_and_removed_selections_are_safe() {
         let mut app = App::new(PathBuf::from("repo"));
         app.next();
