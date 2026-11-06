@@ -1,0 +1,40 @@
+┌ Reviews ───────────────────────────────────────────┐┌ Whole workspace · Workspace 024f3df4 ──────────────────────────────────────────────────────────────────┐
+│Unavailable · milestone 1                           ││Workspace 024f3df4-4581-4b05-a89a-5fbaca9c8571                                                          │
+└────────────────────────────────────────────────────┘│Checkout /private/tmp/.tmpUNtYDa/checkout with spaces                                                   │
+┌ Agent terminal · Worktrees ────────────────────────┐│Request b48618ba-ffb9-4a29-b0f8-0b36ca4556f1                                                            │
+│Repository: /private/tmp/.tmpUNtYDa/checkout with   ││Snapshot; not live · 1794003649905 · r refresh                                                          │
+└────────────────────────────────────────────────────┘│Files (2) · j/k                  Content · line 13 · column 1                                           │
+┌ Project / worktrees (1) ───────────────────────────┐│  alpha                          -base                                                                  │
+│> └ main  /private/tmp/.tmpUNtYDa/checkout with spac││    new file                     +unstaged                                                              │
+│    └ adopted · c/x start · C/X prompt · R rename   ││> zeta                                                                                                  │
+│                                                    ││    committed + staged + unstagedStaged · HEAD to index                                                 │
+│                                                    ││                                 diff --git a/zeta b/zeta                                               │
+│                                                    ││                                 index d0fe822..19d9cc8 100644                                          │
+│                                                    ││                                 --- a/zeta                                                             │
+│                                                    ││                                 +++ b/zeta                                                             │
+│                                                    ││                                 @@ -1 +1 @@                                                            │
+│                                                    ││                                 -committed                                                             │
+│                                                    ││                                 +staged                                                                │
+│                                                    ││                                                                                                        │
+│                                                    ││                                 Unstaged · index to working files                                      │
+│                                                    ││                                 diff --git a/zeta b/zeta                                               │
+│                                                    ││                                 index 19d9cc8..b8d041e 100644                                          │
+│                                                    ││                                 --- a/zeta                                                             │
+│                                                    ││                                 +++ b/zeta                                                             │
+│                                                    ││                                 @@ -1 +1 @@                                                            │
+│                                                    ││                                 -staged                                                                │
+│                                                    ││                                 +unstaged                                                              │
+│                                                    ││                                                                                                        │
+└────────────────────────────────────────────────────┘│                                                                                                        │
+┌ Selection ─────────────────────────────────────────┐│                                                                                                        │
+│Path: /private/tmp/.tmpUNtYDa/checkout with spaces  ││                                                                                                        │
+│Branch: main  HEAD:                                 ││                                                                                                        │
+│7d8846528cd1375d585a14aff1392b2ee8179b4d            ││                                                                                                        │
+│                                                    ││                                                                                                        │
+└────────────────────────────────────────────────────┘└────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌ Status · semantic status: unknown ·  ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│Adopted: /private/tmp/.tmpUNtYDa/checkout with spaces · ready: c Claude / x Codex / l fixture                                                                 │
+│History: metadata committed · durable bytes 0                                                                                                                 │
+│Evidence: unavailable ·                                                                                                                                       │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+j/k file · arrows scroll · w Working/Whole workspace · b local base · r refresh · f/Esc back · s stop · q quit · d detach                                       

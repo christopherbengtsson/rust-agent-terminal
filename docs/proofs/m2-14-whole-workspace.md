@@ -3,7 +3,12 @@
 2026-11-06, macOS 26.2, arm64, stable rustc 1.99.1, Git 2.50.0.
 Isolated worktree `/private/tmp/rat-m2-14`, branch `m2-14-whole-workspace`,
 started from integration `5c1a6044b6d2c0b53f55df6f6f04f9008ec37c1b`.
-The initial implementation is `7da13a7`.
+The initial implementation is `7da13a7`. Final runtime source includes corrected
+compatibility checkpoint `c20cd49` through merge `8dfb046` and the bounded Git
+configuration correction `ce32fdf`. The passing dashboard/protocol test source is
+`e5c1341` (only a title-assertion correction follows `fdbf66a`; runtime unchanged).
+Before completion, integration was rechecked at `5c1a604` and merging it reported
+already up to date; corrected `c20cd49` is additionally included.
 
 ## Behavior and ownership
 
@@ -53,7 +58,7 @@ live protocol-1 owner before sending unsupported requests, since that owner coul
 otherwise ignore the new fields and silently return Working. Pinned PR Review
 head/base records and editor artifacts remain separate later work.
 
-## Verification completed so far
+## Verification
 
 The approved seams are real temporary Git repositories, the App/dashboard and
 real Controller interface. The first committed-plus-current tracer failed to
@@ -61,7 +66,7 @@ compile because Whole inspection did not exist, then passed after implementation
 Supporting checks exercise actual commits and Git results rather than mocked
 command routing.
 
-Passed on the initial implementation source:
+Passed on the initial implementation and repeated after corrected integration:
 
 ```sh
 cargo build --locked
@@ -90,13 +95,84 @@ The real Controller test starts a private supervisor without a coding child. It
 checks missing-base guidance, injected registry ENOSPC with no optimistic saved
 choice, successful attributed base persistence, exact compared HEAD, no implicit
 launch, clean restart, restoration of the original selected commit, and a moved
-base producing a labelled new comparison. It passed in 1.27 seconds. The existing
-Working worker bounds/cancellation test passed in 3.51 seconds. These are test
+base producing a labelled new comparison. It passed in 1.27 seconds, then passed again in 1.38 seconds after the
+compatibility correction. The existing Working worker bounds/cancellation test
+passed in 3.51 seconds before that correction. These are test
 observations, not workload latency guarantees.
 
 Twenty-one App and thirteen UI regression checks pass. The new App/dashboard
 interaction check renders at 160×40 and 60×18, selects a local base explicitly,
 inspects committed content through scrolling, and reopens Working. It preserves
-the existing reference composition and compact content rows. Actual dashboard
-PTY and protocol-owner checks are implemented but await the shared PTY slot;
-no new native-session, editor, streaming or release-workload claim is made here.
+the existing reference composition and compact content rows. The final build,
+format check, all-target warnings-denied Clippy, ten diff tests, twenty-one App
+tests and thirteen UI tests all passed again on `e5c1341`.
+
+## Actual terminal interaction and visual review
+
+After ticket 09 released the shared terminal slot, these scoped checks passed:
+
+```sh
+RAT_DIFF_EVIDENCE=/private/tmp/rat-m2-14-evidence \
+  cargo test --locked --test ownership \
+  whole_workspace_dashboard_switches -- --nocapture
+cargo test --locked --test ownership \
+  dashboard_refuses_legacy_live_owner -- --nocapture
+```
+
+The Whole dashboard test passed in 4.68 seconds. It uses an actual outer PTY at
+160×40 and 60×18, adopts a real repository, explicitly switches comparisons,
+selects a base, inspects committed plus overlapping staged/unstaged and new files,
+refreshes after controlled current-file edits, moves the local base externally,
+checks the movement label, and closes/reopens into Working. All private owners
+stop normally; no coding child is launched. The first attempt failed only because
+the reopen assertion matched the available-switch footer's “Whole workspace” text;
+restricting that assertion to the bordered comparison title corrected the harness.
+No runtime change was needed for the passing rerun.
+
+The legacy-owner test passed in 12.61 seconds. Its added case advertises all other
+current capabilities with comparison protocol 1. The dashboard refuses that live
+owner, sends zero unsupported request bytes, detaches locally, and leaves the
+locked owner's database unmigrated. The test also retains older missing/legacy
+Git-protocol cases.
+
+Raw cells, text and inspected rasterizations:
+
+- Normal identity/base: [cells](screens/m2-14-whole-pty-160-header.json),
+  [text](screens/m2-14-whole-pty-160-header.txt),
+  [PNG](screens/m2-14-whole-pty-160-header.png).
+- Normal overlapping edits: [cells](screens/m2-14-whole-pty-160-patch.json),
+  [text](screens/m2-14-whole-pty-160-patch.txt),
+  [PNG](screens/m2-14-whole-pty-160-patch.png).
+- Normal moved base: [cells](screens/m2-14-whole-pty-160-moved.json),
+  [text](screens/m2-14-whole-pty-160-moved.txt),
+  [PNG](screens/m2-14-whole-pty-160-moved.png).
+- Small identity: [cells](screens/m2-14-whole-pty-60-header.json),
+  [text](screens/m2-14-whole-pty-60-header.txt),
+  [PNG](screens/m2-14-whole-pty-60-header.png).
+- Small overlapping edits: [cells](screens/m2-14-whole-pty-60-patch.json),
+  [text](screens/m2-14-whole-pty-60-patch.txt),
+  [PNG](screens/m2-14-whole-pty-60-patch.png).
+- Small moved base: [cells](screens/m2-14-whole-pty-60-moved.json),
+  [text](screens/m2-14-whole-pty-60-moved.txt),
+  [PNG](screens/m2-14-whole-pty-60-moved.png).
+
+All six PNGs were generated with `scripts/render-terminal-capture.swift` and
+visually inspected against `docs/images/conductor-dashboard-v3.jpg`. The normal
+view retains reviews above the project/worktree tree and a prominent inspection
+pane, with status and actual keyboard actions below. Inspection occupies the
+native session area temporarily. Reviews remain honestly unavailable. The compact
+view intentionally hides the sidebar, retains workspace/request/checkout identity
+and state, and uses three content rows plus vertical/horizontal scrolling.
+Long comparison labels and hashes require scrolling at 60 columns; the small
+captures show identity, patch and movement as separate contexts. This preserves
+the inherited small-layout boundary rather than claiming simultaneous visibility
+of every comparison field.
+
+Inherited NO_COLOR was respected. These PNGs rasterize real parsed PTY cells;
+they do not establish Terminal.app/iTerm rendering or native-tool compatibility.
+The controlled filesystem edits represent shared-file activity without a native
+agent. No editor handoff, new native-session, streaming performance or full
+release-workload claim is made. The parent owns the final aggregate all-target
+gate; no unfiltered terminal-restoration or native suite ran concurrently here.
+Creation's original-base facts and initial INSERT OR IGNORE seed are coordinated
+with ticket 09 and remain separately qualified by that feature's evidence.
