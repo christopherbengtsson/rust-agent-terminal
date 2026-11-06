@@ -85,6 +85,16 @@ pub enum Request {
         project: String,
     },
     CreateWorkspace(crate::creation::Intent),
+    ConfigureSetup {
+        project: String,
+        command: Option<String>,
+    },
+    RecoverSetup {
+        attempt: String,
+        retry: bool,
+        #[serde(default)]
+        informed: bool,
+    },
     RecoverCreation {
         request: String,
         local: bool,
@@ -114,7 +124,11 @@ pub enum Request {
         name: String,
     },
     Resume(String),
-    ResumeSelected { request: String, workspace: String, session: String },
+    ResumeSelected {
+        request: String,
+        workspace: String,
+        session: String,
+    },
     QueryLaunch(String),
     Reconcile,
     History {
@@ -163,6 +177,10 @@ pub struct LaunchResult {
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Observation {
+    #[serde(default)]
+    pub setup_protocol: u32,
+    #[serde(default)]
+    pub setup: crate::setup::View,
     #[serde(default)]
     pub browse_protocol: u32,
     #[serde(default)]

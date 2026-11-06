@@ -289,6 +289,9 @@ pub struct ResumeIdentity {
     pub native: String,
 }
 pub enum Command {
+    SetupLoad,
+    SetupSave(uuid::Uuid, Box<crate::setup::Record>),
+    ConfigureSetup(uuid::Uuid, String, Option<String>),
     ObservedBranches(Vec<(Vec<u8>, String)>),
     Browse(search::Query),
     CreationLoad,
@@ -298,7 +301,13 @@ pub enum Command {
     Rename(uuid::Uuid, String, String),
     ComparisonBase(uuid::Uuid, String, crate::working_diff::Base),
     Register(uuid::Uuid, crate::git::CheckoutIdentity),
-    ResumeIdentity { target: String, request: String, workspace: String, session: String, task: String },
+    ResumeIdentity {
+        target: String,
+        request: String,
+        workspace: String,
+        session: String,
+        task: String,
+    },
     Prepare(Snapshot),
     Authorize(Snapshot),
     Save(Snapshot),
@@ -323,6 +332,8 @@ pub enum Command {
 #[derive(Clone)]
 pub enum Completion {
     ResumeIdentity(String, String, std::result::Result<ResumeIdentity, String>),
+    Setups(std::result::Result<Vec<crate::setup::Record>, String>),
+    SetupSaved(uuid::Uuid, std::result::Result<(), String>),
     Browse(search::Response),
     Creations(std::result::Result<Vec<crate::creation::Record>, String>),
     CreationSaved(
@@ -475,10 +486,13 @@ impl Worker {
                             continue;
                         }
                     }
-                    let kind = match &command { Command::ResumeIdentity { .. } => "resume", Command::Browse(..) => "browse", Command::ObservedBranches(..) => "registry", Command::ComparisonBase(..) | Command::CreationLoad | Command::CreationSave(..) => "registry", Command::SelectWorkspace(..) => "selection", Command::Capture(..) => unreachable!(), Command::Rename(..) | Command::Register(..) => "registry", Command::Save(..) | Command::Prepare(..) | Command::Authorize(..) => "metadata", Command::History(..) | Command::HistorySession(..) | Command::HistoryTarget { .. } => "history", Command::Cleanup(..) | Command::Delete(..) | Command::Seal(..) => "cleanup", Command::Retry => "retry", Command::Flush(..) => "flush" };
+                    let kind = match &command { Command::ResumeIdentity { .. } => "resume", Command::Browse(..) => "browse", Command::ObservedBranches(..) => "registry", Command::SetupLoad | Command::SetupSave(..) | Command::ConfigureSetup(..) | Command::ComparisonBase(..) | Command::CreationLoad | Command::CreationSave(..) => "registry", Command::SelectWorkspace(..) => "selection", Command::Capture(..) => unreachable!(), Command::Rename(..) | Command::Register(..) => "registry", Command::Save(..) | Command::Prepare(..) | Command::Authorize(..) => "metadata", Command::History(..) | Command::HistorySession(..) | Command::HistoryTarget { .. } => "history", Command::Cleanup(..) | Command::Delete(..) | Command::Seal(..) => "cleanup", Command::Retry => "retry", Command::Flush(..) => "flush" };
                     status.lock().unwrap().operation = Some((kind, Instant::now()));
                     let operation = match &command { Command::Prepare(snapshot) | Command::Authorize(snapshot) | Command::Save(snapshot) => Some(snapshot.operation.clone()), Command::Flush(operation) | Command::Seal(operation) => Some(operation.clone()), _ => None };
                     let result = match command {
+                        Command::SetupLoad => Ok(Completion::Setups(store.setups().map_err(|e|e.to_string()))),
+                        Command::SetupSave(id, record) => Ok(Completion::SetupSaved(id, store.save_setup(&record).map_err(|e|e.to_string()))),
+                        Command::ConfigureSetup(id, project, command) => Ok(Completion::Registered(id, store.configure_setup(&project, &command).map_err(|e|e.to_string()))),
                         Command::ResumeIdentity { target, request, workspace, session, task } => Ok(Completion::ResumeIdentity(target, request, store.resume_identity(&workspace, &session, &task).map_err(|e| e.to_string()))),
                         Command::Browse(query) => Ok(Completion::Browse(store.start_browse(query))),
                         Command::ObservedBranches(facts) => (|| {
@@ -723,7 +737,7 @@ impl Store {
             "PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL; PRAGMA fullfsync=ON;",
         )?;
         let version: u32 = db.pragma_query_value(None, "user_version", |r| r.get(0))?;
-        if version > 7 {
+        if version > 8 {
             return Err("History schema is newer than this executable".into());
         }
         if version == 0 {
@@ -807,6 +821,11 @@ impl Store {
             let tx = db.transaction()?;
             search::schema(&tx)?;
             tx.pragma_update(None, "user_version", 7)?;
+            tx.commit()?;
+        }
+        if version < 8 {
+            let tx = db.transaction()?;
+            tx.execute_batch("CREATE TABLE IF NOT EXISTS project_setup(project TEXT PRIMARY KEY, command TEXT NOT NULL); CREATE TABLE IF NOT EXISTS workspace_setup(attempt TEXT PRIMARY KEY, record TEXT NOT NULL); PRAGMA user_version=8;")?;
             tx.commit()?;
         }
         let mut store = Self {
@@ -1389,6 +1408,73 @@ impl Store {
         tx.commit()?;
         crate::registry::snapshot(&self.db, None)
     }
+    fn configure_setup(
+        &mut self,
+        project: &str,
+        command: &Option<String>,
+    ) -> Result<crate::registry::Registry> {
+        crate::setup::validate_command(command)?;
+        self.fault("registry")?;
+        if !self.db.query_row(
+            "SELECT EXISTS(SELECT 1 FROM projects WHERE id=?1)",
+            [project],
+            |r| r.get::<_, bool>(0),
+        )? {
+            return Err("Project unavailable".into());
+        }
+        let tx = self.db.transaction()?;
+        if let Some(command) = command {
+            tx.execute("INSERT INTO project_setup VALUES(?1,?2) ON CONFLICT(project) DO UPDATE SET command=excluded.command",rusqlite::params![project,command])?;
+        } else {
+            tx.execute("DELETE FROM project_setup WHERE project=?1", [project])?;
+        }
+        tx.commit()?;
+        crate::registry::snapshot(&self.db, None)
+    }
+    fn setups(&self) -> Result<Vec<crate::setup::Record>> {
+        self.db
+            .prepare("SELECT record FROM workspace_setup ORDER BY rowid LIMIT 32")?
+            .query_map([], |r| r.get::<_, String>(0))?
+            .map(|j| Ok(serde_json::from_str(&j?)?))
+            .collect()
+    }
+    fn save_setup(&mut self, record: &crate::setup::Record) -> Result<()> {
+        crate::setup::validate_command(&Some(record.command.clone()))?;
+        uuid::Uuid::parse_str(&record.attempt)?;
+        if serde_json::to_vec(record)?.len() > 65536 {
+            return Err("Setup receipt exceeds 64 KiB; retained outcome requires repair".into());
+        }
+        self.fault(match record.phase {
+            crate::setup::Phase::Prepared => "setup-prepare",
+            crate::setup::Phase::Authorized => "setup-authorize",
+            crate::setup::Phase::Running => "setup-running",
+            _ => "setup-result",
+        })?;
+        let tx = self.db.transaction()?;
+        let previous: Option<String> = tx
+            .query_row(
+                "SELECT record FROM workspace_setup WHERE attempt=?1",
+                [&record.attempt],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if let Some(previous) = previous {
+            let old: crate::setup::Record = serde_json::from_str(&previous)?;
+            if old.command != record.command
+                || serde_json::to_string(&old.creation)? != serde_json::to_string(&record.creation)?
+            {
+                return Err("Setup attempt is bound to another command or workspace".into());
+            }
+        } else if tx.query_row("SELECT count(*) FROM workspace_setup", [], |r| {
+            r.get::<_, usize>(0)
+        })? >= 32
+        {
+            return Err("Setup receipt capacity reached".into());
+        }
+        tx.execute("INSERT INTO workspace_setup VALUES(?1,?2) ON CONFLICT(attempt) DO UPDATE SET record=excluded.record",rusqlite::params![record.attempt,serde_json::to_string(record)?])?;
+        tx.commit()?;
+        Ok(())
+    }
     fn register(
         &mut self,
         checkout: crate::git::CheckoutIdentity,
@@ -1727,15 +1813,29 @@ impl Store {
             .ok_or("No retained session at this position")?;
         self.history_record((id, identity, durable, json), offset)
     }
-    fn resume_identity(&self, workspace: &str, session: &str, task: &str) -> Result<ResumeIdentity> {
+    fn resume_identity(
+        &self,
+        workspace: &str,
+        session: &str,
+        task: &str,
+    ) -> Result<ResumeIdentity> {
         let row: Option<(String, String)> = self.db.query_row(
             "SELECT s.state,s.identity FROM sessions s JOIN workspace_sessions m ON m.session=s.id JOIN workspace_tasks t ON t.workspace=m.workspace WHERE s.id=?1 AND m.workspace=?2 AND t.task=?3",
             params![session,workspace,task], |row| Ok((row.get(0)?,row.get(1)?))).optional()?;
         let (json,label) = row.ok_or("Selected conversation is unavailable or belongs to another workspace; retained history is unchanged. Explicitly choose a new conversation with c/x")?;
         let mut state: Observation = serde_json::from_str(&json)?;
-        if state.session_identity.is_none() && state.identity.is_none() { state.identity = Some(label); }
+        if state.session_identity.is_none() && state.identity.is_none() {
+            state.identity = Some(label);
+        }
         let state = decode_record(&serde_json::to_string(&state)?)?;
-        if state.session_identity.as_ref().map(|id|id.session.as_str()) != Some(session) { return Err("Selected segment identity disagrees with saved record".into()); }
+        if state
+            .session_identity
+            .as_ref()
+            .map(|id| id.session.as_str())
+            != Some(session)
+        {
+            return Err("Selected segment identity disagrees with saved record".into());
+        }
         let agent = match state.agent.as_deref() {
             Some("Claude Code") => crate::events::NativeAgent::Claude,
             Some("Codex CLI") => crate::events::NativeAgent::Codex,

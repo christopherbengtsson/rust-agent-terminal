@@ -189,14 +189,20 @@ impl AgentSession {
         use crate::persistence::Completion;
         match event {
             Completion::ResumeIdentity(target, request, result) => {
-                if target != self.state.control_target || self.launch.resolving.as_deref() != Some(&request) { return; }
+                if target != self.state.control_target
+                    || self.launch.resolving.as_deref() != Some(&request)
+                {
+                    return;
+                }
                 self.launch.resolving = None;
                 match result {
                     Ok(identity) => {
                         self.launch.selected = Some((request.clone(), identity));
                         self.handle(Request::Resume(request), storage, false);
                     }
-                    Err(error) => { self.state.error = Some(error); }
+                    Err(error) => {
+                        self.state.error = Some(error);
+                    }
                 }
             }
             crate::persistence::Completion::Browse(_) => {}
@@ -210,7 +216,9 @@ impl AgentSession {
                     self.state.history = None;
                 }
             }
-            Completion::Creations(_)
+            Completion::Setups(_)
+            | Completion::SetupSaved(..)
+            | Completion::Creations(_)
             | Completion::CreationSaved(..)
             | Completion::Registry(_)
             | Completion::Selected(..)
@@ -536,7 +544,8 @@ impl AgentSession {
             self.state.accepted_to_durable_millis = progress.accepted_to_durable_millis;
         }
 
-        self.state.metadata_pending = self.launch.resolving.is_some() || self.writes.metadata_pending()
+        self.state.metadata_pending = self.launch.resolving.is_some()
+            || self.writes.metadata_pending()
             || self.metadata_failed
             || self.launch.pending_launch.is_some()
             || self.launch.creating.is_some()
@@ -756,25 +765,68 @@ impl AgentSession {
         storage: &crate::persistence::Worker,
         adoption_pending: bool,
     ) {
-        if let Request::ResumeSelected { request, workspace, session } = &request {
-            if let Some(recorded) = recorded_result.or_else(||self.launches.get(request).cloned()) {
-                self.state.launch_result = Some(recorded.clone()); self.state.error = recorded.error; return;
+        if let Request::ResumeSelected {
+            request,
+            workspace,
+            session,
+        } = &request
+        {
+            if let Some(recorded) = recorded_result.or_else(|| self.launches.get(request).cloned())
+            {
+                self.state.launch_result = Some(recorded.clone());
+                self.state.error = recorded.error;
+                return;
             }
-            if self.launch.resolving.is_some() { return; }
-            if self.reserved() || self.metadata_failed || adoption_pending || self.writes.metadata_pending() {
-                self.state.error = Some("Worktree occupied or prior capture/setup is unsettled; attach to its running session, or explicitly Stop and wait for settled capture before resuming another conversation".into()); return;
+            if self.launch.resolving.is_some() {
+                return;
             }
-            if request.is_empty() || request.len()>128 { self.state.error = Some("Invalid resume request identity".into()); return; }
-            match storage.commands.try_send(crate::persistence::Command::ResumeIdentity {
-                target: self.state.control_target.clone(), request: request.clone(), workspace: workspace.clone(), session: session.clone(), task: self.task_identity.clone(),
-            }) {
-                Ok(()) => { self.launch.resolving = Some(request.clone()); self.state.error = None; }
-                Err(error) => self.state.error = Some(format!("Resume lookup busy: {error}; explicitly retry")),
+            if self.reserved()
+                || self.metadata_failed
+                || adoption_pending
+                || self.writes.metadata_pending()
+            {
+                self.state.error = Some("Worktree occupied or prior capture/setup is unsettled; attach to its running session, or explicitly Stop and wait for settled capture before resuming another conversation".into());
+                return;
+            }
+            if request.is_empty() || request.len() > 128 {
+                self.state.error = Some("Invalid resume request identity".into());
+                return;
+            }
+            match storage
+                .commands
+                .try_send(crate::persistence::Command::ResumeIdentity {
+                    target: self.state.control_target.clone(),
+                    request: request.clone(),
+                    workspace: workspace.clone(),
+                    session: session.clone(),
+                    task: self.task_identity.clone(),
+                }) {
+                Ok(()) => {
+                    self.launch.resolving = Some(request.clone());
+                    self.state.error = None;
+                }
+                Err(error) => {
+                    self.state.error =
+                        Some(format!("Resume lookup busy: {error}; explicitly retry"))
+                }
             }
             return;
         }
-        if self.launch.resolving.is_some() && matches!(request, Request::Launch(_) | Request::LaunchClaude(_) | Request::LaunchCodex(_) | Request::LaunchNative {..} | Request::Resume(_) | Request::Adopt(_) | Request::Reconcile) {
-            self.state.error = Some("Selected resume is resolving; Stop cancels it before another action".into()); return;
+        if self.launch.resolving.is_some()
+            && matches!(
+                request,
+                Request::Launch(_)
+                    | Request::LaunchClaude(_)
+                    | Request::LaunchCodex(_)
+                    | Request::LaunchNative { .. }
+                    | Request::Resume(_)
+                    | Request::Adopt(_)
+                    | Request::Reconcile
+            )
+        {
+            self.state.error =
+                Some("Selected resume is resolving; Stop cancels it before another action".into());
+            return;
         }
         let directory = self.directory.clone();
         let directory = directory.as_path();
@@ -804,16 +856,31 @@ impl AgentSession {
             _ => None,
         };
         let selected = match &request {
-            Request::Resume(id) => self.launch.selected.as_ref().filter(|(request,_)|request==id).map(|(_,identity)|identity.clone()),
+            Request::Resume(id) => self
+                .launch
+                .selected
+                .as_ref()
+                .filter(|(request, _)| request == id)
+                .map(|(_, identity)| identity.clone()),
             _ => None,
         };
         let resume = matches!(&request, Request::Resume(_));
         let claude = (matches!(&request, Request::LaunchClaude(_))
             || matches!(initial, Some((crate::events::NativeAgent::Claude, _))))
-            || (resume && selected.as_ref().map_or(self.state.agent.as_deref() == Some("Claude Code"), |id| matches!(id.agent, crate::events::NativeAgent::Claude)));
+            || (resume
+                && selected
+                    .as_ref()
+                    .map_or(self.state.agent.as_deref() == Some("Claude Code"), |id| {
+                        matches!(id.agent, crate::events::NativeAgent::Claude)
+                    }));
         let codex = (matches!(&request, Request::LaunchCodex(_))
             || matches!(initial, Some((crate::events::NativeAgent::Codex, _))))
-            || (resume && selected.as_ref().map_or(self.state.agent.as_deref() == Some("Codex CLI"), |id| matches!(id.agent, crate::events::NativeAgent::Codex)));
+            || (resume
+                && selected
+                    .as_ref()
+                    .map_or(self.state.agent.as_deref() == Some("Codex CLI"), |id| {
+                        matches!(id.agent, crate::events::NativeAgent::Codex)
+                    }));
         let launch_request = match &request {
             Request::LaunchNative { request: id, .. }
             | Request::Launch(id)
@@ -899,7 +966,7 @@ impl AgentSession {
                 return Err("Launch reconciliation pending; wait for durable outcome".into());
             }
             match request {
-                Request::ResumeSelected {..} | Request::Browse(_) | Request::EditorSource{..} | Request::InspectWorking{..} | Request::PreviewCreation{..} | Request::CreateWorkspace(_) | Request::RecoverCreation{..} | Request::CancelCreation{..} | Request::RenameWorkspace { .. } | Request::Session { .. } | Request::SelectSession(_) | Request::Discover { .. } | Request::Adopt(_) | Request::Register(_) => unreachable!("workspace requests are supervisor-owned"),
+                Request::ResumeSelected {..} | Request::Browse(_) | Request::EditorSource{..} | Request::InspectWorking{..} | Request::PreviewCreation{..} | Request::ConfigureSetup {..} | Request::RecoverSetup {..} | Request::CreateWorkspace(_) | Request::RecoverCreation{..} | Request::CancelCreation{..} | Request::RenameWorkspace { .. } | Request::Session { .. } | Request::SelectSession(_) | Request::Discover { .. } | Request::Adopt(_) | Request::Register(_) => unreachable!("workspace requests are supervisor-owned"),
                 Request::Reconcile => {
                     if self.execution.child.is_some() || self.execution.stopping.is_some() { return Err("Session owned by current supervisor; stop it normally".into()); }
                     if let Some(evidence) = &self.state.execution { evidence.reconcile()?; }
@@ -1476,7 +1543,8 @@ impl AgentSession {
         {
             screen.snapshot(&mut self.state);
         }
-        self.state.metadata_pending = self.launch.resolving.is_some() || self.writes.metadata_pending()
+        self.state.metadata_pending = self.launch.resolving.is_some()
+            || self.writes.metadata_pending()
             || self.metadata_failed
             || self.launch.pending_launch.is_some()
             || self.launch.creating.is_some()
@@ -1499,12 +1567,13 @@ impl AgentSession {
         self.launches.get(request).cloned()
     }
     pub(super) fn pending_launch_request(&self, request: &str) -> bool {
-        self.launch.resolving.as_deref() == Some(request) || (self.state.launch_request == request
-            && (self.launch.pending_launch.is_some()
-                || self.launch.creating.is_some()
-                || self.launch.created.is_some()
-                || self.launch.gate_receipt.is_some()
-                || self.launch.outcome_reply))
+        self.launch.resolving.as_deref() == Some(request)
+            || (self.state.launch_request == request
+                && (self.launch.pending_launch.is_some()
+                    || self.launch.creating.is_some()
+                    || self.launch.created.is_some()
+                    || self.launch.gate_receipt.is_some()
+                    || self.launch.outcome_reply))
     }
     pub(super) fn adopt(
         &mut self,
@@ -1532,7 +1601,8 @@ impl AgentSession {
         self.save_metadata(storage);
     }
     pub(super) fn reserved(&self) -> bool {
-        self.launch.resolving.is_some() || self.state.execution.is_some()
+        self.launch.resolving.is_some()
+            || self.state.execution.is_some()
             || !self.history.eof
             || self.history.capture_done.is_some()
             || self.history.flush_pending

@@ -69,11 +69,16 @@ impl Browser {
             return Some(self.query(0));
         }
         if key.code == KeyCode::Char('v') && key.modifiers.is_empty() && !self.editing {
-            let row = self.response.as_ref()?.rows.iter()
+            let row = self
+                .response
+                .as_ref()?
+                .rows
+                .iter()
                 .find(|row| Some(&row.key) == self.selected.as_ref())?;
             return Some(Effect::Session(Request::ResumeSelected {
                 request: uuid::Uuid::new_v4().to_string(),
-                workspace: row.workspace.clone(), session: row.session.clone()?,
+                workspace: row.workspace.clone(),
+                session: row.session.clone()?,
             }));
         }
         if self.opened.is_some() {

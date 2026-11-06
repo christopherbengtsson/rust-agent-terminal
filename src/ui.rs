@@ -161,17 +161,32 @@ impl Ui {
                         .iter()
                         .filter(|entry| entry.task == workspace.task)
                         .max_by_key(|entry| entry.reserved);
-                    let context = runtime.map_or_else(
-                        || format!("{} sessions", workspace.sessions.len()),
-                        |runtime| {
-                            format!(
-                                "{:?} · {} · {} sessions",
-                                runtime.lifecycle,
-                                runtime.status.state.label(),
-                                workspace.sessions.len()
-                            )
-                        },
-                    );
+                    let context = if let Some(setup) = app
+                        .session
+                        .setup
+                        .records
+                        .iter()
+                        .rev()
+                        .find(|r| r.creation.intent.request == workspace.task)
+                    {
+                        format!(
+                            "Setup {:?} · {} sessions",
+                            setup.phase,
+                            workspace.sessions.len()
+                        )
+                    } else {
+                        runtime.map_or_else(
+                            || format!("{} sessions", workspace.sessions.len()),
+                            |runtime| {
+                                format!(
+                                    "{:?} · {} · {} sessions",
+                                    runtime.lifecycle,
+                                    runtime.status.state.label(),
+                                    workspace.sessions.len()
+                                )
+                            },
+                        )
+                    };
                     ListItem::new(vec![
                         Line::from(format!(
                             "{} / {}",
@@ -603,10 +618,15 @@ impl Ui {
                 session,
             );
         }
+        if let Some((_, command)) = &app.setup_input {
+            frame.render_widget(Clear, session);
+            frame.render_widget(Paragraph::new(format!("Optional project setup shell command (/bin/sh -c)\nRuns once in each NEW workspace before requested coding.\nEnter saves; empty disables; Esc cancels.\n\n{}",visible(command))).block(Block::bordered().title(" Project setup ")).wrap(Wrap{trim:false}),session);
+        }
         if app.creation_open
             && app.create_form.is_none()
             && app.first_prompt.is_none()
             && app.rename_workspace.is_none()
+            && app.setup_input.is_none()
         {
             let text = if let Some(record) = app.creation_record() {
                 let project = app
@@ -666,8 +686,12 @@ impl Ui {
                 } else {
                     "L: Create locally without starting".into()
                 };
+                let setup=app.setup_record().map(|r| {
+                    let continuation=if app.session.setup.armed_launches.contains(&record.intent.request) {format!("Continue will start {:?} (Create and start still armed)",record.intent.agent)}else{"Continue keeps coding stopped; explicit Start required".into()};
+                    format!("Setup {:?}{} · {}\n{}\nT Retry · Y Continue without setup · I reconcile/informed Retry (may repeat external effects)\n{}\nBounded combined output tail; {} discarded bytes (not conversation history):\n{}\n",r.phase,if app.session.setup.pending {" (pending durable result/cleanup)"}else{""},visible(&r.message),continuation,app.session.setup.error.as_deref().map(visible).unwrap_or_default(),r.discarded,visible(&r.output))
+                }).unwrap_or_default();
                 format!(
-                    "Project: {}\nPhase: {:?}\nBase: {}\nCommit: {}\nBranch: {}\nFolder: {}\n{}\n\n{}\n\n{}\nG: Query/recover creation without starting\n[/]: receipts · Z: cancel · Esc: return",
+                    "{setup}Project: {}\nPhase: {:?}\nBase: {}\nCommit: {}\nBranch: {}\nFolder: {}\n{}\n\n{}\n\n{}\nG: Query/recover creation without starting\n[/]: receipts · Z: cancel · Esc: return",
                     visible(project),
                     record.phase,
                     visible(record.base_ref.as_deref().unwrap_or(&record.intent.base)),
@@ -698,7 +722,15 @@ impl Ui {
             );
         }
         if app.create_form.is_none()
+            && app.setup_input.is_none()
             && (app.creation_open
+                || app.session.setup.pending
+                || app.setup_record().is_some_and(|r| {
+                    matches!(
+                        r.phase,
+                        crate::setup::Phase::Failed | crate::setup::Phase::Uncertain
+                    )
+                })
                 || app.session.creation.pending
                 || app.session.creation.error.is_some()
                 || app
@@ -708,7 +740,7 @@ impl Ui {
                     .last()
                     .is_some_and(|r| !matches!(r.phase, crate::creation::Phase::Created)))
         {
-            let message=app.session.creation.error.clone().or_else(||app.creation_record().map(|r|format!("{:?}: {} · branch {} · folder {} · base {} · commit {} · L local fallback · G recover · Z cancel · Esc dismiss",r.phase,r.message,r.intent.branch,crate::creation::path(&r.intent.path).display(),r.base_ref.as_deref().unwrap_or("pending"),r.commit.as_deref().unwrap_or("pending")))).unwrap_or_else(||"Workspace creation in progress · Z cancel".into());
+            let message=app.setup_record().map(|r|format!("Setup {:?}: {} · {} · T Retry · Y Continue · I informed reconcile/retry · Z cancel",r.phase,visible(&r.message),if app.session.setup.armed_launches.contains(&r.creation.intent.request) {"Continue STARTS coding"}else{"Continue keeps coding STOPPED"})).or_else(||app.session.setup.error.clone()).or_else(||app.session.creation.error.clone()).or_else(||app.creation_record().map(|r|format!("{:?}: {} · branch {} · folder {} · base {} · commit {} · L local fallback · G recover · Z cancel · Esc dismiss",r.phase,r.message,r.intent.branch,crate::creation::path(&r.intent.path).display(),r.base_ref.as_deref().unwrap_or("pending"),r.commit.as_deref().unwrap_or("pending")))).unwrap_or_else(||"Workspace creation in progress · Z cancel".into());
             frame.render_widget(
                 Paragraph::new(visible(&message))
                     .block(Block::bordered().title(" Workspace creation "))
@@ -724,7 +756,7 @@ impl Ui {
         } else if app.create_form.is_some() {
             "Tab fields · Left/Right agent · Enter Create without starting\nCtrl-S Create and start · Ctrl-U clear · Esc cancel"
         } else if app.creation_open {
-            "L explicit local creation (launch choice in receipt) · G recover without starting\n[/] receipt · Z cancel creation · Esc return · q quit"
+            "T Retry setup · Y Continue (launch effect in receipt) · I informed reconcile/retry\nL local creation · G recover · [/] receipt · Z cancel creation · Esc return · q quit"
         } else if app.diff.is_some()
             && !app.attached
             && (frame.area().width < 80 || frame.area().height < 22)
@@ -743,7 +775,7 @@ Esc cancel · registration never starts an agent"
             && (frame.area().width < 80 || frame.area().height < 22)
         {
             "N create  j/k select  [/] project  a adopt  E LIVE  R rename
-A add · h history · w/Esc back · d detach · q quit"
+A add · U setup · h history · w/Esc back · d detach · q quit"
         } else if app.cleanup_open
             && !app.attached
             && (frame.area().width < 80 || frame.area().height < 22)
@@ -773,7 +805,7 @@ A add · h history · w/Esc back · d detach · q quit"
                 &compact_help
             } else {
                 compact_help = format!(
-                    "q quit s stop h history S text / find B chats {}\nN create  O receipt  w workspaces  f diff  E LIVE  d detach",
+                    "q quit s stop h history S text / find B chats {}\nN create O receipt U setup w spaces f diff E LIVE d detach",
                     if app.session.lifecycle == crate::session::Lifecycle::Running {
                         "Enter attach"
                     } else {
@@ -836,7 +868,7 @@ fn draw_browser(frame: &mut Frame, area: Rect, browser: &crate::browser::Browser
             } else if response.rows.is_empty() {
                 "No results. Index catches up to committed output; Ctrl-R refreshes."
             } else {
-                "Partial index of committed text · exact words (all, case-insensitive). Ctrl-R refreshes."
+                "Enter reads · v resumes selected original tool/native ID · Ctrl-R refreshes · Stop must settle occupied checkout"
             }
         },
     )
@@ -1620,6 +1652,7 @@ mod tests {
             .registry
             .projects
             .push(crate::registry::Project {
+                setup_command: None,
                 id: "project".into(),
                 name: "Example".into(),
                 common_dir: b"/repo/.git".to_vec(),

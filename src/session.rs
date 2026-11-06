@@ -104,6 +104,7 @@ fn transport(
             || greeting.prompt_naming_protocol != 1
             || greeting.creation_protocol != 1
             || greeting.resume_protocol != 1
+            || greeting.setup_protocol != 1
         {
             events.send(greeting)?;
             return Ok(());
@@ -143,7 +144,8 @@ fn transport(
         || greeting.sessions_protocol != 1
         || greeting.prompt_naming_protocol != 1
         || greeting.creation_protocol != 1
-            || greeting.resume_protocol != 1
+        || greeting.resume_protocol != 1
+        || greeting.setup_protocol != 1
     {
         greeting.control_denied = true;
         greeting.error = Some("Existing supervisor does not support this dashboard's worktree, registry, session or comparison protocol. Use its compatible dashboard to stop activity before upgrading; d detaches locally.".into());
@@ -305,6 +307,8 @@ impl Delivery {
 // Runtime selection belongs to the supervisor. Each concrete owner retains its
 // private launch, cleanup and capture phases while another owner is selected.
 struct Sessions {
+    setup_reservations: Vec<crate::git::CheckoutIdentity>,
+    setup_ready: bool,
     history_revision: u64,
     browse: Option<crate::persistence::search::Response>,
     browse_request: Option<String>,
@@ -396,6 +400,8 @@ impl Sessions {
             None
         };
         Ok(Self {
+            setup_reservations: Vec::new(),
+            setup_ready: false,
             history_revision: 0,
             browse: None,
             browse_request: None,
@@ -487,7 +493,12 @@ impl Sessions {
             }
             summaries.push(crate::events::SessionSummary {
                 status: state.status.clone(),
-                reserved: owner.reserved(),
+                reserved: owner.reserved()
+                    || state.checkout_identity.as_ref().is_some_and(|c| {
+                        self.setup_reservations
+                            .iter()
+                            .any(|r| r.common_dir == c.common_dir && r.git_dir == c.git_dir)
+                    }),
                 target: target.clone(),
                 task: owner.task().to_owned(),
                 session: state.session_identity.map(|id| id.session),
@@ -674,6 +685,8 @@ impl Sessions {
                         | Request::Adopt(_)
                         | Request::Register(_)
                         | Request::PreviewCreation { .. }
+                        | Request::ConfigureSetup { .. }
+                        | Request::RecoverSetup { .. }
                         | Request::CreateWorkspace(_)
                         | Request::RecoverCreation { .. }
                         | Request::CancelCreation { .. }
@@ -758,12 +771,31 @@ impl Sessions {
                 | Request::Resume(_)
                 | Request::ResumeSelected { .. }
         ) {
+            if !self.setup_ready {
+                self.entries[index].1.report_error(
+                    "Setup recovery is loading; retry after the committed receipts arrive".into(),
+                );
+                return;
+            }
+            if self.entries[index]
+                .1
+                .observation()
+                .checkout_identity
+                .is_some_and(|target| {
+                    self.setup_reservations
+                        .iter()
+                        .any(|r| r.common_dir == target.common_dir && r.git_dir == target.git_dir)
+                })
+            {
+                self.entries[index].1.report_error("Workspace setup owns this checkout or has an uncertain outcome; Stop/reconcile setup before Start".into());
+                return;
+            }
             let active = self
                 .entries
                 .iter()
                 .filter(|(_, owner)| owner.reserved())
                 .count();
-            if active >= 32 && !self.entries[index].1.reserved() {
+            if active + self.setup_reservations.len() >= 32 && !self.entries[index].1.reserved() {
                 self.entries[index].1.report_error(
                     "At most 32 unsettled session executions or capture streams can be admitted"
                         .into(),
@@ -840,6 +872,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
         }
     };
     let mut creation = crate::creation::Coordinator::new(&storage);
+    let mut setup = crate::setup::Coordinator::new(&storage);
     let mut registry = restored.state.registry.clone();
     let mut registry_error = None;
     let mut registry_operation = None;
@@ -983,11 +1016,14 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         while let Ok(event) = storage.events.try_recv() {
+            setup.complete(&event, &storage);
             if let Some(snapshot) = creation.complete(&event, &storage) {
                 registry = snapshot;
             }
             match event {
-                crate::persistence::Completion::Creations(_)
+                crate::persistence::Completion::Setups(_)
+                | crate::persistence::Completion::SetupSaved(..)
+                | crate::persistence::Completion::Creations(_)
                 | crate::persistence::Completion::CreationSaved(..) => {}
                 crate::persistence::Completion::Registry(snapshot) => registry = snapshot,
                 crate::persistence::Completion::Selected(operation, result) => {
@@ -1030,10 +1066,50 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         creation.advance(&storage);
+        if let Some(mut handoff) = creation.launch.take() {
+            if let Some(checkout) = handoff.record.checkout.clone()
+                && let Err(error) = session.adopt_checkout_at(
+                    checkout,
+                    handoff.record.intent.request.clone(),
+                    &storage,
+                    false,
+                )
+            {
+                handoff.authorized_start = false;
+                creation.view.error = Some(format!(
+                    "Workspace retained; owner unavailable: {error}. Setup remains separate; adopt explicitly before Start"
+                ));
+            }
+            let command = registry
+                .projects
+                .iter()
+                .find(|p| p.id == handoff.record.intent.project)
+                .and_then(|p| p.setup_command.clone());
+            setup.accept(handoff, command, &storage);
+        }
+        setup.advance(&storage);
+        session.setup_reservations = setup
+            .view
+            .records
+            .iter()
+            .filter_map(|r| {
+                r.creation
+                    .checkout
+                    .as_ref()
+                    .filter(|c| setup.reserved(c))
+                    .cloned()
+            })
+            .fold(Vec::new(), |mut found, c| {
+                if !found.contains(&c) {
+                    found.push(c);
+                }
+                found
+            });
+        session.setup_ready = setup.ready();
         if let Some(crate::creation::LaunchHandoff {
             record,
             authorized_start,
-        }) = creation.launch.take()
+        }) = setup.launch.take()
             && let Some(checkout) = record.checkout
         {
             match session.adopt_checkout_at(
@@ -1083,6 +1159,8 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
         state.prompt_naming_protocol = 1;
         state.creation_protocol = 1;
         state.resume_protocol = 1;
+        state.setup_protocol = 1;
+        state.setup = setup.view.clone();
         let launches = std::mem::take(&mut state.creation.launches);
         state.creation = creation.view.clone();
         state.creation.launches = launches
@@ -1097,7 +1175,10 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             .collect();
         state.registry_pending = registering || registry_operation.is_some();
         state.registry = registry.clone();
-        state.error = state.error.or_else(|| registry_error.clone());
+        state.error = state
+            .error
+            .or_else(|| registry_error.clone())
+            .or_else(|| setup.view.error.clone());
         state.adoption_pending = adoption_pending;
         state.discovery = discovery_result.clone();
         state.stopped = session.all_stopped()
@@ -1108,7 +1189,8 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             && diff_job.is_none()
             && diff_save.is_none()
             && registry_operation.is_none()
-            && !creation.busy();
+            && !creation.busy()
+            && setup.stopped();
         if state.stopped && controller.is_none() {
             fs::remove_file(&socket)?;
             return Ok(());
@@ -1128,6 +1210,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                             prompt_naming_protocol: 1,
                             creation_protocol: 1,
                             resume_protocol: 1,
+                            setup_protocol: 1,
                             control_denied: true,
                             error: Some("Another dashboard controls this supervisor; close it before reconnecting".into()),
                             ..Observation::default()
@@ -1201,7 +1284,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             continue;
         };
         let bytes: Vec<_> = pending.drain(..=end).collect();
-        let request: Request = match serde_json::from_slice(&bytes) {
+        let mut request: Request = match serde_json::from_slice(&bytes) {
             Ok(request) => request,
             Err(_) => {
                 controller = None;
@@ -1218,6 +1301,29 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             && let Some(job) = &source_job
         {
             job.cancel();
+        }
+
+        if let Request::Session {
+            target,
+            session: expected,
+            command,
+        } = &mut request
+            && matches!(**command, Request::Stop)
+            && let Some((_, owner)) = session.entries.iter_mut().find(|(id, _)| id == target)
+        {
+            let state = owner.observation();
+            let current = state.session_identity.map(|id| id.session);
+            // Empty-owner Stop may race its setup's original native handoff.
+            // It may follow only that same creation request, never a later chat.
+            if current == *expected
+                || expected.is_none()
+                    && setup.owns_original_launch(owner.task(), &state.launch_request)
+            {
+                if let Some(checkout) = state.checkout_identity {
+                    setup.cancel_checkout(&checkout);
+                }
+                *expected = current;
+            }
         }
 
         match request {
@@ -1373,10 +1479,35 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
             }
+            Request::ConfigureSetup { project, command } => {
+                let operation = uuid::Uuid::new_v4();
+                if registry_operation.is_some() || creation.busy() {
+                    registry_error = Some("Project configuration or workspace creation pending; retry configuration after it settles".into());
+                } else if let Err(e) = crate::setup::validate_command(&command) {
+                    registry_error = Some(e);
+                } else {
+                    match storage
+                        .commands
+                        .try_send(crate::persistence::Command::ConfigureSetup(
+                            operation, project, command,
+                        )) {
+                        Ok(()) => registry_operation = Some(operation),
+                        Err(e) => {
+                            registry_error = Some(format!("Setup configuration not saved: {e}"))
+                        }
+                    }
+                }
+            }
+            Request::RecoverSetup {
+                attempt,
+                retry,
+                informed,
+            } => setup.recover(&attempt, retry, informed, &storage),
             Request::CancelCreation {
                 request,
                 native_session,
             } => {
+                setup.cancel(Some(&request));
                 session.cancel_creation_launch(&request, native_session.as_deref(), &storage);
                 creation.handle(
                     Request::CancelCreation {
@@ -1391,7 +1522,20 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             request @ (Request::PreviewCreation { .. }
             | Request::CreateWorkspace(_)
             | Request::RecoverCreation { .. }) => {
-                creation.handle(request, &registry, &storage, directory);
+                let configured = matches!(&request,Request::CreateWorkspace(intent) if registry.projects.iter().any(|p|p.id==intent.project && p.setup_command.is_some()));
+                if matches!(request, Request::CreateWorkspace(_))
+                    && (registry_operation.is_some()
+                        || setup.admission_busy()
+                        || configured
+                            && (!setup.capacity()
+                                || session.entries.iter().filter(|(_, o)| o.reserved()).count()
+                                    + session.setup_reservations.len()
+                                    >= 32))
+                {
+                    creation.view.error=Some("Project setup is still pending; workspace creation waits for setup outcome".into());
+                } else {
+                    creation.handle(request, &registry, &storage, directory);
+                }
             }
             Request::Register(bytes) => {
                 registry_error = None;
@@ -1435,10 +1579,12 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             Request::RetryStorage => {
+                setup.retry_storage(&storage);
                 creation.retry_storage(&storage);
                 session.handle(Request::RetryStorage, &storage, adoption.is_some());
             }
             Request::Stop | Request::Shutdown => {
+                setup.cancel(None);
                 creation.cancel();
                 if let Some(job) = &source_job {
                     job.cancel();
@@ -1465,13 +1611,27 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                 session.handle(request, &storage, adoption.is_some());
             }
             request @ Request::ResumeSelected { .. } => {
-                let Request::ResumeSelected { workspace, .. } = &request else { unreachable!() };
+                let Request::ResumeSelected { workspace, .. } = &request else {
+                    unreachable!()
+                };
                 if let Some(workspace) = registry.workspaces.iter().find(|w| &w.id == workspace) {
-                    if let Some(index) = session.entries.iter().position(|(_,owner)| owner.task() == workspace.task || workspace.legacy_tasks.iter().any(|task|task==owner.task())) {
+                    if let Some(index) = session.entries.iter().position(|(_, owner)| {
+                        owner.task() == workspace.task
+                            || workspace
+                                .legacy_tasks
+                                .iter()
+                                .any(|task| task == owner.task())
+                    }) {
                         session.selected = index;
                         session.handle(request, &storage, adoption.is_some());
-                    } else { session.report_error("Workspace has no runtime owner; adopt its retained checkout before explicit resume".into()); }
-                } else { session.report_error("Selected workspace unavailable; retained history is unchanged".into()); }
+                    } else {
+                        session.report_error("Workspace has no runtime owner; adopt its retained checkout before explicit resume".into());
+                    }
+                } else {
+                    session.report_error(
+                        "Selected workspace unavailable; retained history is unchanged".into(),
+                    );
+                }
             }
             request => session.handle(request, &storage, adoption.is_some()),
         }
@@ -1486,6 +1646,8 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
         state.prompt_naming_protocol = 1;
         state.creation_protocol = 1;
         state.resume_protocol = 1;
+        state.setup_protocol = 1;
+        state.setup = setup.view.clone();
         let launches = std::mem::take(&mut state.creation.launches);
         state.creation = creation.view.clone();
         state.creation.launches = launches
@@ -1500,7 +1662,10 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             .collect();
         state.registry_pending = registering || registry_operation.is_some();
         state.registry = registry.clone();
-        state.error = state.error.or_else(|| registry_error.clone());
+        state.error = state
+            .error
+            .or_else(|| registry_error.clone())
+            .or_else(|| setup.view.error.clone());
         state.adoption_pending = adoption_pending;
         state.discovery = discovery_result.clone();
         state.stopped = session.all_stopped()
@@ -1511,7 +1676,8 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             && diff_job.is_none()
             && diff_save.is_none()
             && registry_operation.is_none()
-            && !creation.busy();
+            && !creation.busy()
+            && setup.stopped();
         if controller.is_some() {
             delivery = Some(Delivery::new(&mut state)?);
             subscriber_frame_high_water =

@@ -323,8 +323,13 @@ impl Store {
             )?;
             let state = decode_record(&state)?;
             label = format!(
-                "history {history} · {:?} · {:?} · {session} · {label}",
-                state.agent, state.lifecycle
+                "history {history} · {:?} · {:?} · segment {session} · native {} · {label}",
+                state.agent,
+                state.lifecycle,
+                state
+                    .native_conversation
+                    .as_deref()
+                    .unwrap_or("unavailable")
             );
         }
         Ok(visible(&label))
