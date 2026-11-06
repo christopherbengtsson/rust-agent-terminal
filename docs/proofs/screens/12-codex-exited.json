@@ -1,0 +1,32 @@
+{
+  "lifecycle": "Exited",
+  "status": {
+    "state": "Unknown",
+    "evidence": "native session ended",
+    "reason": "execution not running",
+    "recent": [
+      "PostModelRequest:01a1b119-b6ad-7d82-8635-fa32b5ead73c::",
+      "PreToolUse:01a1b119-b6ad-7d82-8635-fa32b5ead73c:Bash:exec-b4bf88b3-6b4a-4f7e-ad1e-f4f07d6b8d0b",
+      "PermissionRequest:01a1b119-b6ad-7d82-8635-fa32b5ead73c:Bash:",
+      "PostToolUse:01a1b119-b6ad-7d82-8635-fa32b5ead73c:Bash:exec-b4bf88b3-6b4a-4f7e-ad1e-f4f07d6b8d0b",
+      "PreModelRequest:01a1b119-b6ad-7d82-8635-fa32b5ead73c::",
+      "PostModelRequest:01a1b119-b6ad-7d82-8635-fa32b5ead73c::",
+      "Stop:01a1b119-b6ad-7d82-8635-fa32b5ead73c::",
+      "UserPromptSubmit:01a1b119-cc19-78a1-b511-3c82ce6bbdbe::",
+      "PreModelRequest:01a1b119-cc19-78a1-b511-3c82ce6bbdbe::",
+      "PostModelRequest:01a1b119-cc19-78a1-b511-3c82ce6bbdbe::",
+      "Interrupt:01a1b119-cc19-78a1-b511-3c82ce6bbdbe::",
+      "UserPromptSubmit:01a1b119-cc8d-7d72-aa9c-0da8b87762e2::",
+      "PreModelRequest:01a1b119-cc8d-7d72-aa9c-0da8b87762e2::",
+      "PostModelRequest:01a1b119-cc8d-7d72-aa9c-0da8b87762e2::",
+      "Interrupt:01a1b119-cc8d-7d72-aa9c-0da8b87762e2::",
+      "SessionEnd:::"
+    ]
+  },
+  "screen": "Token usage: total=24,986 input=24,781 (+ 182,016 cached) output=205\nTo continue this session, run:\n  codex resume 01a1b118-f581-7e52-b5e8-b5a84b111a4e\nOr run codex resume and select Reply with exact text.",
+  "identity": "task=93a1c122-2643-43d1-b113-12f531c8cf90 session=edb9095d-770d-480e-a709-dac73ee98232 request=c20f82f2-3c2d-43e1-a2ce-5a373da109ab",
+  "agent": "Codex CLI",
+  "rows": 32,
+  "cols": 104,
+  "output_bytes": 88083
+}

@@ -18,7 +18,7 @@ use std::{
         mpsc::{self, Receiver, SyncSender},
     },
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 pub const ROWS: u16 = 24;
@@ -62,6 +62,18 @@ pub struct LaunchResult {
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Observation {
+    #[serde(default)]
+    pub connection_lost: bool,
+    #[serde(default)]
+    pub capture_pending_bytes: usize,
+    #[serde(default)]
+    pub capture_high_water: usize,
+    #[serde(default)]
+    pub capture_backpressure_count: u64,
+    #[serde(default)]
+    pub capture_backpressure_micros: u64,
+    #[serde(default)]
+    pub subscriber_frame_high_water: usize,
     #[serde(default)]
     pub execution: Option<crate::recovery::Execution>,
     #[serde(default)]
@@ -121,7 +133,8 @@ impl Client {
             .spawn(move || {
                 if let Err(error) = transport(directory, rx, &tx) {
                     let _ = tx.send(Observation {
-                        error: Some(error.to_string()),
+                        connection_lost: true,
+                        error: Some(format!("Dashboard disconnected; press d to detach locally, then reopen. Process state unknown; stop unconfirmed. ({error})")),
                         ..Observation::default()
                     });
                 }
@@ -303,6 +316,49 @@ fn send_observation(stream: &mut UnixStream, state: &Observation) -> io::Result<
     stream.write_all(b"\n")
 }
 
+// Exactly one finite response in flight. Partial writes retain their cursor;
+// the supervisor never waits for a subscriber and never starts a second frame
+// before finishing the first. A stalled subscriber must reconnect to resync.
+struct Delivery {
+    bytes: Vec<u8>,
+    offset: usize,
+    since: Instant,
+    stopped: bool,
+}
+impl Delivery {
+    fn new(state: &mut Observation) -> io::Result<Self> {
+        let mut bytes = serde_json::to_vec(state)?;
+        bytes.push(b'\n');
+        if bytes.len() > MAX_FRAME {
+            return Err(io::Error::other("Supervisor snapshot exceeds frame cap"));
+        }
+        state.subscriber_frame_high_water = state.subscriber_frame_high_water.max(bytes.len());
+        Ok(Self {
+            bytes,
+            offset: 0,
+            since: Instant::now(),
+            stopped: state.stopped,
+        })
+    }
+    fn advance(&mut self, stream: &mut UnixStream) -> io::Result<bool> {
+        if self.since.elapsed() >= Duration::from_millis(500) {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "Slow dashboard disconnected after 500ms; reopen to resynchronize the current screen; history capture continues",
+            ));
+        }
+        // Bound transport work per supervisor pass as well as retained bytes.
+        let end = (self.offset + 65536).min(self.bytes.len());
+        match stream.write(&self.bytes[self.offset..end]) {
+            Ok(0) => return Err(io::Error::new(io::ErrorKind::WriteZero, "Dashboard closed")),
+            Ok(n) => self.offset += n,
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
+            Err(error) => return Err(error),
+        }
+        Ok(self.offset == self.bytes.len())
+    }
+}
+
 pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let Some(_ownership) = elect_owner(directory)? else {
         return Ok(());
@@ -387,6 +443,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let mut process_group = 0;
     let mut stopping: Option<Receiver<crate::lifecycle::Outcome>> = None;
     let mut monitor: Option<crate::native_status::Monitor> = None;
+    let mut codex_monitor: Option<crate::codex_status::Monitor> = None;
     let mut shutdown = false;
     let mut native_exit = false;
     let screen = Arc::new(Mutex::new(ScreenState {
@@ -395,6 +452,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
     }));
     let mut master: Option<Arc<Mutex<Box<dyn portable_pty::MasterPty + Send>>>> = None;
     let mut controller: Option<UnixStream> = None;
+    let mut delivery: Option<Delivery> = None;
     let mut pending = Vec::new();
     loop {
         while let Ok(event) = storage.events.try_recv() {
@@ -439,8 +497,8 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                         state.error = Some(format!(
                             "Launch/storage outcome not durable: {error}; stop or repair storage before retrying"
                         ));
-                        if let Some(stream) = controller.as_mut() {
-                            let _ = send_observation(stream, &state);
+                        if controller.is_some() && delivery.is_none() {
+                            delivery = Some(Delivery::new(&mut state)?);
                         }
                     }
                     flush_pending = false;
@@ -521,8 +579,8 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             outcome_reply = false;
             state.metadata_pending = false;
             screen.lock().unwrap().snapshot(&mut state);
-            if let Some(stream) = controller.as_mut() {
-                let _ = send_observation(stream, &state);
+            if controller.is_some() && delivery.is_none() {
+                delivery = Some(Delivery::new(&mut state)?);
             }
         }
         if let Some(done) = &capture_done
@@ -532,6 +590,10 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             capture_done = None;
         }
         let progress = storage.progress.lock().unwrap().clone();
+        state.capture_pending_bytes = progress.pending_bytes;
+        state.capture_high_water = progress.pending_high_water;
+        state.capture_backpressure_count = progress.backpressure_count;
+        state.capture_backpressure_micros = progress.backpressure_micros;
         state.durable_bytes = progress.durable;
         state.durable_flush_count = progress.flush_count;
         state.durable_completed_millis = progress.completed_millis;
@@ -617,7 +679,20 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             fs::remove_file(&socket)?;
             return Ok(());
         }
+        if monitor.is_some() || codex_monitor.is_some() {
+            let current = screen.lock().unwrap();
+            if current.output_bytes != state.output_bytes {
+                current.snapshot(&mut state);
+            }
+        }
         if let Some(monitor) = monitor.as_mut() {
+            state.status = monitor.poll(
+                state.lifecycle == Lifecycle::Running,
+                &state.screen,
+                state.output_bytes,
+            );
+        }
+        if let Some(monitor) = codex_monitor.as_mut() {
             state.status = monitor.poll(
                 state.lifecycle == Lifecycle::Running,
                 &state.screen,
@@ -632,7 +707,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
         } {
             match listener.accept() {
                 Ok((mut incoming, _)) => {
-                    incoming.set_write_timeout(Some(Duration::from_millis(100)))?;
+                    incoming.set_nonblocking(true)?;
                     if controller.is_some() {
                         let refusal = Observation {
                             control_denied: true,
@@ -642,16 +717,49 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                         let _ = send_observation(&mut incoming, &refusal);
                     } else {
                         screen.lock().unwrap().snapshot(&mut state);
-                        if send_observation(&mut incoming, &state).is_ok() {
-                            incoming.set_nonblocking(true)?;
-                            controller = Some(incoming);
-                            pending.clear();
-                        }
+                        delivery = Some(Delivery::new(&mut state)?);
+                        state.subscriber_frame_high_water = state
+                            .subscriber_frame_high_water
+                            .max(delivery.as_ref().unwrap().bytes.len());
+                        controller = Some(incoming);
+                        pending.clear();
                     }
                 }
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
                 Err(error) => return Err(error.into()),
             }
+        }
+        if let Some(stream) = controller.as_mut()
+            && let Some(response) = delivery.as_mut()
+        {
+            let stopped = response.stopped;
+            match response.advance(stream) {
+                Ok(true) => {
+                    delivery = None;
+                }
+                Ok(false) => {
+                    thread::sleep(Duration::from_millis(1));
+                    continue;
+                }
+                Err(error) => {
+                    if error.kind() == io::ErrorKind::TimedOut {
+                        state.error = Some(error.to_string());
+                    }
+                    controller = None;
+                    delivery = None;
+                    pending.clear();
+                    continue;
+                }
+            }
+            if stopped {
+                fs::remove_file(&socket)?;
+                return Ok(());
+            }
+        }
+        if (pending_launch.is_some() && !prepared_ready) || gate_receipt.is_some() || outcome_reply
+        {
+            thread::sleep(Duration::from_millis(5));
+            continue;
         }
         if !(prepared_ready && pending_launch.is_some()) {
             let Some(stream) = controller.as_mut() else {
@@ -847,8 +955,14 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                         command
                     };
                     monitor = None;
+                    codex_monitor = None;
                     state.status = crate::native_status::Status::default();
-                    if !codex {
+                    if codex {
+                        match crate::codex_status::Monitor::start(directory) {
+                            Ok(status_monitor) if status_monitor.configure(&mut command).is_ok() => codex_monitor = Some(status_monitor),
+                            _ => state.status.reason = "Codex status monitor unavailable".into(),
+                        }
+                    } else {
                         match crate::native_status::Monitor::start(directory, !claude) {
                             Ok(mut status_monitor) => {
                                 status_monitor.native_executable(claude_executable.as_deref());
@@ -857,6 +971,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                             }
                             Err(_) => state.status.reason = "status monitor unavailable".into(),
                         }
+
                     }
                     command.env("TERM", "xterm-256color");
                     command.cwd(path);
@@ -963,6 +1078,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                 }
                 Request::Input(bytes) => {
                     if let Some(monitor) = monitor.as_mut() { monitor.input(screen.lock().unwrap().output_bytes); }
+                    if let Some(monitor) = codex_monitor.as_mut() { monitor.input(screen.lock().unwrap().output_bytes); }
                     if bytes.len() > 4096 {
                         return Err("Input exceeds prototype 4096-byte limit".into());
                     }
@@ -974,6 +1090,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                 }
                 Request::Key(key) => {
                     if let Some(monitor) = monitor.as_mut() { monitor.input(screen.lock().unwrap().output_bytes); }
+                    if let Some(monitor) = codex_monitor.as_mut() { monitor.input(screen.lock().unwrap().output_bytes); }
                     let application_cursor =
                         screen.lock().unwrap().parser.screen().application_cursor();
                     let bytes = crate::native_input::encode(key, application_cursor)?;
@@ -985,6 +1102,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                 }
                 Request::Paste(text) => {
                     if let Some(monitor) = monitor.as_mut() { monitor.input(screen.lock().unwrap().output_bytes); }
+                    if let Some(monitor) = codex_monitor.as_mut() { monitor.input(screen.lock().unwrap().output_bytes); }
                     if text.len() > 4084 {
                         return Err("Paste exceeds 4084-byte limit".into());
                     }
@@ -1097,17 +1215,11 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                 state.output_bytes,
             );
         }
-        if !deferred
-            && !outcome_reply
-            && let Some(stream) = controller.as_mut()
-            && send_observation(stream, &state).is_err()
-        {
-            controller = None;
-            pending.clear();
-        }
-        if state.stopped {
-            fs::remove_file(&socket)?;
-            return Ok(());
+        if !deferred && !outcome_reply && controller.is_some() {
+            delivery = Some(Delivery::new(&mut state)?);
+            state.subscriber_frame_high_water = state
+                .subscriber_frame_high_water
+                .max(delivery.as_ref().unwrap().bytes.len());
         }
     }
 }
@@ -1132,6 +1244,7 @@ pub fn scripted_child() -> io::Result<()> {
     }
     let mut line = Vec::new();
     let mut approval = false;
+    let mut flood_run = 0;
     for byte in io::stdin().lock().bytes() {
         match byte? {
             3 => {
@@ -1237,6 +1350,24 @@ pub fn scripted_child() -> io::Result<()> {
                         thread::sleep(Duration::from_millis(5));
                     }
                     print!("fixture> ");
+                } else if line == b"flood13" {
+                    flood_run += 1;
+                    let since = Instant::now();
+                    let mut max_write_micros = 0;
+                    let payload = "X".repeat(111);
+                    let mut stdout = io::stdout().lock();
+                    for number in 0..32768 {
+                        let record = format!("flood13:{number:06}:{payload}\r\n");
+                        let write = Instant::now();
+                        stdout.write_all(record.as_bytes())?;
+                        max_write_micros = max_write_micros.max(write.elapsed().as_micros());
+                    }
+                    writeln!(
+                        stdout,
+                        "flood13-complete run={flood_run} bytes=4194304 elapsed_us={} max_write_us={max_write_micros}\r",
+                        since.elapsed().as_micros()
+                    )?;
+                    write!(stdout, "fixture> ")?;
                 } else if line == b"history-bulk" {
                     for number in 0..6000 {
                         println!(

@@ -1,0 +1,28 @@
+{
+  "lifecycle": "Running",
+  "status": {
+    "state": "Input",
+    "evidence": "open question tool + current Codex 0.167.0 modal",
+    "reason": "30s bounded native question evidence; support gate open",
+    "recent": [
+      "SessionStart:::",
+      "UserPromptSubmit:01a1b10c-c281-78d3-815b-f0fca786de7e::",
+      "PreModelRequest:01a1b10c-c281-78d3-815b-f0fca786de7e::",
+      "PostModelRequest:01a1b10c-c281-78d3-815b-f0fca786de7e::",
+      "Stop:01a1b10c-c281-78d3-815b-f0fca786de7e::",
+      "PreModelRequest:01a1b10c-c281-78d3-815b-f0fca786de7e::",
+      "PostModelRequest:01a1b10c-c281-78d3-815b-f0fca786de7e::",
+      "Stop:01a1b10c-c281-78d3-815b-f0fca786de7e::",
+      "UserPromptSubmit:01a1b10f-8ff2-7713-9bbe-4d458cb7959c::",
+      "PreModelRequest:01a1b10f-8ff2-7713-9bbe-4d458cb7959c::",
+      "PostModelRequest:01a1b10f-8ff2-7713-9bbe-4d458cb7959c::",
+      "PreToolUse:01a1b10f-8ff2-7713-9bbe-4d458cb7959c:request_user_input:call_f830722608264e1085fd8515b872930c"
+    ]
+  },
+  "screen": " \n  >_ OpenAI Codex (v0.167.0)\n     /private/tmp/rat-codex-proof-checkout\n \n \n› Reply exactly first-stop-proof. Do not use tools or write files.\n \n \n• first-stop-proof\n \n• Blocked by hook\n  └ Reply exactly continuation-proof. Do not use tools.\n \n• continuation-proof\n \n  Worked for 5s • 14:29                                                                                 \n \n \n› Use request_user_input to ask me to choose alpha or beta. Do not run commands, read files or write\n  files. Wait for my native choice.\n \n \n \n  Question 1/1 (1 unanswered)\n  Choose alpha or beta.\n \n  › 1. Alpha              Select alpha.                                                               \n    2. Beta               Select beta.\n    3. None of the above  Optionally, add details in notes (tab)\n \n  tab to add notes | enter to submit answer | esc to interrupt\n ",
+  "identity": "task=8a0d66b3-aae2-44a2-ae0a-12f60a72a07d session=df4b7080-9f10-4c11-8e81-824876704df7 request=d98c23e3-7c7c-4a29-9011-13e644fc35fa",
+  "agent": "Codex CLI",
+  "rows": 32,
+  "cols": 104,
+  "output_bytes": 24053
+}
