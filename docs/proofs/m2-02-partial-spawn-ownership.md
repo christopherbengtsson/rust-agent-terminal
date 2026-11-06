@@ -44,3 +44,12 @@ original native exit results, descendant cleanup, storage trouble and capture
 backpressure retain their existing external regressions. Native CLI interaction,
 physical reboot and resource/latency qualification beyond these declared fixture
 checks remain unverified by this ticket.
+
+A further red/green restart case establishes capture ownership between sessions:
+a completed first capture must not make a later failed capture installation
+eligible for history deletion. The red run exposed `eligible=true` for the new
+session despite no reader observing its EOF. Resetting the per-attempt
+`capture_started_here` proof at accepted preparation, and setting it only after
+reader installation, made that case pass in 1.94 seconds. The sole storage
+worker's existing seal/deletion contract is unchanged; this supervisor-side
+change preserves its required session-specific EOF evidence.

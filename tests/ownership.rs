@@ -5263,3 +5263,57 @@ fn partial_spawn_cleanup_failure_retains_reservation_and_retries() {
     assert!(!cleaned["screen"].as_str().unwrap().contains("fixture>"));
     control.request(serde_json::json!("Shutdown"));
 }
+
+#[test]
+fn failed_capture_installation_never_borrows_previous_sessions_eof_proof() {
+    let fixture = Fixture::new();
+    let mut dashboard = fixture.open();
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted");
+    dashboard.kill();
+    let mut control = Controller::connect(&fixture);
+    control.request(serde_json::json!({"Launch":"completed-capture"}));
+    cleanup_wait15(&mut control, |state| {
+        state["screen"].as_str().unwrap().contains("fixture>")
+    });
+    control.request(serde_json::json!("Stop"));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let page = cleanup_page15(&mut control);
+        if page["cleanup"]["entries"][0]["eligible"] == true {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "previous capture must settle: {page}"
+        );
+    }
+    std::fs::write(fixture.state().join("proof-launch-setup"), "before-capture").unwrap();
+    let failed = control.request(serde_json::json!({"Launch":"capture-not-installed"}));
+    let id = failed["session_identity"]["session"].clone();
+    control.request(serde_json::json!("Stop"));
+    cleanup_wait15(&mut control, |state| {
+        matches!(state["lifecycle"].as_str(), Some("Stopped" | "Failed"))
+            && state["metadata_pending"] == false
+    });
+    control.request(serde_json::json!("Shutdown"));
+    cleanup_wait15(&mut control, |state| state["stopped"] == true);
+    drop(control);
+    let mut dashboard = fixture.open();
+    dashboard.wait("Adopted:");
+    dashboard.kill();
+    let mut control = Controller::connect(&fixture);
+    let page = cleanup_page15(&mut control);
+    let entry = page["cleanup"]["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["id"] == id)
+        .unwrap();
+    assert_eq!(
+        entry["eligible"], false,
+        "no reader observed this session's EOF: {page}"
+    );
+    control.request(serde_json::json!("Shutdown"));
+}

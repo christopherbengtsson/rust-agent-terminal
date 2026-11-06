@@ -1017,6 +1017,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                         return Err("Native resume unavailable: no supported saved conversation identity. h opens retained history; c Claude / x Codex explicitly starts a new conversation.".into());
                     }
                     if !continuing {
+                        capture_started_here = false;
                         cancelled_launch = false;
                         state.capture_loss_possible = false;
                         if !resume { state.native_conversation = None; }
