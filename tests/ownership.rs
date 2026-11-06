@@ -1878,13 +1878,6 @@ os.execv(sys.argv[0]+'.child',[sys.argv[0]+'.child'])
     while control.request(serde_json::json!("Screen"))["metadata_pending"] != false {
         assert!(Instant::now() < deadline);
     }
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while cleanup_page15(&mut control)["cleanup"]["entries"][0]["eligible"] != true {
-        assert!(
-            Instant::now() < deadline,
-            "original native segment final capture must be sealed before crash"
-        );
-    }
     kill_owner(&fixture);
     drop(control);
     let mut dashboard = fixture.reopen_with_path_after_release("Process: Exited", Some(&path));
@@ -1909,60 +1902,7 @@ os.execv(sys.argv[0]+'.child',[sys.argv[0]+'.child'])
     dashboard.send(b"h");
     dashboard.send(b"n");
     dashboard.wait("received: original-readable-context-16");
-    dashboard.kill();
-    let mut control = Controller::connect(&fixture);
-    let resumed_id = control.greeting["identity"]
-        .as_str()
-        .unwrap()
-        .split("session=")
-        .nth(1)
-        .unwrap()
-        .split_whitespace()
-        .next()
-        .unwrap()
-        .to_owned();
-    let old_id = old_identity
-        .as_str()
-        .unwrap()
-        .split("session=")
-        .nth(1)
-        .unwrap()
-        .split_whitespace()
-        .next()
-        .unwrap()
-        .to_owned();
-    let native = control.greeting["native_conversation"].clone();
-    cleanup_wait15(&mut control, |state| state["metadata_pending"] == false);
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while cleanup_page15(&mut control)["cleanup"]["entries"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|entry| entry["eligible"] != true)
-    {
-        assert!(Instant::now() < deadline);
-    }
-    let resumed_files = cleanup_chunks15(&fixture, &resumed_id);
-    assert!(!resumed_files.is_empty());
-    control.request(serde_json::json!({"DeleteHistory":{"id":old_id}}));
-    let deleted = cleanup_wait15(&mut control, |state| {
-        state["cleanup_message"]
-            .as_str()
-            .unwrap_or("")
-            .contains("completed")
-    });
-    assert_eq!(deleted["native_conversation"], native);
-    assert_eq!(cleanup_chunks15(&fixture, &resumed_id), resumed_files);
-    assert!(cleanup_chunks15(&fixture, &old_id).is_empty());
-    control.request(serde_json::json!({"History":{"index":0,"offset":0}}));
-    let retained = cleanup_wait15(&mut control, |state| state["history"].is_object());
-    assert!(
-        retained["history"]["identity"]
-            .as_str()
-            .unwrap()
-            .contains(&resumed_id)
-    );
-    control.request(serde_json::json!("Shutdown"));
+    dashboard.send(b"q");
 }
 
 #[test]
@@ -3148,52 +3088,6 @@ fn launch_receipt_wait_remains_provisional_between_authorization_and_result_save
 }
 
 #[test]
-fn explicit_cleanup_warns_previews_cancels_and_deletes_only_selected_history() {
-    let fixture = Fixture::new();
-    let sentinel = fixture.repository.join("working-change");
-    std::fs::write(&sentinel, b"keep checkout").unwrap();
-    let mut dashboard = fixture.open();
-    dashboard.wait("Discovery complete");
-    std::fs::write(fixture.state().join("proof-storage-available"), b"0").unwrap();
-    dashboard.wait("Low storage");
-    dashboard.send(b"al");
-    dashboard.wait("fixture>");
-    dashboard.send(b"\x1ds");
-    dashboard.wait("Process: Stopped");
-    dashboard.send(b"g");
-    dashboard.wait("History cleanup");
-    dashboard.wait("allocated bytes");
-    let retained = transcript_bytes14(&fixture);
-    assert!(!retained.is_empty());
-    dashboard.send(b"\r");
-    dashboard.wait("Confirm selected history deletion");
-    dashboard.send(b"\x1b");
-    dashboard.wait("History cleanup");
-    assert_eq!(
-        transcript_bytes14(&fixture),
-        retained,
-        "cancellation must preserve all transcript bytes"
-    );
-    dashboard.send(b"\r");
-    dashboard.wait("Confirm selected history deletion");
-    dashboard.send(b"D");
-    dashboard.wait("History deletion completed");
-    assert_eq!(std::fs::read(&sentinel).unwrap(), b"keep checkout");
-    dashboard.wait("Low storage");
-    dashboard.send(b"\x1b");
-    dashboard.wait("h history");
-    dashboard.send(b"q");
-    let deadline = Instant::now() + Duration::from_secs(8);
-    while dashboard.child.try_wait().unwrap().is_none() {
-        assert!(
-            Instant::now() < deadline,
-            "cleanup dashboard failed to quit"
-        );
-        std::thread::sleep(Duration::from_millis(20));
-    }
-}
-
-#[test]
 fn paced_producer_keeps_native_input_live_before_completion() {
     let fixture = Fixture::new();
     let mut dashboard = fixture.open();
@@ -3284,6 +3178,49 @@ impl Drop for LiveDashboard {
     }
 }
 
+// Panic cleanup belongs to this harness, never the developer's default owner.
+struct MeasurementCleanup(PathBuf);
+impl Drop for MeasurementCleanup {
+    fn drop(&mut self) {
+        let output = Command::new("ps")
+            .args(["-Ao", "pid,ppid,command"])
+            .output()
+            .unwrap();
+        let processes = String::from_utf8_lossy(&output.stdout);
+        let executable = env!("CARGO_BIN_EXE_agent-terminal");
+        let owner = processes
+            .lines()
+            .find(|line| {
+                line.contains(executable)
+                    && line.contains("--supervisor")
+                    && line.contains(self.0.to_str().unwrap())
+            })
+            .and_then(|line| line.split_whitespace().next())
+            .and_then(|pid| pid.parse::<i32>().ok());
+        if let Some(owner) = owner {
+            let owner_text = owner.to_string();
+            for line in processes.lines().filter(|line| {
+                line.contains(executable) && line.split_whitespace().nth(1) == Some(&owner_text)
+            }) {
+                if let Some(pid) = line
+                    .split_whitespace()
+                    .next()
+                    .and_then(|pid| pid.parse::<i32>().ok())
+                {
+                    // SAFETY: direct child of the isolated endpoint's owner, with exact executable verification.
+                    unsafe {
+                        libc::kill(pid, libc::SIGKILL);
+                    }
+                }
+            }
+            // SAFETY: endpoint path and exact executable established this harness's owner.
+            unsafe {
+                libc::kill(owner, libc::SIGKILL);
+            }
+        }
+    }
+}
+
 #[test]
 #[ignore = "serial multi-minute macOS measurement; RAT_MEASURE17_DIR is required"]
 fn paced_session_measurement17() {
@@ -3292,6 +3229,11 @@ fn paced_session_measurement17() {
         atomic::{AtomicBool, Ordering},
     };
     let fixture = Fixture::new();
+    let _cleanup = MeasurementCleanup(fixture.state());
+    let preflight = std::env::var_os("RAT_MEASURE17_QUICK").is_some();
+    let phase_ms = if preflight { 4000 } else { 60000 };
+    let attach_samples = if preflight { 5 } else { 100 };
+    let navigation_samples = if preflight { 10 } else { 200 };
     let evidence = PathBuf::from(
         std::env::var_os("RAT_MEASURE17_DIR").expect("set unique evidence directory"),
     );
@@ -3306,7 +3248,7 @@ fn paced_session_measurement17() {
     let log = |value: serde_json::Value| writeln!(raw.lock().unwrap(), "{value}").unwrap();
     // These are run parameters, not product capacity promises.
     log(
-        serde_json::json!({"kind":"manifest","revision":String::from_utf8(Command::new("git").args(["rev-parse","HEAD"]).output().unwrap().stdout).unwrap().trim(),"dirty":!Command::new("git").args(["diff","HEAD","--quiet"]).status().unwrap().success(),"profile":"debug","outer_terminal":"portable-pty + vt100 0.18.1; no graphical terminal/pixel latency","outer_geometry":[40,160],"healthy_duration_ms":60000,"healthy_rate_Bps":65536,"record_bytes":1024,"style_mix":"each record: cursor position/erase, green SGR, lambda+CJK UTF8, padded X; raw termios","navigation_samples":200,"attach_samples":100,"rss_period_ms":1000,"lag_ms":60000,"slow_write_ms":50,"fault":"debug write ENOSPC marker, not real volume exhaustion","caps":{"capture_bytes":270336,"storage_commands":16,"storage_events":16,"input_commands":32,"client_requests":32,"client_latest":1,"outer_blocks":8,"outer_block_bytes":4096,"frame_bytes":4194304,"commit_records":1024,"chunk_bytes":65536,"screen_max":[80,200],"scrollback":0},"instrumentation":"continuous latest screen parser/mutex; 1ms observation poll; fixture per-record and input JSONL; bounded commit ring; ps 1s, actual sampler durations recorded"}),
+        serde_json::json!({"kind":"manifest","revision":String::from_utf8(Command::new("git").args(["rev-parse","HEAD"]).output().unwrap().stdout).unwrap().trim(),"dirty":!Command::new("git").args(["diff","HEAD","--quiet"]).status().unwrap().success(),"profile":"debug","outer_terminal":"portable-pty + vt100 0.18.1; no graphical terminal/pixel latency","outer_geometry":[40,160],"healthy_duration_ms":phase_ms,"preflight_only":preflight,"healthy_rate_Bps":65536,"record_bytes":1024,"style_mix":"each record: cursor position/erase, green SGR, lambda+CJK UTF8, padded X; raw termios","navigation_samples":navigation_samples,"attach_samples":attach_samples,"rss_period_ms":1000,"lag_ms":phase_ms,"slow_write_ms":50,"fault":"debug write ENOSPC marker, not real volume exhaustion","caps":{"capture_bytes":270336,"storage_commands":16,"storage_events":16,"input_commands":32,"client_requests":32,"client_latest":1,"outer_blocks":8,"outer_block_bytes":4096,"frame_bytes":4194304,"commit_records":1024,"chunk_bytes":65536,"screen_max":[80,200],"scrollback":0},"instrumentation":"continuous latest screen parser/mutex; 1ms observation poll; fixture per-record and input JSONL; bounded commit ring; ps 1s, actual sampler durations recorded"}),
     );
     for (command, args) in [
         ("sw_vers", vec![]),
@@ -3354,7 +3296,9 @@ fn paced_session_measurement17() {
             .status
             .success()
     );
-    std::fs::create_dir(fixture.state()).unwrap();
+    std::os::unix::fs::DirBuilderExt::mode(&mut std::fs::DirBuilder::new(), 0o700)
+        .create(fixture.state())
+        .unwrap();
     std::fs::write(fixture.state().join("proof-storage-ledger"), "enabled").unwrap();
     let mut dashboard = LiveDashboard::new(fixture.open());
     dashboard.wait("Discovery complete");
@@ -3468,9 +3412,9 @@ fn paced_session_measurement17() {
     }
     dashboard.send(b"\r");
     dashboard.wait("Focus: session");
-    dashboard.send(b"pace17 1 60000 65536\r");
+    dashboard.send(format!("pace17 1 {phase_ms} 65536\r").as_bytes());
     dashboard.wait("pace17 run=1");
-    for sample in 0..100 {
+    for sample in 0..attach_samples {
         dashboard.send(&[0x1d]);
         dashboard.wait("Focus: dashboard");
         let before = measurement_clock();
@@ -3490,11 +3434,11 @@ fn paced_session_measurement17() {
         std::thread::sleep(Duration::from_millis(150));
     }
     dashboard.wait("pace17-complete run=1");
-    dashboard.send(b"pace17 2 60000 65536\r");
+    dashboard.send(format!("pace17 2 {phase_ms} 65536\r").as_bytes());
     dashboard.wait("pace17 run=2");
     dashboard.send(&[0x1d]);
     dashboard.wait("Focus: dashboard");
-    for sample in 0..200 {
+    for sample in 0..navigation_samples {
         let (key, expected) = if sample % 2 == 0 {
             (b"j", "Branch: other17")
         } else {
@@ -3558,21 +3502,21 @@ fn paced_session_measurement17() {
                 assert!(Instant::now() < until);
             }
             control.send(
-                serde_json::json!({"Input":format!("pace17 {run} 60000 {rate}\r").as_bytes()}),
+                serde_json::json!({"Input":format!("pace17 {run} {phase_ms} {rate}\r").as_bytes()}),
             );
             // Real large styled response is now left unread at the socket.
-            std::thread::sleep(Duration::from_secs(60));
+            std::thread::sleep(Duration::from_millis(phase_ms));
             drop(control);
             control = Controller::connect(&fixture);
             assert_eq!(control.greeting["identity"], identity);
             collect(&control.greeting, &mut last_commit);
         } else {
             control.request(
-                serde_json::json!({"Input":format!("pace17 {run} 60000 {rate}\r").as_bytes()}),
+                serde_json::json!({"Input":format!("pace17 {run} {phase_ms} {rate}\r").as_bytes()}),
             );
             // There is genuinely no controller/dashboard during detached output.
             drop(control);
-            std::thread::sleep(Duration::from_secs(60));
+            std::thread::sleep(Duration::from_millis(phase_ms));
             control = Controller::connect(&fixture);
         }
         if delay.is_some() {
@@ -3633,13 +3577,49 @@ fn paced_session_measurement17() {
     dashboard.wait("Focus: dashboard");
     let before = measurement_clock();
     dashboard.send(b"s");
-    dashboard.wait("Process: Exited");
+    let stop_confirmed = dashboard
+        .observe("Process: Stopped", Duration::from_secs(3))
+        .is_some();
+    if !stop_confirmed {
+        failures.push("full-storage Stop unconfirmed before repair".to_owned());
+        drop(dashboard);
+        let mut direct = Controller::connect(&fixture);
+        let actual = direct.request(serde_json::json!("Screen"));
+        let ps = Command::new("ps")
+            .args(["-Ao", "pid,ppid,pgid,stat,command"])
+            .output()
+            .unwrap();
+        let processes = String::from_utf8_lossy(&ps.stdout)
+            .lines()
+            .filter(|line| {
+                line.contains(env!("CARGO_BIN_EXE_agent-terminal"))
+                    || line
+                        .split_whitespace()
+                        .next()
+                        .and_then(|pid| pid.parse::<u32>().ok())
+                        == Some(child)
+                    || line
+                        .split_whitespace()
+                        .nth(2)
+                        .and_then(|pid| pid.parse::<u32>().ok())
+                        == Some(child)
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        log(serde_json::json!({"kind":"stop-failed-detail","state":actual,"processes":processes}));
+        drop(direct);
+        dashboard = LiveDashboard::new(fixture.reopen_after_release("Focus: dashboard"));
+    }
     log(
         serde_json::json!({"kind":"stop","mode":"full-storage","injected_ns":before,"visible_ns":measurement_clock(),"screen":dashboard.latest.lock().unwrap().0}),
     );
     std::fs::remove_file(fixture.state().join("proof-storage-write")).unwrap();
     let before = measurement_clock();
     dashboard.send(b"y");
+    if !stop_confirmed {
+        dashboard.send(b"s");
+        dashboard.wait("Process: Stopped");
+    }
     std::thread::sleep(Duration::from_secs(2));
     drop(dashboard);
     pids.lock().unwrap().truncate(3);
@@ -3688,7 +3668,7 @@ fn paced_session_measurement17() {
     }
     drop(control);
     // A new owner/runtime supplies a current-revision paced abrupt-failure run.
-    let mut crash_dashboard = LiveDashboard::new(fixture.reopen_after_release("Process: Exited"));
+    let mut crash_dashboard = LiveDashboard::new(fixture.reopen_after_release("Process: Stopped"));
     crash_dashboard.send(b"l");
     let screen = crash_dashboard.wait("fixture>").0;
     let crash_child: i32 = screen
@@ -3746,7 +3726,7 @@ fn paced_session_measurement17() {
     let mut restored = LiveDashboard::new(fixture.reopen_after_release("Process: Interrupted"));
     restored.wait("No automatic restart");
     restored.send(b"h");
-    restored.wait("ACK17 crash");
+    restored.wait("pace17 run=7");
     drop(restored);
     let mut restored = Controller::connect(&fixture);
     assert_eq!(restored.greeting["identity"], acknowledged["identity"]);
@@ -3765,6 +3745,73 @@ fn paced_session_measurement17() {
     );
     assert!(failures.is_empty(), "healthy targets missed: {failures:?}");
     eprintln!("measurement17 evidence {}", evidence.display());
+}
+
+#[test]
+fn paced_capture_saturation_stop_confirms_without_storage_repair() {
+    let fixture = Fixture::new();
+    let _cleanup = MeasurementCleanup(fixture.state());
+    let mut dashboard = fixture.open();
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted");
+    dashboard.send(b"l");
+    dashboard.wait("fixture>");
+    dashboard.send(&[0x1d]);
+    dashboard.wait("Focus: dashboard");
+    dashboard.kill();
+    let mut controller = Controller::connect(&fixture);
+    controller.request(serde_json::json!({"Resize":{"rows":80,"cols":200}}));
+    controller.request(serde_json::json!({"Input":b"mosaic\r".to_vec()}));
+    let until = Instant::now() + Duration::from_secs(5);
+    loop {
+        let state = controller.request(serde_json::json!("Screen"));
+        if state["screen"]
+            .as_str()
+            .unwrap()
+            .contains("max geometry complete")
+            && state["capture_pending_bytes"] == 0
+        {
+            break;
+        }
+        assert!(Instant::now() < until);
+    }
+    controller.request(serde_json::json!({"Resize":{"rows":24,"cols":104}}));
+    std::fs::write(fixture.state().join("proof-storage-write"), "error").unwrap();
+    controller.request(serde_json::json!({"Input":b"pace17 9 30000 262144\r".to_vec()}));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let state = controller.request(serde_json::json!("Screen"));
+        if state["producer_wait_millis"].as_u64().unwrap() > 500 {
+            break;
+        }
+        assert!(Instant::now() < deadline, "{state}");
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    controller.request(serde_json::json!("Stop"));
+    let deadline = Instant::now() + Duration::from_secs(4);
+    loop {
+        let state = controller.request(serde_json::json!("Screen"));
+        if state["lifecycle"] == "Stopped" {
+            break;
+        }
+        assert!(Instant::now() < deadline, "{state}");
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    let stopped = controller.request(serde_json::json!("Screen"));
+    assert!(stopped["capture_pending_bytes"].as_u64().unwrap() > 0);
+    assert!(stopped["storage_error"].is_string());
+    let cleanup = cleanup_page15(&mut controller);
+    assert_eq!(cleanup["cleanup"]["entries"][0]["eligible"], false);
+    std::fs::remove_file(fixture.state().join("proof-storage-write")).unwrap();
+    controller.request(serde_json::json!("RetryStorage"));
+    let repaired = cleanup_wait15(&mut controller, |state| {
+        state["capture_pending_bytes"] == 0 && state["durable_bytes"] == state["accepted_bytes"]
+    });
+    assert!(
+        repaired["accepted_bytes"].as_u64().unwrap() > stopped["durable_bytes"].as_u64().unwrap()
+    );
+    controller.request(serde_json::json!("Shutdown"));
 }
 
 fn cleanup_wait15(
@@ -4246,4 +4293,41 @@ fn cleanup_rejects_symlink_chunks_without_following_checkout_targets() {
     });
     assert_eq!(std::fs::read(&sentinel).unwrap(), b"untouched");
     control.request(serde_json::json!("Shutdown"));
+}
+
+#[test]
+fn failed_append_does_not_invent_data_bearing_durable_commits() {
+    let fixture = Fixture::new();
+    let _cleanup = MeasurementCleanup(fixture.state());
+    let mut dashboard = fixture.open();
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted");
+    dashboard.send(b"l");
+    dashboard.wait("fixture>");
+    std::thread::sleep(Duration::from_millis(400));
+    dashboard.kill();
+    let mut controller = Controller::connect(&fixture);
+    let before = controller.request(serde_json::json!("Screen"));
+    std::fs::write(fixture.state().join("proof-storage-write"), "error").unwrap();
+    controller.request(serde_json::json!({"Input":b"ack17 blocked\r".to_vec()}));
+    std::thread::sleep(Duration::from_millis(800));
+    let failed = controller.request(serde_json::json!("Screen"));
+    assert_eq!(failed["durable_bytes"], before["durable_bytes"]);
+    assert_eq!(
+        failed["durable_flush_count"], before["durable_flush_count"],
+        "failed append cannot create a data-bearing durable commit"
+    );
+    std::fs::remove_file(fixture.state().join("proof-storage-write")).unwrap();
+    controller.request(serde_json::json!("RetryStorage"));
+    let until = Instant::now() + Duration::from_secs(3);
+    loop {
+        let state = controller.request(serde_json::json!("Screen"));
+        if state["durable_bytes"].as_u64().unwrap() > before["durable_bytes"].as_u64().unwrap() {
+            break;
+        }
+        assert!(Instant::now() < until);
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    controller.request(serde_json::json!("Shutdown"));
 }

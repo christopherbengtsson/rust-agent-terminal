@@ -181,7 +181,10 @@ for process cleanup, PTY EOF, transcript file synchronization and the metadata
 commit. A failed write keeps quit visibly incomplete; repair storage and retry
 `q`, or press `y` to retry capture without requesting quit. Long storage operations
 and producer backpressure are visible; navigation and Stop remain available.
-Stopping during a storage stall retains accepted bytes for repair but can lose
+Stopping during a storage stall retains accepted bytes for repair. A finite
+Stop-only raw tail (at most 256 blocks / 1MiB) allows macOS terminal exit to drain
+without waiting for storage repair. If that reserve fills, Stop can remain
+unconfirmed and retryable. Termination can lose
 unread output in the native PTY/kernel during process termination; the dashboard
 keeps that possible-loss notice. Another launch waits for the old capture tail
 and final flush. There is no automatic history deletion. Supervisor loss restores interrupted

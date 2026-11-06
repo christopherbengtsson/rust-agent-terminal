@@ -472,7 +472,14 @@ reason. Reopening receives a coherent current replacement snapshot with its
 parsed-byte boundary and the same session identity, never an output delta backlog.
 The exact transcript is independently captured through 64 x 4096-byte slots,
 with a worker block and a waiting producer block: at most 270336 pending owned
-raw bytes. Capture blocks on saturation and reports pending high-water and actual
+raw bytes during normal capture. On Stop, the same reader may additionally
+retain a FIFO tail of at most 256 blocks (each <=4096 bytes, at most 1MiB raw),
+with bounded per-block descriptors/session IDs. This lets macOS terminal exit
+drain queued output while storage remains blocked. Tail exhaustion restores
+backpressure; it never relaxes child reaping or live-group absence requirements.
+The reader transfers the tail in order before EOF completion, so final flush,
+replacement launch and history cleanup still wait for its durable capture.
+Capture blocks on saturation and reports pending high-water and actual
 backpressure count/wait time. Screens retain zero scrollback and at most 200x80
 cells per primary/alternate screen. vt100 defaults are disabled so vte uses a
 fixed 1024-byte OSC payload rather than a growable control-string Vec; the exact
