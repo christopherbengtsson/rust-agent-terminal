@@ -27,6 +27,8 @@ pub struct HistoryPage {
     pub identity: String,
     pub checkout: String,
     pub lifecycle: Lifecycle,
+    #[serde(default)]
+    pub process_exit: Option<crate::events::ProcessExit>,
     pub text: String,
     pub offset: u64,
     pub next: Option<u64>,
@@ -123,10 +125,24 @@ pub fn metadata(state: &Observation) -> Box<Observation> {
     saved.status = crate::native_status::Status::default();
     Box::new(saved)
 }
+pub struct Snapshot {
+    pub state: Box<Observation>,
+    pub checkout: Option<Vec<u8>>,
+    pub task: String,
+}
+impl Snapshot {
+    pub fn new(state: &Observation, checkout: Option<&Path>, task: &str) -> Self {
+        Self {
+            state: metadata(state),
+            checkout: checkout.map(crate::session::path_bytes),
+            task: task.to_owned(),
+        }
+    }
+}
 pub enum Command {
-    Prepare(Box<Observation>, Option<Vec<u8>>, String),
-    Authorize(Box<Observation>, Option<Vec<u8>>, String),
-    Save(Box<Observation>, Option<Vec<u8>>, String),
+    Prepare(Snapshot),
+    Authorize(Snapshot),
+    Save(Snapshot),
     History(usize, u64),
     Cleanup(usize),
     Delete(String),
@@ -188,9 +204,9 @@ impl Worker {
                         Command::Delete(id) => store.start_delete(&id).map(|_| Completion::Sealed),
                         Command::Seal(id) => store.seal(&id).map(|_| Completion::Sealed),
                         Command::Retry => { since = Instant::now() - FLUSH; Ok(Completion::Retried) },
-                        Command::Prepare(state, checkout, task) => store.fault("prepare").and_then(|_| store.save(&state, checkout, task)).map(|_| Completion::Prepared(state.launch_request.clone())),
-                        Command::Authorize(state, checkout, task) => store.fault("authorize").and_then(|_| store.save(&state, checkout, task)).map(|_| Completion::Authorized(state.launch_request.clone())),
-                        Command::Save(state, checkout, task) => store.fault("save").and_then(|_| store.save(&state, checkout, task)).map(|_| Completion::Saved),
+                        Command::Prepare(Snapshot { state, checkout, task }) => store.fault("prepare").and_then(|_| store.save(&state, checkout, task)).map(|_| Completion::Prepared(state.launch_request.clone())),
+                        Command::Authorize(Snapshot { state, checkout, task }) => store.fault("authorize").and_then(|_| store.save(&state, checkout, task)).map(|_| Completion::Authorized(state.launch_request.clone())),
+                        Command::Save(Snapshot { state, checkout, task }) => store.fault("save").and_then(|_| store.save(&state, checkout, task)).map(|_| Completion::Saved),
                         Command::History(index, offset) => store.history(index, offset).map(Completion::History),
                         Command::Flush => {
                             // Called only after PTY EOF: drain everything already transferred.
@@ -375,9 +391,12 @@ impl Store {
         let json: String =
             self.db
                 .query_row("SELECT state FROM sessions WHERE id=?1", [id], |r| r.get(0))?;
-        let state: Observation = serde_json::from_str(&json)?;
+        let state: Observation = decode_record(&json)?;
         if state.execution.is_some()
-            || !matches!(state.lifecycle, Lifecycle::Stopped | Lifecycle::Exited)
+            || !matches!(
+                state.lifecycle,
+                Lifecycle::Stopped | Lifecycle::Exited | Lifecycle::Failed
+            )
         {
             return Err("History still has active or uncertain execution".into());
         }
@@ -413,12 +432,15 @@ impl Store {
                 page.next = true;
                 break;
             }
-            let state: Observation = serde_json::from_str(&row.get::<_, String>(2)?)?;
+            let state: Observation = decode_record(&row.get::<_, String>(2)?)?;
             let sealed: bool = row.get(4)?;
             let history_state: String = row.get(5)?;
             let eligible = sealed
                 && state.execution.is_none()
-                && matches!(state.lifecycle, Lifecycle::Stopped | Lifecycle::Exited);
+                && matches!(
+                    state.lifecycle,
+                    Lifecycle::Stopped | Lifecycle::Exited | Lifecycle::Failed
+                );
             page.entries.push(crate::cleanup::Entry {
                 id: row.get(0)?,
                 identity: row.get(1)?,
@@ -450,13 +472,16 @@ impl Store {
             [id],
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )?;
-        let state: Observation = serde_json::from_str(&json)?;
+        let state: Observation = decode_record(&json)?;
         if history == "deleted" {
             return Err("History already deleted".into());
         }
         if !sealed
             || state.execution.is_some()
-            || !matches!(state.lifecycle, Lifecycle::Stopped | Lifecycle::Exited)
+            || !matches!(
+                state.lifecycle,
+                Lifecycle::Stopped | Lifecycle::Exited | Lifecycle::Failed
+            )
         {
             return Err("History deletion refused: active, uncertain or unflushed session".into());
         }
@@ -572,12 +597,11 @@ impl Store {
                         let current: String =
                             self.db
                                 .query_row("SELECT state FROM app WHERE id=1", [], |r| r.get(0))?;
-                        let current: Observation = serde_json::from_str(&current)?;
+                        let current: Observation = decode_record(&current)?;
                         if current
-                            .identity
-                            .as_deref()
-                            .and_then(|identity| session_id(identity).ok())
-                            .as_deref()
+                            .session_identity
+                            .as_ref()
+                            .map(|identity| identity.session.as_str())
                             == Some(&id)
                         {
                             self.total = 0;
@@ -643,14 +667,14 @@ impl Store {
                 launches,
             });
         };
-        let mut state: Observation = serde_json::from_str(&json)?;
+        let mut state: Observation = decode_record(&json)?;
         state.stopped = false;
         state.status = crate::native_status::Status::default();
         state.metadata_pending = false;
-        if let Some(identity) = &state.identity {
+        if let Some(identity) = &state.session_identity {
             self.total = self.db.query_row(
                 "SELECT durable FROM sessions WHERE id=?1",
-                [session_id(identity)?],
+                [&identity.session],
                 |r| r.get(0),
             )?;
         }
@@ -734,8 +758,8 @@ impl Store {
         let json = serde_json::to_string(&state)?;
         let tx = self.db.transaction()?;
         tx.execute("INSERT INTO app VALUES(1,?1,?2,?3) ON CONFLICT(id) DO UPDATE SET state=excluded.state,checkout=excluded.checkout,task=excluded.task", params![json,path,task])?;
-        if let Some(identity) = state.identity.as_ref() {
-            tx.execute("INSERT INTO sessions(id,identity,state,created) VALUES(?1,?2,?3,unixepoch()) ON CONFLICT(id) DO UPDATE SET state=excluded.state", params![session_id(identity)?,identity,json])?;
+        if let Some(identity) = state.session_identity.as_ref() {
+            tx.execute("INSERT INTO sessions(id,identity,state,created) VALUES(?1,?2,?3,unixepoch()) ON CONFLICT(id) DO UPDATE SET state=excluded.state", params![identity.session,identity.label(),json])?;
         }
         if let Some(result) = &state.launch_result {
             tx.execute(
@@ -880,21 +904,49 @@ impl Store {
                 }
             })
             .collect();
-        let state: Observation = serde_json::from_str(&json)?;
+        let state: Observation = decode_record(&json)?;
         Ok(HistoryPage {
             identity,
             checkout: state.adopted.unwrap_or_default(),
             lifecycle: state.lifecycle,
+            process_exit: state.process_exit,
             text,
             offset,
             next: (end < durable).then_some(end),
         })
     }
 }
-pub fn session_id(identity: &str) -> Result<String> {
-    let id = identity
-        .split_whitespace()
-        .find_map(|part| part.strip_prefix("session="))
-        .ok_or("Missing session identity")?;
-    Ok(uuid::Uuid::parse_str(id)?.to_string())
+/// Explicit compatibility boundary for pre-typed durable records. Runtime key access
+/// never parses display text. Refuse malformed/oversized records visibly; retain files.
+fn decode_record(json: &str) -> Result<Observation> {
+    let mut state: Observation = serde_json::from_str(json)?;
+    if state.session_identity.is_none()
+        && let Some(label) = &state.identity
+    {
+        if label.len() > 512 {
+            return Err("Legacy session identity exceeds bounded format".into());
+        }
+        let (task, rest) = label
+            .strip_prefix("task=")
+            .and_then(|value| value.split_once(" session="))
+            .ok_or("Invalid legacy task/session identity")?;
+        let (session, request) = rest
+            .split_once(" request=")
+            .ok_or("Missing legacy request identity")?;
+        if task.is_empty() || task.len() > 128 || request.is_empty() || request.len() > 128 {
+            return Err("Invalid legacy identity lengths".into());
+        }
+        state.session_identity = Some(crate::events::SessionIdentity {
+            task: task.to_owned(),
+            session: uuid::Uuid::parse_str(session)?.to_string(),
+            request: request.to_owned(),
+        });
+    }
+    if let Some(identity) = &state.session_identity {
+        if uuid::Uuid::parse_str(&identity.session)?.to_string() != identity.session {
+            return Err("Invalid durable session UUID".into());
+        }
+        state.identity = Some(identity.label());
+    }
+    Ok(state)
 }

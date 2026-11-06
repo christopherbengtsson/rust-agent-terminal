@@ -72,10 +72,9 @@ impl Ui {
         } else if frame.area().width < 80 || frame.area().height < 22 {
             let tag = app
                 .session
-                .identity
-                .as_deref()
-                .and_then(|id| id.split("session=").nth(1))
-                .map(|id| id.chars().take(8).collect::<String>())
+                .session_identity
+                .as_ref()
+                .map(|identity| identity.session.chars().take(8).collect::<String>())
                 .unwrap_or_else(|| "unlaunched".into());
             format!(
                 " {} {tag} · Focus: {focus} ",
@@ -151,10 +150,16 @@ impl Ui {
                 .as_ref()
                 .map(|page| {
                     format!(
-                        "{}\n{} · recorded {:?} · byte {}\n{}",
+                        "{}\n{} · recorded {:?}{} · byte {}\n{}",
                         visible(&page.identity),
                         visible(&page.checkout),
                         page.lifecycle,
+                        page.process_exit
+                            .as_ref()
+                            .map_or(String::new(), |outcome| format!(
+                                " · {}",
+                                visible(&outcome.reason())
+                            )),
                         page.offset,
                         page.text
                     )
@@ -298,6 +303,18 @@ impl Ui {
                 "Discovery complete. No checkout adopted; no child launched.".to_owned(),
                 Color::Green,
             )
+        };
+        let message = if let Some(outcome) = &app.session.process_exit {
+            if outcome.failed() {
+                format!(
+                    "Native process failed: {}\n{message}",
+                    visible(&outcome.reason())
+                )
+            } else {
+                message
+            }
+        } else {
+            message
         };
         let message = if app.session.connection_lost {
             format!(
@@ -752,6 +769,37 @@ mod tests {
                 "recovery must remain available at {width} columns: {text}"
             );
             assert!(text.contains("Interrupted"));
+        }
+    }
+
+    #[test]
+    fn failed_native_exit_reason_remains_visible_after_a_control_error() {
+        let mut app = App::new("repo".into());
+        app.observe_session(crate::events::Observation {
+            lifecycle: crate::events::Lifecycle::Failed,
+            process_exit: Some(crate::events::ProcessExit {
+                code: 7,
+                signal: None,
+            }),
+            error: Some("History request unavailable; retry".into()),
+            ..Default::default()
+        });
+        for width in [70, 120] {
+            let mut ui = Ui::default();
+            let mut terminal = Terminal::new(TestBackend::new(width, 30)).unwrap();
+            terminal.draw(|frame| ui.draw(frame, &app)).unwrap();
+            let text: String = terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect();
+            assert!(text.contains("Failed"), "{text}");
+            assert!(
+                text.contains("Native process failed: exit code 7"),
+                "{text}"
+            );
         }
     }
 

@@ -25,8 +25,8 @@ use std::{
 use crossterm::event::{self, Event as TerminalEvent};
 
 use crate::{
-    app::{App, Effect},
-    events::Event,
+    app::App,
+    events::{Effect, Event},
     git::GitWorker,
     terminal::TerminalGuard,
     ui::Ui,
@@ -106,7 +106,6 @@ fn main() -> Result<(), Box<dyn Error>> {
     let (_guard, mut terminal) = TerminalGuard::enter()?;
     let mut ui = Ui::default();
 
-    let mut sent_viewport = None;
     loop {
         // Bound the work per frame so future streaming sources cannot monopolize it.
         for _ in 0..32 {
@@ -128,16 +127,9 @@ fn main() -> Result<(), Box<dyn Error>> {
             break;
         }
         let completed = terminal.draw(|frame| ui.draw(frame, &app))?;
-        if let Some(dimensions) = Ui::session_dimensions(completed.area)
-            && sent_viewport != Some(dimensions)
+        if let Some(Effect::Session(request)) = app.viewport(Ui::session_dimensions(completed.area))
         {
-            match client.send(session::Request::Resize {
-                rows: dimensions.0,
-                cols: dimensions.1,
-            }) {
-                Ok(()) => sent_viewport = Some(dimensions),
-                Err(error) => app.error = Some(error),
-            }
+            app.viewport_dispatched(client.send(request));
         }
         if event::poll(Duration::from_millis(50))? {
             match event::read()? {
