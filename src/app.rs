@@ -170,6 +170,14 @@ impl App {
                     &tree.path,
                 ))));
             }
+            KeyCode::Char('v') if key.modifiers.is_empty() => {
+                if self.session.launch_result.is_some() {
+                    self.launch_request = uuid::Uuid::new_v4().to_string();
+                }
+                return Some(Effect::Session(Request::Resume(
+                    self.launch_request.clone(),
+                )));
+            }
             KeyCode::Char('c') if key.modifiers.is_empty() => {
                 if self.session.launch_result.is_some() {
                     self.launch_request = uuid::Uuid::new_v4().to_string();
@@ -219,11 +227,11 @@ impl App {
         if self.attached {
             "Native input · Ctrl-C interrupt · Ctrl-] / Ctrl-5 dashboard (keeps session running)"
         } else if self.session.lifecycle == crate::session::Lifecycle::Interrupted {
-            "u reconcile execution · h history · d detach · q quit/stop · j/k select · r refresh"
+            "u reconcile · v resume · h history · d detach · q quit/stop · j/k select · r refresh"
         } else if self.history_open {
             "q quit/stop/retry · s stop · h live · n/p session · [/] page · j/k scroll · d detach"
         } else {
-            "q quit/stop · s stop · h history · j/k select · r refresh · a adopt · c Claude · x Codex · l fixture · Enter attach · d detach"
+            "q quit/stop · v resume · c new Claude · x new Codex · a adopt · Enter attach · h history · s stop · d detach · j/k · r refresh"
         }
     }
 
@@ -344,6 +352,25 @@ mod tests {
             matches!(app.input(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE)),
             Some(Effect::Session(Request::Launch(id))) if id == app.launch_request)
         );
+    }
+
+    #[test]
+    fn native_resume_requires_its_own_explicit_action() {
+        let mut app = App::new("repo".into());
+        app.observe_session(Observation {
+            lifecycle: crate::session::Lifecycle::Exited,
+            identity: Some("old-session".into()),
+            ..Observation::default()
+        });
+        assert!(!app.attached);
+        assert!(matches!(
+            app.input(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE)),
+            Some(Effect::Session(Request::Resume(_)))
+        ));
+        assert!(matches!(
+            app.input(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE)),
+            Some(Effect::Session(Request::LaunchCodex(_)))
+        ));
     }
 
     #[test]

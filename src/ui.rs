@@ -311,7 +311,7 @@ impl Ui {
             && app.session.lifecycle == crate::session::Lifecycle::Interrupted
             && (frame.area().width < 80 || frame.area().height < 22)
         {
-            "u reconcile · h history · d detach\nProcess: Interrupted · no automatic restart"
+            "u reconcile · v resume · h history · d detach\nProcess: Interrupted · no automatic restart"
         } else if frame.area().width < 80 || frame.area().height < 22 {
             if app.attached {
                 compact_help = format!(
@@ -326,7 +326,7 @@ impl Ui {
                 &compact_help
             } else {
                 compact_help = format!(
-                    "a adopt · c Claude · x Codex · l fixture · Enter attach · s stop · d detach\nq quit/stop · Process: {} · status: {}",
+                    "a adopt · c/x new Claude/Codex · v resume · Enter attach\nq quit/stop · d detach · Process: {} · status: {}",
                     if app.session.connection_lost {
                         format!("unknown (last seen {:?})", app.session.lifecycle)
                     } else {
@@ -502,7 +502,8 @@ mod tests {
             } else {
                 assert!(text.contains("Focus: dashboard"));
                 assert!(text.contains("Enter attach"));
-                assert!(text.contains("x Codex"));
+                assert!(text.contains("x new Codex"));
+                assert!(text.contains("v resume"));
                 assert!(text.contains("quit/stop"));
             }
         }

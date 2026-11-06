@@ -48,7 +48,7 @@ impl Dashboard {
         drop(pty.slave);
         let mut reader = pty.master.try_clone_reader().unwrap();
         let writer = pty.master.take_writer().unwrap();
-        let (tx, output) = mpsc::sync_channel(8);
+        let (tx, output) = mpsc::channel();
         std::thread::spawn(move || {
             let _master = pty.master;
             let mut bytes = [0; 4096];
@@ -179,9 +179,16 @@ impl Fixture {
         );
     }
     fn reopen_after_release(&self, needle: &str) -> Dashboard {
+        self.reopen_with_path_after_release(needle, None)
+    }
+    fn reopen_with_path_after_release(
+        &self,
+        needle: &str,
+        path: Option<&std::ffi::OsStr>,
+    ) -> Dashboard {
         let deadline = Instant::now() + Duration::from_secs(8);
         loop {
-            let mut dashboard = self.open();
+            let mut dashboard = Dashboard::open_with_path(&self.repository, &self.state(), path);
             let screen =
                 dashboard.wait_any(&[needle, "Another dashboard controls this supervisor"]);
             if screen.contains(needle) {
@@ -861,6 +868,8 @@ fn stopped_history_survives_restart_and_missing_checkout_without_launching() {
     .unwrap();
     let mut restored = fixture.open();
     restored.wait("Process: Exited");
+    restored.send(b"v");
+    restored.wait("Checkout unavailable: cannot continue in place");
     restored.send(b"h");
     restored.wait("Retained history");
     restored.wait("received: retained-context-08");
@@ -1332,6 +1341,8 @@ fn surviving_native_execution_blocks_replacement_then_different_boot_reconciles(
         control.request(serde_json::json!({"QueryLaunch":request}))["launch_result"],
         result
     );
+    let resume = control.request(serde_json::json!({"Resume":"must-not-resume-survivor"}));
+    assert!(resume["error"].as_str().unwrap().contains("uncertain"));
     let blocked = control.request(serde_json::json!({"Launch":"must-not-compete"}));
     assert!(blocked["error"].as_str().unwrap().contains("uncertain"));
     let stop = control.request(serde_json::json!("Stop"));
@@ -1526,6 +1537,169 @@ fn launch_gate_preserves_native_arguments_environment_and_checkout() {
     dashboard.wait("native-no-daemon-preserved");
     dashboard.wait("native-term:xterm-256color");
     dashboard.wait(&format!("native-cwd:{}", fixture.repository.display()));
+    dashboard.send(&[0x1d]);
+    dashboard.send(b"q");
+}
+
+#[test]
+fn codex_status_requires_current_attributed_evidence_despite_liveness_and_prose() {
+    use std::os::unix::{fs::PermissionsExt, net::UnixDatagram};
+    let fixture = Fixture::new();
+    let tools = fixture.temp.path().join("tools");
+    std::fs::create_dir(&tools).unwrap();
+    for (name, target) in [("git", "/usr/bin/git"), ("ps", "/bin/ps")] {
+        std::os::unix::fs::symlink(target, tools.join(name)).unwrap();
+    }
+    // Reuse the shared scripted child through the normal Codex launch boundary.
+    let executable = env!("CARGO_BIN_EXE_agent-terminal").replace('\'', "'\\''");
+    let wrapper = tools.join("codex");
+    std::fs::write(
+        &wrapper,
+        format!("#!/bin/sh\nexec '{executable}' --scripted-child\n"),
+    )
+    .unwrap();
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let mut dashboard = Dashboard::open_with_path(
+        &fixture.repository,
+        &fixture.state(),
+        Some(tools.as_os_str()),
+    );
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted");
+    dashboard.send(b"x");
+    dashboard.wait("fixture>");
+    dashboard.wait("Codex evidence unavailable");
+    dashboard.send(b"Conversation interrupted; Worked for 3s; approval needed\r");
+    dashboard.wait("received: Conversation interrupted");
+    assert!(
+        dashboard
+            .wait("semantic status: unknown")
+            .contains("Process: Running")
+    );
+    let channel = UnixDatagram::unbound().unwrap();
+    channel
+        .send_to(b"{", fixture.state().join("codex-status.sock"))
+        .unwrap();
+    dashboard.wait("invalid or unattributed Codex evidence");
+    dashboard.send(b"fixture-failed-test\r");
+    dashboard.wait("test result: FAILED; agent continues");
+    assert!(
+        dashboard
+            .wait("semantic status: unknown")
+            .contains("Process: Running")
+    );
+    dashboard.send(&[0x1d]);
+    dashboard.send(b"q");
+}
+
+#[test]
+fn codex_native_identity_survives_exit_and_resume_uses_original_id_without_new_prompt() {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = Fixture::new();
+    let tools = fixture.temp.path().join("native-tools");
+    std::fs::create_dir(&tools).unwrap();
+    let python = Command::new("which").arg("python3").output().unwrap();
+    let python = String::from_utf8(python.stdout).unwrap();
+    let wrapper = tools.join("codex");
+    let script = r#"import sys,os,re,json,shlex,subprocess
+args=sys.argv[1:]
+id='11111111-2222-4333-8444-555555555555'
+if 'resume' in args:
+    assert args[args.index('resume')+1]==id,args
+    assert '--no-daemon' in args,args
+    print('resumed-original-id-without-followup',flush=True)
+for arg in args:
+    if arg.startswith('hooks.SessionStart='):
+        helper=json.loads(re.search(r'command=("(?:[^"\\]|\\.)*")',arg).group(1))
+        subprocess.run(shlex.split(helper),input=json.dumps({'hook_event_name':'SessionStart','session_id':id}).encode(),check=True)
+os.execv(sys.argv[0]+'.child',[sys.argv[0]+'.child'])
+"#;
+    std::fs::write(&wrapper, format!("#!{}\n{script}", python.trim())).unwrap();
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let child = tools.join("codex.child");
+    std::fs::write(
+        &child,
+        format!(
+            "#!/bin/sh\nexec '{}' --scripted-child\n",
+            env!("CARGO_BIN_EXE_agent-terminal").replace('\'', "'\\''")
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(child, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let path = std::env::join_paths(
+        std::iter::once(tools).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+    )
+    .unwrap();
+    let mut dashboard =
+        Dashboard::open_with_path(&fixture.repository, &fixture.state(), Some(&path));
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted");
+    dashboard.send(b"x");
+    dashboard.wait("fixture>");
+    dashboard.send(b"original-readable-context-16\r");
+    dashboard.wait("received: original-readable-context-16");
+    dashboard.send(b"exit\r");
+    dashboard.wait("Process: Exited");
+    dashboard.kill();
+    let mut control = Controller::connect(&fixture);
+    assert_eq!(
+        control.greeting["native_conversation"],
+        "11111111-2222-4333-8444-555555555555"
+    );
+    let old_identity = control.greeting["identity"].clone();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while control.request(serde_json::json!("Screen"))["metadata_pending"] != false {
+        assert!(Instant::now() < deadline);
+    }
+    kill_owner(&fixture);
+    drop(control);
+    let mut dashboard = fixture.reopen_with_path_after_release("Process: Exited", Some(&path));
+    dashboard.kill();
+    let control = Controller::connect(&fixture);
+    assert_eq!(
+        control.greeting["native_conversation"],
+        "11111111-2222-4333-8444-555555555555"
+    );
+    assert_eq!(control.greeting["identity"], old_identity);
+    assert_no_owned_coding(&fixture);
+    let mut refused = Dashboard::open_with_path(&fixture.repository, &fixture.state(), Some(&path));
+    refused.wait("Another dashboard controls this supervisor");
+    refused.kill();
+    drop(control);
+    let mut dashboard = fixture.reopen_with_path_after_release("Process: Exited", Some(&path));
+    dashboard.send(b"v");
+    dashboard.wait("resumed-original-id-without-followup");
+    dashboard.wait("fixture>");
+    dashboard.send(b"exit\r");
+    dashboard.wait("Process: Exited");
+    dashboard.send(b"h");
+    dashboard.send(b"n");
+    dashboard.wait("received: original-readable-context-16");
+    dashboard.send(b"q");
+}
+
+#[test]
+fn unavailable_native_recovery_retains_history_until_explicit_new_conversation() {
+    let fixture = Fixture::new();
+    let mut dashboard = fixture.open();
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted");
+    dashboard.send(b"l");
+    dashboard.wait("fixture>");
+    dashboard.send(b"independent-history-16\r");
+    dashboard.wait("received: independent-history-16");
+    dashboard.send(b"exit\r");
+    dashboard.wait("Process: Exited");
+    dashboard.send(b"v");
+    dashboard.wait("Native resume unavailable: no supported saved conversation identity");
+    dashboard.send(b"h");
+    dashboard.wait("received: independent-history-16");
+    dashboard.send(b"h");
+    dashboard.send(b"l");
+    dashboard.wait("fixture>");
     dashboard.send(&[0x1d]);
     dashboard.send(b"q");
 }
@@ -1972,53 +2146,56 @@ fn disconnected_dashboard_retains_identity_and_detaches_locally_before_reopen() 
 }
 
 #[test]
-fn codex_status_requires_current_attributed_evidence_despite_liveness_and_prose() {
-    use std::os::unix::{fs::PermissionsExt, net::UnixDatagram};
+fn prior_boot_native_record_stays_interrupted_until_explicit_reconcile_then_resume() {
+    use std::os::unix::{ffi::OsStrExt, fs::PermissionsExt};
     let fixture = Fixture::new();
+    std::fs::create_dir(fixture.state()).unwrap();
+    std::fs::set_permissions(fixture.state(), std::fs::Permissions::from_mode(0o700)).unwrap();
     let tools = fixture.temp.path().join("tools");
     std::fs::create_dir(&tools).unwrap();
-    for (name, target) in [("git", "/usr/bin/git"), ("ps", "/bin/ps")] {
-        std::os::unix::fs::symlink(target, tools.join(name)).unwrap();
-    }
-    // Reuse the shared scripted child through the normal Codex launch boundary.
-    let executable = env!("CARGO_BIN_EXE_agent-terminal").replace('\'', "'\\''");
-    let wrapper = tools.join("codex");
-    std::fs::write(
-        &wrapper,
-        format!("#!/bin/sh\nexec '{executable}' --scripted-child\n"),
+    let wrapper = tools.join("claude");
+    std::fs::write(&wrapper,format!("#!/bin/sh\nprintf 'native-recovery-args:'\nprintf '<%s>' \"$@\"\nprintf '\\r\\n'\nexec '{}' --scripted-child\n",env!("CARGO_BIN_EXE_agent-terminal").replace('\'',"'\\''"))).unwrap();
+    std::fs::set_permissions(wrapper, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let path = std::env::join_paths(
+        std::iter::once(tools).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
     )
     .unwrap();
-    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700)).unwrap();
-    let mut dashboard = Dashboard::open_with_path(
-        &fixture.repository,
-        &fixture.state(),
-        Some(tools.as_os_str()),
-    );
-    dashboard.wait("Discovery complete");
-    dashboard.send(b"a");
-    dashboard.wait("Adopted");
-    dashboard.send(b"x");
+    let db = rusqlite::Connection::open(fixture.state().join("history.sqlite3")).unwrap();
+    db.execute_batch("CREATE TABLE app (id INTEGER PRIMARY KEY CHECK(id=1), state TEXT NOT NULL, checkout BLOB, task TEXT NOT NULL); CREATE TABLE sessions (id TEXT PRIMARY KEY, identity TEXT NOT NULL, state TEXT NOT NULL, durable INTEGER NOT NULL DEFAULT 0); PRAGMA user_version=1;").unwrap();
+    let identity =
+        "task=task16 session=33333333-4444-4555-8666-777777777777 request=prior-native-16";
+    let old = serde_json::json!({"adopted":fixture.repository.display().to_string(),"identity":identity,"agent":"Claude Code","native_conversation":"11111111-2222-4333-8444-555555555555","screen":"","formatted":"","rows":24,"cols":100,"output_bytes":0,"error":null,"stopped":false,"lifecycle":"Running","control_denied":false,"launch_request":"prior-native-16","execution":{"boot":"injected-prior-boot-16","pid":null,"start":null,"released":true}});
+    db.execute(
+        "INSERT INTO app VALUES(1,?1,?2,'task16')",
+        rusqlite::params![old.to_string(), fixture.repository.as_os_str().as_bytes()],
+    )
+    .unwrap();
+    db.execute(
+        "INSERT INTO sessions VALUES(?1,?2,?3,0)",
+        rusqlite::params![
+            "33333333-4444-4555-8666-777777777777",
+            identity,
+            old.to_string()
+        ],
+    )
+    .unwrap();
+    drop(db);
+    let mut dashboard =
+        Dashboard::open_with_path(&fixture.repository, &fixture.state(), Some(&path));
+    dashboard.wait("Process: Interrupted");
+    dashboard.kill();
+    let mut control = Controller::connect(&fixture);
+    assert_no_owned_coding(&fixture);
+    let blocked = control.request(serde_json::json!({"Resume":"before-reconciliation-16"}));
+    assert!(blocked["error"].as_str().unwrap().contains("uncertain"));
+    wait_reconciled(&mut control);
+    assert_no_owned_coding(&fixture);
+    drop(control);
+    let mut dashboard = fixture.reopen_with_path_after_release("Process: Interrupted", Some(&path));
+    dashboard.send(b"v");
+    dashboard.wait("native-recovery-args:<--resume><11111111-2222-4333-8444-555555555555>");
     dashboard.wait("fixture>");
-    dashboard.wait("Codex evidence unavailable");
-    dashboard.send(b"Conversation interrupted; Worked for 3s; approval needed\r");
-    dashboard.wait("received: Conversation interrupted");
-    assert!(
-        dashboard
-            .wait("semantic status: unknown")
-            .contains("Process: Running")
-    );
-    let channel = UnixDatagram::unbound().unwrap();
-    channel
-        .send_to(b"{", fixture.state().join("codex-status.sock"))
-        .unwrap();
-    dashboard.wait("invalid or unattributed Codex evidence");
-    dashboard.send(b"fixture-failed-test\r");
-    dashboard.wait("test result: FAILED; agent continues");
-    assert!(
-        dashboard
-            .wait("semantic status: unknown")
-            .contains("Process: Running")
-    );
+
     dashboard.send(&[0x1d]);
     dashboard.send(b"q");
 }
