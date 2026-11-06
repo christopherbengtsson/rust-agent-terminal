@@ -1,6 +1,15 @@
 # Milestone 1 — native-session proof
 
 Status: ready-for-agent
+Resolved: yes
+
+## Completion record
+
+2026-11-06: the [scoped Milestone 1 evidence](../../docs/proofs/18-milestone-evidence.md)
+passed final native Claude Code 2.1.318 / Codex CLI 0.167.0 interaction, recovery,
+foreground Stop/quit, resource and complete stable locked verification gates.
+This resolves the specification and all 18 implementation tickets, without
+claiming the full release workload, C1–C9/R1–R11 or untested platform/tool versions.
 
 ## Problem Statement
 
@@ -304,9 +313,12 @@ failure with evidence and a proposed resolution, not a silently relaxed gate.
   architecture, and milestone documents. The existing foundation has worktree
   discovery/navigation and terminal restoration, with no supervisor, sessions,
   adapters, or persistence implemented at specification time.
-- The approved test seam was confirmed by the user before publication. This is
-  a specification task: none of the proposed native or resource checks have yet
-  been executed as part of this spec.
+- The approved test seam was confirmed by the user before publication. Native,
+  resource and recovery proofs have since been executed; see the
+  [integrated evidence](../../docs/proofs/18-milestone-evidence.md). Ticket 18
+  records the corrected native foreground-subprocess Stop failure, passing
+  final Stop/quit retests, full source checks and resource revalidation. This
+  scoped proof is complete; broader release requirements remain later work.
 - Preserve accepted ADRs 0001 (supervisor ownership), 0003 (status evidence),
   0004 (history and explicit cleanup), and 0005 (uncertain launch reconciliation).
   Resolve feasibility problems explicitly before contradicting those decisions.

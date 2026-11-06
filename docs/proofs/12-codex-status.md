@@ -15,8 +15,9 @@ app-server events or `codex exec --json` output.
 
 The five required signals passed for this version and the declared scenarios.
 This is a bounded status compatibility result, not release-wide native support.
-The dashboard's `support gate open` reason still refers to the wider experimental
-integration; other milestone requirements and other CLI versions are separate.
+Ticket 18 replaces the historical `support gate open` reason with explicit
+version/freshness bounds. Other milestone requirements and CLI versions remain
+separate; this wording change does not alter classification.
 
 | State | Required evidence and actual native scenario | Matching capture |
 | --- | --- | --- |

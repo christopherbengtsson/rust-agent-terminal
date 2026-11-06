@@ -9,9 +9,16 @@ The dashboard discovers real Git worktrees, explicitly adopts a checkout, and
 launches Claude Code (`c`), Codex CLI (`x`), or a scripted PTY fixture (`l`). Native
 launch is experimental; see the recorded version-specific proofs below. Durable
 readable history, supervisor reconnect, conservative launch reconciliation and
-explicit native recovery are implemented. Remaining native status and GitHub
-workflows have separate gates. The first
-release targets macOS; fixture tests do not establish native-agent compatibility.
+explicit native recovery are implemented. Native status has bounded per-version
+evidence; GitHub workflows remain unavailable. The first release targets macOS;
+fixture tests do not establish native-agent compatibility.
+
+The [integrated Milestone 1 evidence](docs/proofs/18-milestone-evidence.md) records
+exact native versions, measured capacity and limits. The discovered default
+Codex foreground-subprocess Stop failure was fixed and real Stop/quit retests
+passed for both recorded tools. Final source checks and resource revalidation
+also passed for this scoped checkpoint; full release coordination and GitHub
+workflows remain later work.
 
 ## Run
 
@@ -39,24 +46,35 @@ Errors appear in the dashboard, where you can retry or quit.
 | `l` | Launch the scripted PTY fixture in the adopted checkout |
 | Enter | Attach to the existing managed session |
 | Ctrl-] | Return from attached focus to dashboard navigation |
-| `s` | In dashboard focus, stop the fixture and keep the dashboard open |
+| `s` | In dashboard focus, stop the managed native/fixture session and keep the dashboard open |
 | `g` | Inspect history cleanup; `j`/`k` select, `n`/`p` page, Enter preview, `D` confirm selected deletion, Esc cancel/back |
 | `y` | Retry history storage after repair; the sole writer retains pending bytes |
 | `d` | In dashboard focus, detach and exit while preserving execution |
 | `q` / Esc / Ctrl-C | In dashboard focus, request supervisor shutdown and quit after confirmed stop |
 
 In attached focus, UTF-8 characters, Ctrl-C, legacy control/Alt shortcuts,
-arrows, navigation keys, F1–F12 and Shift-Tab reach the fixture PTY. The pane and
+arrows, navigation keys, F1–F12 and Shift-Tab reach the native/fixture PTY. The pane and
 help show input focus; attached `q` and Esc are native input. Ctrl-] (the same
-legacy byte as Ctrl-5) returns to dashboard focus without stopping the fixture;
-Enter reattaches to the same child. This provisional chord still needs both
-native-agent proofs. Ordinary quit visibly waits for the supervisor's confirmed
-stop. Stop sends TERM to the managed process group, escalates to KILL after
-500 ms, then confirms the leader exit and absence of executing group members.
-Verification errors or execution remaining after the two-second deadline stay
-visible; retry `s` or `q` after addressing the error. A verification subprocess
-has its own 500 ms timeout. These are fixture-tested process-group boundaries;
-processes that deliberately leave that group are outside this cleanup guarantee.
+legacy byte as Ctrl-5) returns to dashboard focus without stopping the session;
+Enter reattaches to the same child. Both recorded native versions exercised this
+chord; other keyboard protocols remain outside the proof. Ordinary quit visibly
+waits for the supervisor's confirmed
+stop. Stop is forceful: a worker verifies live descendant identities across
+process groups, freezes that owned scope to a stable closure, leaves TERM pending
+while frozen and sends KILL after 500 ms. It confirms leader exit and absence of
+executing owned members within two seconds. Native shutdown hooks and native
+conversation buffers are not guaranteed to flush; use the native CLI's `/exit`
+for graceful native shutdown. Managed captured history still has its separate
+EOF/durable-flush boundary. Inventory, identity or bound failures remain visible
+and retryable with `s`/`q`; they never count as confirmed cleanup.
+
+Live ancestry is sampled every 100 ms, with at most 1024 retained identities per
+session. Inventories cap at 8192 processes, 1 MiB and 500 ms; closure has a 500 ms
+budget inside the existing two-second deadline. Unrelated processes outside that
+ancestry are excluded. Deliberate double-fork/reparent escape between samples is
+outside this proof; no kernel sandbox or elimination of the OS check/signal race
+is claimed. Restored uncertain records never gain signal authority from saved
+PIDs. See [the native child correction](docs/proofs/18-native-child-stop.md).
 Native `exit` retains the latest screen and task/session attribution and returns
 to dashboard focus. A subsequent explicit launch creates a new session.
 Neither native exit nor stop deletes working files. Detach restores the terminal
@@ -86,12 +104,12 @@ cargo run --locked -- /path/to/repository --state-dir /tmp/rat-proof-example
 
 One dashboard controls the supervisor at a time. A second dashboard reports the
 existing connection and cannot launch, type into, or stop its session. After a
-controller dies, reopen the dashboard to recover the same fixture and screen.
+controller dies, reopen the dashboard to recover the same session and screen.
 Symlink checkout aliases and paths inside a checkout adopt its canonical Git
 worktree root. A new launch while running is refused; Enter attaches to the existing
 child. The surviving supervisor retains launch-request outcomes: reconnect
 recovers the original request and its success or failure, and retrying that exact
-request does not execute again. An explicit `c` or `l` after an acknowledged outcome is
+request does not execute again. An explicit `c`, `x` or `l` after an acknowledged outcome is
 a new request. This recovery applies to dashboard loss; supervisor loss needs the
 separate crash-reconciliation work. See the [reconnect proof](docs/proofs/07-dashboard-reconnect.md).
 
@@ -102,9 +120,9 @@ endpoint is never displaced. Keep the lock file in place, including after shutdo
 Use separate private `--state-dir` directories only for isolated experiments.
 
 The durable-history and launch-recovery sections below describe current storage
-and recovery behavior. Cleanup of processes that escape the managed process
-group remains unproved; interrupted native execution can require verified reboot
-before replacement. Dashboard loss preserves the supervisor and fixture; reconnect and quit
+and recovery behavior. Unobserved processes that escape live ancestry
+remain outside the proof; interrupted native execution can require verified reboot
+before replacement. Dashboard loss preserves the supervisor and session; reconnect and quit
 normally to clean up. Do not remove a socket for a running supervisor. The bounded
 parsed screen follows the session pane viewport (up to 200×80 cells), without
 scrollback; it is not history. The PTY and parser resize together, including
@@ -137,7 +155,7 @@ changed. Authentication/setup prompts remain in the native CLI. A failed spawn
 retains the adopted checkout and discovery; `c` is an explicit retry. A running
 session refuses replacement regardless of the selected launch choice. Launch is
 experimental: see [the native proof](docs/proofs/05-claude-native.md) for the exact
-version and unresolved scenarios. Native tool usage can consume your account's
+version and bounded scenarios. Native tool usage can consume your account's
 allowance. No credential copying or product authentication store is used.
 
 Native status is separate from process lifecycle. For the demonstrated canonical

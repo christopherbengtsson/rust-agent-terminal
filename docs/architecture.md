@@ -146,7 +146,7 @@ outcomes, and reconnect observations through the application interface used by
 the dashboard. Use rendering tests for help, focus, and viewport behavior. Keep
 the approved real-dashboard/supervisor/scripted-PTY seam for actual input bytes,
 sizes, child ownership, durable history, and failure responsiveness. Native-tool
-compatibility still requires recorded macOS evidence. This gives locality to
+compatibility is qualified only by recorded macOS evidence. This gives locality to
 interaction policy and leverage to tests without a generic worker framework or
 mock adapter for each module.
 
@@ -279,7 +279,7 @@ normal return, errors and panic. See [recorded evidence](proofs/03-native-input.
 ## Fixture lifecycle (ticket 06)
 
 Process lifecycle is explicit (`Idle`, `Running`, `Stopping`, `Exited`, `Stopped`,
-`StopFailed`) and separate from semantic agent status, which remains unknown.
+`StopFailed`) and separate from transient semantic agent status and task archival.
 The supervisor polls child exit even without a controller; native exit retains
 in-memory attribution and the bounded screen. Stop keeps the dashboard open;
 quit enters App pending shutdown and exits only after a confirmed observation.
@@ -288,11 +288,24 @@ allows explicit retry. Final shutdown observations use reliable event delivery
 rather than the coalescible screen-only path. Detach exits through the normal
 terminal guard without sending Shutdown. Client EOF merely releases control.
 
-A termination worker owns the child while stopping, sends process-group TERM,
-escalates after 500 ms and polls leader exit plus `ps` group execution evidence.
-The deadline is two seconds with a 500 ms timeout on each verification subprocess.
-Inspection failures never count as confirmed absence. Zombies cannot execute;
-processes that deliberately escape the managed group are outside this proof.
+A termination worker owns the child while stopping. The live supervisor captures
+the gated helper's UID/start identity before authorization and tracks verified
+descendants across process groups on a worker (100 ms sampling, 1024 retained
+identities). Before termination it freezes the leader and each verified child
+generation, requires stopped-state evidence and a second inventory adding no new
+members. TERM remains pending while frozen; KILL follows after 500 ms, without
+reopening a fork/reparent gap. Stop is forceful: native shutdown hooks and native
+conversation buffers need not flush. Native `/exit` is the separate graceful
+path; managed captured history still needs EOF and durable tail completion.
+
+Inventories cap at 8192 processes, 1 MiB and 500 ms; closure has a 500 ms budget
+within the two-second lifecycle deadline. Every signal checks UID and OS start
+identity. Inspection errors and exceeded bounds retain StopFailed/authority for
+retry; stopped records drop tracking. Restored records never reconstruct signal
+authority. Zombies cannot execute. Unrelated daemons outside the live ancestry
+are excluded. Deliberate double-fork/reparent escape between samples and the OS
+inspection/signal interval remain limits; no kernel sandbox is claimed. See
+[the actual native failure and correction](proofs/18-native-child-stop.md).
 No launch or adoption replacement is allowed while termination is pending or
 unconfirmed. PTY input uses a separate worker with 32 bounded 4096-byte slots;
 queue saturation reports retry, and a blocked writer cannot block stop commands.
@@ -323,7 +336,7 @@ configuration edits. Startup errors explain installation/login and explicit retr
 while discovery and adoption remain available. A live child refuses either launch
 choice. The observation labels the launched tool independently of process lifecycle;
 semantic status remains unknown. See [native proof](proofs/05-claude-native.md)
-for versioned results and unresolved compatibility gates.
+for versioned results and support limits.
 
 
 ## Dashboard recovery (ticket 07)
@@ -642,3 +655,21 @@ storage can freeze native output while dashboard recovery/Stop remain available;
 a receipt is distinct from a visible usable native interaction. See
 [the final measurements and limits](proofs/17-session-measurements.md), including
 the independently declared fault-input supplement and preserved failed runs.
+
+### Integrated evidence boundary (ticket 18)
+
+The [final proof record](proofs/18-milestone-evidence.md) ties native observations
+to source, exact CLI versions, isolated PTYs/state, raw cell captures and required
+checks. Whole-dashboard160×40 and60×18 captures follow the reference composition,
+with unavailable reviews, one active session per worktree and the native CLI pane.
+Narrow layouts hide the sidebar; unusable viewports retain the last usable child
+geometry. Parsed-cell rasterization does not establish Terminal.app/iTerm
+compatibility.
+
+An actual Codex0.167.0 foreground command created a separate native child process
+group. The pre-fix Stop confirmed the CLI group but left that command alive, so
+owned native subprocess cleanup and ordinary quit required a correction. The
+fresh native retests, final source checks and live-tracker resource revalidation
+all passed. This concrete default-native behavior is distinct from
+arbitrary processes deliberately escaping ownership. The record preserves both
+the original failure and the final fix/retest boundary when available.

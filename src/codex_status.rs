@@ -188,7 +188,8 @@ impl Monitor {
                     }
                     self.received = Some(Instant::now());
                     self.status.state = State::Unknown;
-                    self.status.reason = "Codex native support gate open".into();
+                    self.status.reason =
+                        "bounded Codex receipt; see state evidence and version limits".into();
                     if self.status.recent.len() == 16 {
                         self.status.recent.remove(0);
                     }
@@ -322,8 +323,7 @@ impl Monitor {
                 self.status.state = State::Input;
                 self.status.evidence =
                     Some("open question tool + current Codex 0.167.0 modal".into());
-                self.status.reason =
-                    "30s bounded native question evidence; support gate open".into();
+                self.status.reason = "Codex 0.167.0 question evidence; expires within 30s".into();
             }
             if pending.tool == "Bash"
                 && pending.permission
@@ -335,8 +335,7 @@ impl Monitor {
                 self.status.state = State::Approval;
                 self.status.evidence =
                     Some("open permission request + current Codex 0.167.0 modal".into());
-                self.status.reason =
-                    "30s bounded native approval evidence; support gate open".into();
+                self.status.reason = "Codex 0.167.0 approval evidence; expires within 30s".into();
             }
         }
         if running
@@ -356,7 +355,7 @@ impl Monitor {
             self.status.state = State::Completed;
             self.status.evidence =
                 Some("current-turn Stop + new Codex 0.167.0 done marker and idle composer".into());
-            self.status.reason = "30s bounded completion evidence; support gate open".into();
+            self.status.reason = "Codex 0.167.0 completion evidence; expires within 30s".into();
         }
         if !running {
             self.unknown("execution not running");
