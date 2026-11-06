@@ -18,7 +18,9 @@ exact native versions, measured capacity and limits. The discovered default
 Codex foreground-subprocess Stop failure was fixed and real Stop/quit retests
 passed for both recorded tools. Final source checks and resource revalidation
 also passed for this scoped checkpoint; full release coordination and GitHub
-workflows remain later work.
+workflows remain later work. The [final review corrections](docs/proofs/18-review-fixes.md)
+record the newer interaction/identity/process-outcome checkpoint and its checks;
+historical native and resource measurements retain their original boundaries.
 
 ## Run
 
@@ -75,8 +77,13 @@ ancestry are excluded. Deliberate double-fork/reparent escape between samples is
 outside this proof; no kernel sandbox or elimination of the OS check/signal race
 is claimed. Restored uncertain records never gain signal authority from saved
 PIDs. See [the native child correction](docs/proofs/18-native-child-stop.md).
-Native `exit` retains the latest screen and task/session attribution and returns
-to dashboard focus. A subsequent explicit launch creates a new session.
+Native exit retains the latest screen and task/session attribution and returns
+to dashboard focus. A successful native process exit is `Exited`; a nonzero exit
+or signal is `Failed`, with its original reason retained in metadata and readable
+history through later storage/control errors and reload. A failed intermediate
+command while the native CLI continues does not make the session Failed.
+Explicit Stop/quit of a running process remains `Stopped`. A subsequent explicit
+launch creates a new session after execution cleanup and final history flush.
 Neither native exit nor stop deletes working files. Detach restores the terminal
 and closes only the dashboard connection. Unexpected dashboard loss also preserves
 execution. Quit waits for durable history flush; a failed flush remains visible and retryable.
@@ -223,7 +230,8 @@ are suggested first; `n`/`p` page, `j`/`k` select, Enter previews the effect,
 `D` confirms that selected UUID, and Esc cancels/back. Attached native input keeps
 its own shortcuts. Age, exit, archival and pressure never authorize deletion.
 
-Only stopped/exited segments with a recorded accepted-PTY EOF, successful final
+Only stopped, exited or failed execution segments with a recorded accepted-PTY
+EOF, successful final
 flush and durable metadata, and no active/uncertain capture are eligible. Process
 Stopped alone is insufficient. Legacy session ages remain explicitly unknown;
 legacy stopped records without this final-capture proof stay unavailable rather
