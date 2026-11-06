@@ -8,7 +8,16 @@ use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 pub use crate::events::Effect;
 
+pub struct CreateForm {
+    pub intent: crate::creation::Intent,
+    pub field: usize,
+    pub path: String,
+    original_path: Option<(String, Vec<u8>)>,
+    preview_applied: bool,
+}
 pub struct App {
+    pub create_form: Option<CreateForm>,
+    pub creation_open: bool,
     pub workspaces_open: bool,
     pub workspace_selected: Option<String>,
     pub project_input: Option<String>,
@@ -44,6 +53,8 @@ pub struct App {
 impl App {
     pub fn new(repository: PathBuf) -> Self {
         Self {
+            create_form: None,
+            creation_open: false,
             workspaces_open: false,
             workspace_selected: None,
             project_input: None,
@@ -119,6 +130,10 @@ impl App {
                 Request::Shutdown
                     | Request::Adopt(_)
                     | Request::Register(_)
+                    | Request::PreviewCreation { .. }
+                    | Request::CreateWorkspace(_)
+                    | Request::RecoverCreation { .. }
+                    | Request::CancelCreation
                     | Request::SelectSession(_)
                     | Request::Discover { .. }
             )
@@ -138,6 +153,26 @@ impl App {
     }
 
     pub fn observe_session(&mut self, mut observation: Observation) {
+        if let (Some(form), Some(preview)) = (&mut self.create_form, &observation.creation.preview)
+            && !form.preview_applied
+            && preview.project == form.intent.project
+        {
+            if let Some(base) = &preview.default_base {
+                form.intent.base = base.clone();
+            }
+            form.path = crate::creation::path(&preview.managed_root)
+                .join(&form.intent.request)
+                .to_string_lossy()
+                .into_owned();
+            form.original_path = Some((
+                form.path.clone(),
+                crate::session::path_bytes(
+                    &crate::creation::path(&preview.managed_root).join(&form.intent.request),
+                ),
+            ));
+            form.preview_applied = true;
+        }
+
         if let Some(discovery) = observation.discovery.take() {
             use std::os::unix::ffi::OsStringExt;
             self.apply(Event::DiscoveryCompleted {
@@ -156,6 +191,10 @@ impl App {
         }
         if self.selected_target.is_empty() || self.selecting_checkout {
             self.selected_target = observation.control_target.clone();
+        }
+        if self.selecting_checkout && self.session.creation.pending && !observation.creation.pending
+        {
+            self.selecting_checkout = false;
         }
         if self.selecting_checkout
             && !observation.adoption_pending
@@ -232,6 +271,130 @@ impl App {
                 return None;
             }
             return Some(self.session_effect(Request::Key(key)));
+        }
+        if self.create_form.is_none() && self.creation_open && key.code == KeyCode::Esc {
+            self.creation_open = false;
+            return None;
+        }
+        if key.code == KeyCode::Char('O') && self.create_form.is_none() && key.modifiers.is_empty()
+        {
+            self.creation_open = !self.creation_open;
+            return None;
+        }
+        if let Some(form) = &mut self.create_form {
+            match key.code {
+                KeyCode::Esc => self.create_form = None,
+                KeyCode::Tab => form.field = (form.field + 1) % 5,
+                KeyCode::BackTab => form.field = (form.field + 4) % 5,
+                KeyCode::Left | KeyCode::Right if form.field == 4 => {
+                    form.intent.agent = match form.intent.agent {
+                        crate::events::NativeAgent::Claude => crate::events::NativeAgent::Codex,
+                        crate::events::NativeAgent::Codex => crate::events::NativeAgent::Claude,
+                    }
+                }
+                KeyCode::Enter | KeyCode::Char('s')
+                    if key.code == KeyCode::Enter || key.modifiers == KeyModifiers::CONTROL =>
+                {
+                    let mut form = self.create_form.take().unwrap();
+                    form.intent.start = key.code != KeyCode::Enter;
+                    form.intent.path = form
+                        .original_path
+                        .as_ref()
+                        .filter(|(display, _)| display == &form.path)
+                        .map(|(_, bytes)| bytes.clone())
+                        .unwrap_or_else(|| form.path.as_bytes().to_vec());
+                    if let Err(error) = form.intent.validate() {
+                        self.error = Some(error);
+                        self.create_form = Some(form);
+                        return None;
+                    }
+                    self.selecting_checkout = true;
+                    return Some(Effect::Session(Request::CreateWorkspace(form.intent)));
+                }
+                code => {
+                    let text = match form.field {
+                        0 => Some(&mut form.intent.base),
+                        1 => Some(&mut form.intent.branch),
+                        2 => Some(&mut form.path),
+                        3 => Some(form.intent.prompt.get_or_insert_with(String::new)),
+                        _ => None,
+                    };
+                    if let Some(text) = text {
+                        match code {
+                            KeyCode::Backspace => {
+                                text.pop();
+                            }
+                            KeyCode::Char('u') if key.modifiers == KeyModifiers::CONTROL => {
+                                text.clear()
+                            }
+                            KeyCode::Char(c)
+                                if !key.modifiers.intersects(
+                                    KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER,
+                                ) && text.len() + c.len_utf8() <= 4084 =>
+                            {
+                                text.push(c)
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            return None;
+        }
+        if key.code == KeyCode::Char('N')
+            && !key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER)
+        {
+            let workspace = self.session.registry.workspaces.iter().find(|w| {
+                Some(&w.id)
+                    == self
+                        .workspace_selected
+                        .as_ref()
+                        .or(self.session.registry.selected.as_ref())
+            });
+            let project = workspace
+                .and_then(|w| w.project.clone())
+                .or_else(|| self.session.registry.projects.first().map(|p| p.id.clone()));
+            if let Some(project) = project {
+                let request = uuid::Uuid::new_v4().to_string();
+                self.creation_open = true;
+                self.create_form = Some(CreateForm {
+                    intent: crate::creation::Intent {
+                        branch: format!("workspace/{}", &request[..12]),
+                        request,
+                        project: project.clone(),
+                        base: String::new(),
+                        path: Vec::new(),
+                        agent: crate::events::NativeAgent::Claude,
+                        start: false,
+                        prompt: None,
+                    },
+                    field: 0,
+                    path: String::new(),
+                    original_path: None,
+                    preview_applied: false,
+                });
+                return Some(Effect::Session(Request::PreviewCreation { project }));
+            }
+            self.error = Some("Register a project with A before creating a workspace".into());
+            return None;
+        }
+        if matches!(key.code, KeyCode::Char('L' | 'G' | 'Z'))
+            && !key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER)
+        {
+            if key.code == KeyCode::Char('Z') {
+                return Some(Effect::Session(Request::CancelCreation));
+            }
+            self.creation_open = true;
+            if let Some(record) = self.session.creation.records.last() {
+                return Some(Effect::Session(Request::RecoverCreation {
+                    request: record.intent.request.clone(),
+                    local: key.code == KeyCode::Char('L'),
+                }));
+            }
         }
         if self.first_prompt.is_some() || self.rename_workspace.is_some() {
             match key.code {
@@ -708,14 +871,16 @@ impl App {
     }
 
     pub fn keyboard_help(&self) -> &'static str {
-        if self.first_prompt.is_some() {
+        if self.create_form.is_some() {
+            "New workspace: Tab fields · Left/Right agent · Enter Create without starting · Ctrl-S Create and start · Esc cancel"
+        } else if self.first_prompt.is_some() {
             "First prompt (optional): Enter starts native agent · Esc cancels without launch"
         } else if self.rename_workspace.is_some() {
             "Workspace name: Enter saves · Ctrl-U clears · Esc cancels · no folder or conversation changes"
         } else if self.project_input.is_some() {
             "Add project: existing local path · Enter register without launch · Esc cancel"
         } else if self.workspaces_open {
-            "Workspaces: j/k select · [/] project · Enter open · a adopt · R rename · h latest history · A add project · w/Esc back · d detach · q quit"
+            "Workspaces: N create · j/k select · [/] project · Enter open · a adopt · R rename · h latest history · A add project · w/Esc back · d detach · q quit"
         } else if self.attached {
             "Native input · Ctrl-C interrupt · Ctrl-] / Ctrl-5 dashboard (keeps session running)"
         } else if self.cleanup_open {
@@ -725,11 +890,30 @@ impl App {
         } else if self.history_open {
             "q quit/stop/retry · s stop · y retry history · g cleanup · h live · n/p session · [/] page · j/k scroll · d detach"
         } else {
-            "w workspaces · A add · Enter attach · x new Codex · v resume · q quit/stop · a adopt · c Claude · C/X prompt and start · R rename · h history · g cleanup · y retry · s stop · d detach · j/k · r refresh"
+            "N create · O creation receipt · G recover · L local fallback · w workspaces · A add · Enter attach · x new Codex · v resume · q quit/stop · a adopt · c Claude · C/X prompt and start · R rename · h history · g cleanup · y retry · s stop · d detach · j/k · r refresh"
         }
     }
 
     pub fn paste(&mut self, text: String) -> Option<Effect> {
+        if let Some(form) = &mut self.create_form {
+            let dest = match form.field {
+                0 => Some(&mut form.intent.base),
+                1 => Some(&mut form.intent.branch),
+                2 => Some(&mut form.path),
+                3 => Some(form.intent.prompt.get_or_insert_with(String::new)),
+                _ => None,
+            };
+            if let Some(dest) = dest {
+                for c in text.chars().filter(|c| !c.is_control()) {
+                    if dest.len() + c.len_utf8() > 4084 {
+                        break;
+                    }
+                    dest.push(c);
+                }
+            }
+            return None;
+        }
+
         if self.first_prompt.is_some() || self.rename_workspace.is_some() {
             let limit = if self.first_prompt.is_some() {
                 4084
@@ -870,6 +1054,7 @@ mod tests {
             ..Observation::default()
         };
         state.registry.workspaces.push(crate::registry::Workspace {
+            creation: None,
             id: "workspace-b".into(),
             task: "task-b".into(),
             legacy_tasks: vec![],
@@ -1014,6 +1199,7 @@ mod tests {
             .registry
             .workspaces
             .push(crate::registry::Workspace {
+                creation: None,
                 id: "legacy-workspace".into(),
                 legacy_tasks: vec!["opaque task".into()],
                 task: "opaque task".into(),
@@ -1386,5 +1572,48 @@ mod tests {
         assert_eq!(app.selected, Some(0));
         app.apply(Event::WorktreesLoaded(Ok(vec![])));
         assert_eq!(app.selected, None);
+    }
+    #[test]
+    fn independent_creation_form_has_explicit_start_choices_and_preserves_suggested_path_bytes() {
+        for start in [false, true] {
+            let mut app = App::new("repo".into());
+            app.session
+                .registry
+                .projects
+                .push(crate::registry::Project {
+                    id: "project".into(),
+                    name: "My project".into(),
+                    common_dir: b"/repo/.git".to_vec(),
+                });
+            assert!(matches!(
+                app.input(KeyEvent::new(KeyCode::Char('N'), KeyModifiers::NONE)),
+                Some(Effect::Session(Request::PreviewCreation { .. }))
+            ));
+            let mut observation = app.session.clone();
+            observation.creation.preview = Some(crate::creation::Preview {
+                project: "project".into(),
+                default_base: Some("origin/main".into()),
+                managed_root: b"/external/managed-\xff".to_vec(),
+                ..Default::default()
+            });
+            app.observe_session(observation);
+            let request = app.create_form.as_ref().unwrap().intent.request.clone();
+            let action = app.input(if start {
+                KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL)
+            } else {
+                KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)
+            });
+            let Some(Effect::Session(Request::CreateWorkspace(intent))) = action else {
+                panic!("explicit creation request expected")
+            };
+            assert_eq!(intent.start, start);
+            assert_eq!(intent.base, "origin/main");
+            assert_eq!(intent.request, request);
+            assert!(intent.prompt.is_none());
+            assert_eq!(
+                intent.path,
+                [b"/external/managed-\xff/".as_slice(), request.as_bytes()].concat()
+            );
+        }
     }
 }

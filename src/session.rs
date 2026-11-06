@@ -101,6 +101,7 @@ fn transport(
             || greeting.registry_protocol != 1
             || greeting.sessions_protocol != 1
             || greeting.prompt_naming_protocol != 1
+            || greeting.creation_protocol != 1
         {
             events.send(greeting)?;
             return Ok(());
@@ -138,6 +139,7 @@ fn transport(
         || greeting.registry_protocol != 1
         || greeting.sessions_protocol != 1
         || greeting.prompt_naming_protocol != 1
+        || greeting.creation_protocol != 1
     {
         greeting.control_denied = true;
         greeting.error = Some("Existing supervisor does not support this dashboard's worktree, registry or session protocol. Use its compatible dashboard to stop activity before upgrading; d detaches locally.".into());
@@ -523,6 +525,10 @@ impl Sessions {
                         | Request::Shutdown
                         | Request::Adopt(_)
                         | Request::Register(_)
+                        | Request::PreviewCreation { .. }
+                        | Request::CreateWorkspace(_)
+                        | Request::RecoverCreation { .. }
+                        | Request::CancelCreation
                         | Request::RenameWorkspace { .. }
                         | Request::Discover { .. }
                 ) {
@@ -647,6 +653,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             return Ok(());
         }
     };
+    let mut creation = crate::creation::Coordinator::new(&storage);
     let mut registry = restored.state.registry.clone();
     let mut registry_error = None;
     let mut registry_operation = None;
@@ -732,7 +739,12 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         while let Ok(event) = storage.events.try_recv() {
+            if let Some(snapshot) = creation.complete(&event, &storage) {
+                registry = snapshot;
+            }
             match event {
+                crate::persistence::Completion::Creations(_)
+                | crate::persistence::Completion::CreationSaved(..) => {}
                 crate::persistence::Completion::Registry(snapshot) => registry = snapshot,
                 crate::persistence::Completion::Registered(operation, result) => {
                     if registry_operation != Some(operation) {
@@ -751,12 +763,36 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                 event => session.complete(event, &storage),
             }
         }
+        creation.advance(&storage);
+        if let Some(record) = creation.launch.take()
+            && let Some(checkout) = record.checkout
+        {
+            match session.adopt_checkout(checkout, record.intent.request.clone(), &storage) {
+                Ok(()) if record.intent.start => session.handle(
+                    Request::LaunchNative {
+                        request: record.intent.request,
+                        agent: record.intent.agent,
+                        prompt: record.intent.prompt,
+                    },
+                    &storage,
+                    false,
+                ),
+                Ok(()) => {}
+                Err(error) => {
+                    creation.view.error = Some(format!(
+                        "Workspace retained; launch not started: {error}. Adopt and Start explicitly"
+                    ))
+                }
+            }
+        }
         session.advance(&storage, adoption.is_some());
         let mut state = session.observation();
         state.subscriber_frame_high_water = subscriber_frame_high_water;
         state.git_jobs_protocol = 1;
         state.registry_protocol = 1;
         state.prompt_naming_protocol = 1;
+        state.creation_protocol = 1;
+        state.creation = creation.view.clone();
         state.registry_pending = registering || registry_operation.is_some();
         state.registry = registry.clone();
         state.error = state.error.or_else(|| registry_error.clone());
@@ -766,7 +802,8 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             && quitting
             && adoption.is_none()
             && discovery.is_none()
-            && registry_operation.is_none();
+            && registry_operation.is_none()
+            && !creation.busy();
         if state.stopped && controller.is_none() {
             fs::remove_file(&socket)?;
             return Ok(());
@@ -782,6 +819,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                             registry_protocol: 1,
                             sessions_protocol: 1,
                             prompt_naming_protocol: 1,
+                            creation_protocol: 1,
                             control_denied: true,
                             error: Some("Another dashboard controls this supervisor; close it before reconnecting".into()),
                             ..Observation::default()
@@ -916,6 +954,12 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
             }
+            request @ (Request::PreviewCreation { .. }
+            | Request::CreateWorkspace(_)
+            | Request::RecoverCreation { .. }
+            | Request::CancelCreation) => {
+                creation.handle(request, &registry, &storage, directory);
+            }
             Request::Register(bytes) => {
                 registry_error = None;
                 let result = (|| -> Result<(), Box<dyn std::error::Error>> {
@@ -956,6 +1000,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             Request::Stop | Request::Shutdown => {
+                creation.cancel();
                 if let Some(job) = &adoption {
                     job.cancel();
                 }
@@ -981,6 +1026,8 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
         state.git_jobs_protocol = 1;
         state.registry_protocol = 1;
         state.prompt_naming_protocol = 1;
+        state.creation_protocol = 1;
+        state.creation = creation.view.clone();
         state.registry_pending = registering || registry_operation.is_some();
         state.registry = registry.clone();
         state.error = state.error.or_else(|| registry_error.clone());
@@ -990,7 +1037,8 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             && quitting
             && adoption.is_none()
             && discovery.is_none()
-            && registry_operation.is_none();
+            && registry_operation.is_none()
+            && !creation.busy();
         if controller.is_some() {
             delivery = Some(Delivery::new(&mut state)?);
             subscriber_frame_high_water =

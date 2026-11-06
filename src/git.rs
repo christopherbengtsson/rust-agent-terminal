@@ -63,7 +63,7 @@ const OUTPUT_LIMIT: usize = 256 * 1024;
 
 // Concrete execution-owned Git subprocess boundary. Process groups include Git's
 // helpers; neither a pipe-filling child nor an inherited helper pipe can stall it.
-fn run_git(
+pub(crate) fn run_git(
     repository: &Path,
     arguments: &[&str],
     cancelled: &AtomicBool,
@@ -77,7 +77,17 @@ fn run_git(
     )
 }
 
-fn run_git_command(command: &mut Command, cancelled: &AtomicBool) -> Result<Vec<u8>, String> {
+pub(crate) fn run_git_command(
+    command: &mut Command,
+    cancelled: &AtomicBool,
+) -> Result<Vec<u8>, String> {
+    run_git_command_deadline(command, cancelled, DEADLINE)
+}
+pub(crate) fn run_git_command_deadline(
+    command: &mut Command,
+    cancelled: &AtomicBool,
+    timeout: Duration,
+) -> Result<Vec<u8>, String> {
     command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -110,7 +120,7 @@ fn run_git_command(command: &mut Command, cancelled: &AtomicBool) -> Result<Vec<
                 }
             }
         }
-        let deadline = Instant::now() + DEADLINE;
+        let deadline = Instant::now() + timeout;
         let mut out = Vec::new();
         let mut err = Vec::new();
         let mut done = [false; 2];
@@ -119,7 +129,10 @@ fn run_git_command(command: &mut Command, cancelled: &AtomicBool) -> Result<Vec<
                 return Err("Git job cancelled".into());
             }
             if Instant::now() >= deadline {
-                return Err("Git job timed out after 2 seconds; retry refresh/adoption".into());
+                return Err(format!(
+                    "Git job timed out after {} seconds; reconcile or retry explicitly",
+                    timeout.as_secs()
+                ));
             }
             // Bound each pipe's contribution per turn, even when a child floods it.
             for (index, pipe, bytes) in [
@@ -334,7 +347,10 @@ pub struct CheckoutIdentity {
     pub common_dir: PathBuf,
 }
 
-fn resolve_checkout(path: &Path, cancelled: &AtomicBool) -> Result<CheckoutIdentity, String> {
+pub(crate) fn resolve_checkout(
+    path: &Path,
+    cancelled: &AtomicBool,
+) -> Result<CheckoutIdentity, String> {
     let canonical = path.canonicalize().map_err(|e| {
         format!("Checkout unavailable: {e}; refresh and choose an existing checkout")
     })?;

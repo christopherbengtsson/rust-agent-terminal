@@ -6782,3 +6782,214 @@ fn keyboard_switches_live_workspaces_and_reconnects_in_normal_and_small_ptys() {
         state = control.request(serde_json::json!("Screen"));
     }
 }
+
+#[test]
+fn creation_without_start_retains_exact_base_and_same_request_after_owner_restart() {
+    use std::os::unix::ffi::OsStrExt;
+    let fixture = Fixture::new();
+    let git = |args: &[&str]| {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(&fixture.repository)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap().trim().to_owned()
+    };
+    git(&[
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@example.invalid",
+        "commit",
+        "--allow-empty",
+        "-m",
+        "base",
+    ]);
+    let base = git(&["symbolic-ref", "--short", "HEAD"]);
+    let commit = git(&["rev-parse", "HEAD"]);
+    std::fs::write(fixture.repository.join("private"), "retain me").unwrap();
+    let original_status = git(&["status", "--porcelain"]);
+    let start = || {
+        let owner = RegistryOwner(
+            Command::new(env!("CARGO_BIN_EXE_agent-terminal"))
+                .arg("--supervisor")
+                .arg(fixture.state())
+                .spawn()
+                .unwrap(),
+        );
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !fixture.state().join("supervisor.sock").exists() {
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        owner
+    };
+    let mut owner = start();
+    let mut control = Controller::connect(&fixture);
+    control.request(serde_json::json!({"Register":fixture.repository.as_os_str().as_bytes()}));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let registered = loop {
+        let state = control.request(serde_json::json!("Screen"));
+        if state["registry_pending"] == false
+            && state["adoption_pending"] == false
+            && !state["registry"]["projects"].as_array().unwrap().is_empty()
+        {
+            break state;
+        }
+        assert!(Instant::now() < deadline, "{state}");
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    let project = registered["registry"]["projects"][0]["id"]
+        .as_str()
+        .unwrap();
+    let request = uuid::Uuid::new_v4().to_string();
+    let folder = fixture.temp.path().join("independent workspace");
+    let intent = serde_json::json!({"request":request,"project":project,"base":base,"branch":"workspace/created","path":folder.as_os_str().as_bytes(),"agent":"Codex","start":false,"prompt":"Repair the independent parser"});
+    control.request(serde_json::json!({"CreateWorkspace":intent}));
+    let deadline = Instant::now() + Duration::from_secs(8);
+    let created = loop {
+        let state = control.request(serde_json::json!("Screen"));
+        if state["creation"]["pending"] == false
+            && state["creation"]["records"]
+                .as_array()
+                .is_some_and(|r| !r.is_empty())
+        {
+            break state;
+        }
+        assert!(Instant::now() < deadline, "{state}");
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    assert_eq!(
+        created["creation"]["records"][0]["phase"], "Created",
+        "{created}"
+    );
+    assert_eq!(created["creation"]["records"][0]["commit"], commit);
+    assert!(created["execution"].is_null());
+    assert!(created["launch_result"].is_null());
+    assert_eq!(
+        created["registry"]["workspaces"].as_array().unwrap().len(),
+        2
+    );
+    assert!(
+        created["registry"]["workspaces"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|w| w["name"] == "Repair the independent parser")
+    );
+    assert_eq!(git(&["status", "--porcelain"]), original_status);
+    control.request(serde_json::json!({"CreateWorkspace":intent}));
+    assert_eq!(
+        git(&["worktree", "list", "--porcelain"])
+            .matches("worktree ")
+            .count(),
+        2
+    );
+    // Git succeeds while its result acknowledgement is blocked. Losing the
+    // dashboard and cancelling before that late receipt cannot start coding.
+    std::fs::write(
+        fixture.state().join("proof-storage-creation-result"),
+        "stall",
+    )
+    .unwrap();
+    let cancelled_request = uuid::Uuid::new_v4().to_string();
+    let cancelled_folder = fixture.temp.path().join("cancelled after Git");
+    let mut cancelled_intent = intent.clone();
+    cancelled_intent["request"] = serde_json::json!(cancelled_request);
+    cancelled_intent["branch"] = serde_json::json!("workspace/cancelled");
+    cancelled_intent["path"] = serde_json::json!(cancelled_folder.as_os_str().as_bytes());
+    cancelled_intent["start"] = serde_json::json!(true);
+    control.request(serde_json::json!({"CreateWorkspace":cancelled_intent}));
+    let deadline = Instant::now() + Duration::from_secs(8);
+    while !cancelled_folder.join(".git").exists() {
+        assert!(Instant::now() < deadline);
+        let _ = control.request(serde_json::json!("Screen"));
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    drop(control);
+    let mut control = Controller::connect(&fixture);
+    control.request(serde_json::json!("CancelCreation"));
+    std::fs::remove_file(fixture.state().join("proof-storage-creation-result")).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let cancelled = loop {
+        let state = control.request(serde_json::json!("Screen"));
+        if state["creation"]["pending"] == false {
+            break state;
+        }
+        assert!(Instant::now() < deadline, "{state}");
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    assert!(matches!(
+        cancelled["creation"]["records"][1]["phase"].as_str(),
+        Some("Created" | "Cancelled")
+    ));
+    control.request(
+        serde_json::json!({"RecoverCreation":{"request":cancelled_request,"local":false}}),
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let recovered = loop {
+        let state = control.request(serde_json::json!("Screen"));
+        if state["creation"]["pending"] == false {
+            break state;
+        }
+        assert!(Instant::now() < deadline, "{state}");
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    assert_eq!(
+        recovered["creation"]["records"][1]["phase"], "Created",
+        "{recovered}"
+    );
+    assert!(recovered["execution"].is_null());
+    assert!(cancelled["execution"].is_null());
+    assert!(cancelled_folder.join(".git").exists());
+    control.request(serde_json::json!({"CreateWorkspace":cancelled_intent}));
+    assert_eq!(
+        git(&["worktree", "list", "--porcelain"])
+            .matches("worktree ")
+            .count(),
+        3
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut state = control.request(serde_json::json!("Shutdown"));
+    while state["stopped"] != true {
+        assert!(Instant::now() < deadline, "{state}");
+        state = control.request(serde_json::json!("Screen"));
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    drop(control);
+    owner.0.wait().unwrap();
+    let mut owner = start();
+    let mut control = Controller::connect(&fixture);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let restored = loop {
+        let state = control.request(serde_json::json!("Screen"));
+        if state["creation"]["pending"] == false {
+            break state;
+        }
+        assert!(Instant::now() < deadline);
+    };
+    assert_eq!(restored["creation"]["records"][0]["commit"], commit);
+    assert!(restored["execution"].is_null());
+    control.request(serde_json::json!({"CreateWorkspace":intent}));
+    assert_eq!(
+        git(&["worktree", "list", "--porcelain"])
+            .matches("worktree ")
+            .count(),
+        3
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut state = control.request(serde_json::json!("Shutdown"));
+    while state["stopped"] != true {
+        assert!(Instant::now() < deadline);
+        state = control.request(serde_json::json!("Screen"));
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    drop(control);
+    owner.0.wait().unwrap();
+}

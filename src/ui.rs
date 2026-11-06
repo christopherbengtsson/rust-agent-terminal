@@ -516,7 +516,51 @@ impl Ui {
             .wrap(Wrap { trim: false }),
             status,
         );
-        if let Some((_, text)) = &app.first_prompt {
+        if let Some(form) = &app.create_form {
+            let project = app
+                .session
+                .registry
+                .projects
+                .iter()
+                .find(|p| p.id == form.intent.project)
+                .map(|p| p.name.as_str())
+                .unwrap_or("Unavailable");
+            let fields = [
+                format!("Base: {}", form.intent.base),
+                format!("Branch: {}", form.intent.branch),
+                format!("Folder: {}", form.path),
+                format!(
+                    "First prompt (optional): {}",
+                    form.intent.prompt.as_deref().unwrap_or_default()
+                ),
+                format!("Agent: {:?} (Left/Right changes)", form.intent.agent),
+            ];
+            let mut text = format!("Project: {project}\n");
+            for (i, field) in fields.iter().enumerate() {
+                text.push_str(&format!(
+                    "{} {}\n",
+                    if i == form.field { ">" } else { " " },
+                    visible(field)
+                ));
+            }
+            if let Some(preview) = &app.session.creation.preview {
+                text.push_str(&format!("Available bases: {}\n", preview.bases.join(", ")));
+                if preview.default_base.is_none() {
+                    text.push_str("Choose an explicit base; no unambiguous remote default.\n");
+                }
+                if let Some(error) = &preview.error {
+                    text.push_str(&visible(error));
+                }
+            }
+            text.push_str("\nEnter: Create without starting\nCtrl-S: Create and start (supplied prompt sent once)\nTab: next field · Ctrl-U: clear · Esc: cancel");
+            frame.render_widget(Clear, session);
+            frame.render_widget(
+                Paragraph::new(text)
+                    .block(Block::bordered().title(" New independent workspace "))
+                    .wrap(Wrap { trim: false }),
+                session,
+            );
+        } else if let Some((_, text)) = &app.first_prompt {
             frame.render_widget(Clear, session);
             frame.render_widget(
                 Paragraph::new(visible(text))
@@ -538,8 +582,29 @@ impl Ui {
                 session,
             );
         }
+        if app.create_form.is_none()
+            && (app.creation_open
+                || app.session.creation.pending
+                || app.session.creation.error.is_some()
+                || app
+                    .session
+                    .creation
+                    .records
+                    .last()
+                    .is_some_and(|r| !matches!(r.phase, crate::creation::Phase::Created)))
+        {
+            let message=app.session.creation.error.clone().or_else(||app.session.creation.records.last().map(|r|format!("{:?}: {} · branch {} · folder {} · base {} · commit {} · L local fallback · G recover · Z cancel · Esc dismiss",r.phase,r.message,r.intent.branch,crate::creation::path(&r.intent.path).display(),r.base_ref.as_deref().unwrap_or("pending"),r.commit.as_deref().unwrap_or("pending")))).unwrap_or_else(||"Workspace creation in progress · Z cancel".into());
+            frame.render_widget(
+                Paragraph::new(visible(&message))
+                    .block(Block::bordered().title(" Workspace creation "))
+                    .wrap(Wrap { trim: false }),
+                status,
+            );
+        }
         let compact_help;
-        let help_text = if app.first_prompt.is_some() || app.rename_workspace.is_some() {
+        let help_text = if app.create_form.is_some() {
+            "Tab fields · Left/Right agent · Enter Create without starting\nCtrl-S Create and start · Ctrl-U clear · Esc cancel"
+        } else if app.first_prompt.is_some() || app.rename_workspace.is_some() {
             app.keyboard_help()
         } else if !app.attached
             && app.project_input.is_some()
@@ -739,6 +804,7 @@ mod tests {
                 .registry
                 .workspaces
                 .push(crate::registry::Workspace {
+                    creation: None,
                     id: task.into(),
                     task: task.into(),
                     legacy_tasks: vec![],
@@ -783,6 +849,7 @@ mod tests {
         let mut app = App::new("repo".into());
         app.session.registry.workspaces = (0..20)
             .map(|index| crate::registry::Workspace {
+                creation: None,
                 id: format!("workspace-{index}"),
                 task: format!("task-{index}"),
                 legacy_tasks: vec![format!("task-{index}")],
@@ -1108,5 +1175,36 @@ mod tests {
         assert!(text.contains("not a git repository"));
         terminal.backend_mut().resize(12, 4);
         terminal.draw(|frame| ui.draw(frame, &app)).unwrap();
+    }
+    #[test]
+    fn new_workspace_form_exposes_both_creation_actions_at_normal_and_small_sizes() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let mut app = App::new("repo".into());
+        app.session
+            .registry
+            .projects
+            .push(crate::registry::Project {
+                id: "project".into(),
+                name: "Example".into(),
+                common_dir: b"/repo/.git".to_vec(),
+            });
+        app.input(KeyEvent::new(KeyCode::Char('N'), KeyModifiers::NONE));
+        for (cols, rows) in [(160, 40), (60, 18)] {
+            let mut terminal = Terminal::new(TestBackend::new(cols, rows)).unwrap();
+            terminal
+                .draw(|frame| Ui::default().draw(frame, &app))
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            let text = (0..rows)
+                .map(|y| {
+                    (0..cols)
+                        .map(|x| buffer[(x, y)].symbol())
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(text.contains("Create without starting"), "{text}");
+            assert!(text.contains("Create and start"), "{text}");
+        }
     }
 }

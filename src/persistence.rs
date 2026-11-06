@@ -280,6 +280,8 @@ impl Snapshot {
     }
 }
 pub enum Command {
+    CreationLoad,
+    CreationSave(uuid::Uuid, Box<crate::creation::Record>),
     SelectWorkspace(String),
     Capture(CaptureStream),
     Rename(uuid::Uuid, String, String),
@@ -307,6 +309,11 @@ pub enum Command {
 }
 #[derive(Clone)]
 pub enum Completion {
+    Creations(std::result::Result<Vec<crate::creation::Record>, String>),
+    CreationSaved(
+        uuid::Uuid,
+        std::result::Result<crate::registry::Registry, String>,
+    ),
     Registered(
         uuid::Uuid,
         std::result::Result<crate::registry::Registry, String>,
@@ -448,12 +455,14 @@ impl Worker {
                             continue;
                         }
                     }
-                    let kind = match &command { Command::SelectWorkspace(..) => "selection", Command::Capture(..) => unreachable!(), Command::Rename(..) | Command::Register(..) => "registry", Command::Save(..) | Command::Prepare(..) | Command::Authorize(..) => "metadata", Command::History(..) | Command::HistorySession(..) | Command::HistoryTarget { .. } => "history", Command::Cleanup(..) | Command::Delete(..) | Command::Seal(..) => "cleanup", Command::Retry => "retry", Command::Flush(..) => "flush" };
+                    let kind = match &command { Command::CreationLoad | Command::CreationSave(..) => "registry", Command::SelectWorkspace(..) => "selection", Command::Capture(..) => unreachable!(), Command::Rename(..) | Command::Register(..) => "registry", Command::Save(..) | Command::Prepare(..) | Command::Authorize(..) => "metadata", Command::History(..) | Command::HistorySession(..) | Command::HistoryTarget { .. } => "history", Command::Cleanup(..) | Command::Delete(..) | Command::Seal(..) => "cleanup", Command::Retry => "retry", Command::Flush(..) => "flush" };
                     status.lock().unwrap().operation = Some((kind, Instant::now()));
                     let operation = match &command { Command::Prepare(snapshot) | Command::Authorize(snapshot) | Command::Save(snapshot) => Some(snapshot.operation.clone()), Command::Flush(operation) | Command::Seal(operation) => Some(operation.clone()), _ => None };
                     let result = match command {
                         Command::SelectWorkspace(task) => store.select_workspace(&task).map(Completion::Registry),
                         Command::Capture(..) => unreachable!(),
+                        Command::CreationLoad => Ok(Completion::Creations(store.creations().map_err(|e|e.to_string()))),
+                        Command::CreationSave(id, record) => Ok(Completion::CreationSaved(id,store.save_creation(&record).map_err(|e|e.to_string()))),
                         Command::Rename(id, workspace, name) => Ok(Completion::Registered(id, store.rename(&workspace, &name).map_err(|error| error.to_string()))),
                         Command::Register(id, checkout) => Ok(Completion::Registered(id, store.register(checkout).map_err(|error| error.to_string()))),
                         Command::Cleanup(index) => store.start_cleanup(index).map(|_| Completion::Sealed),
@@ -680,7 +689,7 @@ impl Store {
             "PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL; PRAGMA fullfsync=ON;",
         )?;
         let version: u32 = db.pragma_query_value(None, "user_version", |r| r.get(0))?;
-        if version > 5 {
+        if version > 6 {
             return Err("History schema is newer than this executable".into());
         }
         if version == 0 {
@@ -754,6 +763,12 @@ impl Store {
             tx.execute_batch("CREATE TABLE IF NOT EXISTS workspace_names(workspace TEXT PRIMARY KEY, source TEXT NOT NULL); INSERT INTO workspace_names SELECT id,'retained' FROM workspaces WHERE true ON CONFLICT(workspace) DO UPDATE SET source='retained'; PRAGMA user_version=5;")?;
             tx.commit()?;
         }
+        if version < 6 {
+            let tx = db.transaction()?;
+            tx.execute_batch("CREATE TABLE workspace_creations(id TEXT PRIMARY KEY, record TEXT NOT NULL); PRAGMA user_version=6;")?;
+            tx.commit()?;
+        }
+        db.execute_batch("CREATE TABLE IF NOT EXISTS workspace_comparison_bases(workspace TEXT PRIMARY KEY, reference BLOB NOT NULL, base_commit TEXT NOT NULL);")?;
         let mut store = Self {
             history_jobs: Default::default(),
             history_checkpoints: Default::default(),
@@ -1260,6 +1275,68 @@ impl Store {
             .and_then(|value| value.trim().parse().ok());
         #[cfg(not(debug_assertions))]
         None
+    }
+    fn creations(&self) -> Result<Vec<crate::creation::Record>> {
+        let json = self
+            .db
+            .prepare("SELECT record FROM workspace_creations ORDER BY rowid")?
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        json.into_iter()
+            .map(|j| Ok(serde_json::from_str(&j)?))
+            .collect()
+    }
+    fn save_creation(
+        &mut self,
+        record: &crate::creation::Record,
+    ) -> Result<crate::registry::Registry> {
+        self.fault("registry")?;
+        if record.phase == crate::creation::Phase::Created {
+            self.fault("creation-result")?;
+        }
+        let tx = self.db.transaction()?;
+        let previous: Option<String> = tx
+            .query_row(
+                "SELECT record FROM workspace_creations WHERE id=?1",
+                [&record.intent.request],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if let Some(previous) = previous {
+            let previous: crate::creation::Record = serde_json::from_str(&previous)?;
+            if serde_json::to_string(&previous.intent)? != serde_json::to_string(&record.intent)?
+                || previous.common_dir != record.common_dir
+            {
+                return Err("Creation request is already bound to another intent".into());
+            }
+        } else if tx.query_row("SELECT count(*) FROM workspace_creations", [], |r| {
+            r.get::<_, u64>(0)
+        })? >= 256
+        {
+            return Err("Creation receipt capacity reached; retained outcomes preserved".into());
+        }
+        if let Some(checkout) = &record.checkout {
+            let path = crate::session::path_bytes(&checkout.root);
+            let state = Observation {
+                checkout_identity: Some(checkout.clone()),
+                ..Observation::default()
+            };
+            crate::registry::record(&tx, &state, Some(&path), &record.intent.request)?;
+            if let (Some(reference), Some(commit)) = (&record.base_ref, &record.commit) {
+                tx.execute("INSERT OR IGNORE INTO workspace_comparison_bases SELECT workspace,?1,?2 FROM workspace_tasks WHERE task=?3",rusqlite::params![reference.as_bytes(),commit,record.intent.request])?;
+            }
+            if let Some(name) = record
+                .intent
+                .prompt
+                .as_deref()
+                .and_then(crate::registry::prompt_name)
+            {
+                crate::registry::name_from_prompt(&tx, &record.intent.request, &name)?;
+            }
+        }
+        tx.execute("INSERT INTO workspace_creations VALUES(?1,?2) ON CONFLICT(id) DO UPDATE SET record=excluded.record",rusqlite::params![record.intent.request,serde_json::to_string(record)?])?;
+        tx.commit()?;
+        crate::registry::snapshot(&self.db, None)
     }
     fn register(
         &mut self,
