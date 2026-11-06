@@ -146,7 +146,7 @@ outcomes, and reconnect observations through the application interface used by
 the dashboard. Use rendering tests for help, focus, and viewport behavior. Keep
 the approved real-dashboard/supervisor/scripted-PTY seam for actual input bytes,
 sizes, child ownership, durable history, and failure responsiveness. Native-tool
-compatibility still requires recorded macOS evidence. This gives locality to
+compatibility is qualified only by recorded macOS evidence. This gives locality to
 interaction policy and leverage to tests without a generic worker framework or
 mock adapter for each module.
 
@@ -279,7 +279,7 @@ normal return, errors and panic. See [recorded evidence](proofs/03-native-input.
 ## Fixture lifecycle (ticket 06)
 
 Process lifecycle is explicit (`Idle`, `Running`, `Stopping`, `Exited`, `Stopped`,
-`StopFailed`) and separate from semantic agent status, which remains unknown.
+`StopFailed`) and separate from transient semantic agent status and task archival.
 The supervisor polls child exit even without a controller; native exit retains
 in-memory attribution and the bounded screen. Stop keeps the dashboard open;
 quit enters App pending shutdown and exits only after a confirmed observation.
@@ -336,7 +336,7 @@ configuration edits. Startup errors explain installation/login and explicit retr
 while discovery and adoption remain available. A live child refuses either launch
 choice. The observation labels the launched tool independently of process lifecycle;
 semantic status remains unknown. See [native proof](proofs/05-claude-native.md)
-for versioned results and unresolved compatibility gates.
+for versioned results and support limits.
 
 
 ## Dashboard recovery (ticket 07)
@@ -669,7 +669,7 @@ compatibility.
 An actual Codex0.167.0 foreground command created a separate native child process
 group. The pre-fix Stop confirmed the CLI group but left that command alive, so
 owned native subprocess cleanup and ordinary quit required a correction. The
-fresh native retests now pass; final source checks and resource revalidation
-remain open. This concrete default-native behavior is distinct from
+fresh native retests, final source checks and live-tracker resource revalidation
+all passed. This concrete default-native behavior is distinct from
 arbitrary processes deliberately escaping ownership. The record preserves both
 the original failure and the final fix/retest boundary when available.

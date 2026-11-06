@@ -1,0 +1,123 @@
+Source at start: 5dff3279b2155431efba246a34e7cf9e28427292 (runtime includes 44b4d8c).
+Command: cargo test --locked --all-targets
+Initial compiler lines are omitted; retained test output follows.
+
+running 27 tests
+test app::tests::cleanup_selection_preview_cancel_and_confirmation_are_explicit_and_uuid_bound ... ok
+test app::tests::claude_is_an_explicit_launch_choice_separate_from_fixture ... ok
+test app::tests::codex_is_an_explicit_launch_choice ... ok
+test app::tests::empty_and_removed_selections_are_safe ... ok
+test app::tests::disconnected_transport_preserves_attribution_and_allows_local_detach ... ok
+test app::tests::native_resume_requires_its_own_explicit_action ... ok
+test app::tests::ownership_refusal_preserves_checkout_discovery_and_navigation ... ok
+test app::tests::native_focus_preserves_shortcuts_and_returns_without_stopping ... ok
+test app::tests::quit_waits_for_confirmation_and_stop_failure_can_be_retried ... ok
+test app::tests::dashboard_modifiers_do_not_adopt_launch_or_attach_and_paste_is_focus_sensitive ... ok
+test app::tests::refresh_preserves_selected_path_and_failure_preserves_data ... ok
+test app::tests::semantic_evidence_is_separate_from_process_and_terminal_prose ... ok
+test terminal::tests::terminal_probe ... ignored, subprocess probe; driven with a real PTY by restoration test
+test git::tests::parser_preserves_non_utf8_paths ... ok
+test ui::tests::native_cells_keep_style_width_and_cursor ... ok
+test ui::tests::stopped_capture_fault_keeps_possible_loss_and_retry_visible ... ok
+test git::tests::worker_reports_non_repository_failure_as_an_event ... ok
+test ui::tests::unusable_viewport_does_not_request_pty_resize ... ok
+test ui::tests::renders_failure_and_handles_tiny_resize ... ok
+test ui::tests::interrupted_execution_shows_explicit_reconciliation_in_normal_and_small_layouts ... ok
+test ui::tests::focus_and_available_actions_are_visible ... ok
+test ui::tests::viewport_excludes_sidebar_borders_and_status_and_small_layout_keeps_focus ... ok
+test ui::tests::cleanup_renders_unknown_age_physical_size_preview_and_low_space_recovery_controls ... ok
+test terminal::tests::restores_terminal_modes_after_normal_error_and_panic ... ok
+test ui::tests::storage_warning_has_an_exact_threshold_and_unknown_capacity_is_honest ... ok
+test git::tests::bare_and_unborn_repositories_are_discoverable ... ok
+test git::tests::discovers_real_linked_detached_locked_and_prunable_worktrees ... ok
+
+test result: ok. 26 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.09s
+
+     Running tests/ownership.rs (target/debug/deps/ownership-a4d9f61c9971d0c6)
+
+running 53 tests
+test checkout_aliases_and_repeated_launch_keep_the_existing_child ... ok
+test cleanup_intent_failure_partial_crash_and_restart_preserve_other_history_and_launch_outcomes ... ok
+test bounded_history_pages_recover_every_record_across_multiple_chunks ... ok
+test chronological_history_retains_erased_and_alternate_screen_text_safely ... ok
+kill: 40163: No such process
+test abrupt_supervisor_loss_recovers_acknowledged_prefix_without_automatic_coding ... ok
+test cleanup_migrated_age_is_unknown_pages_are_bounded_and_arbitrary_paths_are_refused ... ok
+test cleanup_never_confuses_process_stop_or_freed_space_with_capture_recovery ... ok
+test full_storage_input_receipt_measurement17 ... ignored, serial 30-second full-storage input receipt supplement; RAT_FAULT17_DIR required
+test cleanup_rejects_symlink_chunks_without_following_checkout_targets ... ok
+test codex_native_identity_survives_exit_and_resume_uses_original_id_without_new_prompt ... ok
+test codex_status_requires_current_attributed_evidence_despite_liveness_and_prose ... ok
+test disconnected_dashboard_retains_identity_and_detaches_locally_before_reopen ... ok
+test explicit_cleanup_warns_previews_cancels_and_deletes_only_selected_history ... ok
+test explicit_detach_restores_dashboard_and_preserves_execution ... ok
+test failed_append_does_not_invent_data_bearing_durable_commits ... ok
+test failed_execution_verification_is_visible_and_quit_retries_after_repair ... ok
+test failed_final_storage_commit_keeps_quit_visible_until_explicit_retry ... ok
+test failed_gate_exec_result_survives_supervisor_restart_without_retrying_native_code ... ok
+test healthy_output_reports_real_durable_boundaries_within_one_second ... ok
+test launch_gate_preserves_native_arguments_environment_and_checkout ... ok
+test launch_receipt_wait_remains_provisional_between_authorization_and_result_save ... ok
+test legacy_interrupted_record_anchors_observation_boot_then_recovers_after_later_boot ... ok
+test paced_session_measurement17 ... ignored, serial multi-minute macOS measurement; RAT_MEASURE17_DIR is required
+test lost_launch_acknowledgement_recovers_original_request_and_child ... ok
+test missing_claude_keeps_adopted_checkout_and_allows_fixture_launch ... ok
+test missing_codex_keeps_adopted_checkout_and_allows_fixture_launch ... ok
+test native_exit_retains_context_and_explicit_stop_cleans_refusing_descendant ... ok
+test cleanup_failures_remain_incomplete_until_directory_sync_and_completion_commit ... ok
+test oversized_osc_is_captured_without_growing_live_screen_history ... ok
+test paced_capture_saturation_stop_confirms_without_storage_repair ... ok
+test paced_fixture_receives_complete_input_while_its_output_is_backpressured ... ok
+test paced_producer_keeps_native_input_live_before_completion ... ok
+test prior_boot_native_record_stays_interrupted_until_explicit_reconcile_then_resume ... ok
+test saturated_native_input_does_not_block_stop_control ... ok
+test second_dashboard_is_refused_and_dead_controller_releases_same_child ... ok
+test simultaneous_supervisors_recover_stale_socket_and_elect_one_owner ... ok
+test slow_subscriber_disconnects_with_reason_and_reconnects_coherently ... ok
+test stopped_history_survives_restart_and_missing_checkout_without_launching ... ok
+kill: 43815: No such process
+test launch_crash_windows_retain_request_and_require_explicit_reconciliation has been running for over 60 seconds
+test storage_abrupt_loss_preserves_durable_prefix_and_excludes_unsynced_tail ... ok
+
+test storage_partial_enospc_retains_exact_capture_and_retry_removes_error_after_durability ... ok
+test lost_failed_launch_result_is_recovered_without_executing_after_adoption ... ok
+test storage_saturation_keeps_navigation_retry_stop_and_exact_retained_bytes ... ok
+test storage_stalled_prepare_keeps_stop_control_and_never_launches_after_cancel ... ok
+test streaming_child_keeps_screen_sequence_identity_and_resize_after_dashboard_death ... ok
+test surviving_native_execution_blocks_replacement_then_different_boot_reconciles ... ok
+test stop_quit_and_native_exit_terminate_quiet_foreground_tool_in_separate_process_group has been running for over 60 seconds
+test storage_authorization_and_result_stalls_allow_stop_without_late_execution has been running for over 60 seconds
+test storage_delayed_writes_and_sync_keep_control_and_defer_saved_boundary has been running for over 60 seconds
+test sustained_capture_crosses_caps_while_attached_focused_detached_and_lagged has been running for over 60 seconds
+test unavailable_native_recovery_retains_history_until_explicit_new_conversation has been running for over 60 seconds
+test unsafe_state_directory_is_explained_without_changing_discovery has been running for over 60 seconds
+test version_one_metadata_migrates_through_real_supervisor_without_losing_history has been running for over 60 seconds
+
+
+test sustained_capture_crosses_caps_while_attached_focused_detached_and_lagged ... ok
+test unavailable_native_recovery_retains_history_until_explicit_new_conversation ... ok
+test launch_crash_windows_retain_request_and_require_explicit_reconciliation ... ok
+test storage_authorization_and_result_stalls_allow_stop_without_late_execution ... ok
+test unsafe_state_directory_is_explained_without_changing_discovery ... ok
+test version_one_metadata_migrates_through_real_supervisor_without_losing_history ... ok
+test stop_quit_and_native_exit_terminate_quiet_foreground_tool_in_separate_process_group ... ok
+test storage_delayed_writes_and_sync_keep_control_and_defer_saved_boundary ... ok
+
+test result: ok. 51 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 370.29s
+
+     Running tests/scripted_session.rs (target/debug/deps/scripted_session-227f8d7c1d0de5ad)
+
+running 1 test
+test dashboard_adopts_launches_and_interacts_without_discovery_mutation ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 27.63s
+
+     Running tests/session_screen.rs (target/debug/deps/session_screen-fcf255d346072beb)
+
+running 1 test
+test screen_resize_styles_alternate_modes_and_output_survive_focus_and_reconnect ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.62s
+
+
+<END OF CAPTURE; EXIT 0>

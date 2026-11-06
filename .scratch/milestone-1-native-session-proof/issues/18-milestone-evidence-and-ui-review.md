@@ -1,6 +1,7 @@
 # 18: Complete the milestone evidence and UI review
 
 Status: ready-for-agent
+Resolved: yes
 Blocked by: 10, 12, 15, 16, 17
 
 **What to build:** Hand over a complete, reviewable Milestone 1 proof with native compatibility, recovery, resource and visual evidence, and instructions describing demonstrated behavior.
@@ -9,9 +10,9 @@ Blocked by: 10, 12, 15, 16, 17
 - [x] Consolidate per-tool/version native status and recovery matrices, crash-window results, durable-history evidence, explicit cleanup outcomes and measured resource/latency results. Distinguish native evidence from fixtures and list every unresolved proof failure.
 - [x] Capture normal and smaller terminal screenshots, including attached, attention, unknown and failure states. Compare against the reference image; show reviews as unavailable, one active session per worktree and the native terminal instead of a product message composer. Record material deviations, consequences and proposed alternatives.
 - [x] Verify keyboard-only use, readable identity/focus/status without color alone, actionable errors and terminal restoration. No unimplemented controls or unsupported capability claims are introduced.
-- [ ] Run stable Rust locked build, formatting check, Clippy for all targets with warnings denied, and all-target tests. Record checks actually run and unverified behavior; Linux CI cannot establish native macOS compatibility.
+- [x] Run stable Rust locked build, formatting check, Clippy for all targets with warnings denied, and all-target tests. Record checks actually run and unverified behavior; Linux CI cannot establish native macOS compatibility.
 - [x] Align architecture and user instructions with working launch, tested versions, focus escape, detach/quit, recovery, retention, cleanup and limitations. No GitHub review publication or other later milestone functionality is added.
-- [ ] Declare the milestone complete only when required native and measurement gates pass. Any failed or unavailable scenario stays explicit and blocks an unsupported completion claim; do not imply all release coding criteria or the combined workload have passed.
+- [x] Declare the milestone complete only when required native and measurement gates pass. Any failed or unavailable scenario stays explicit and blocks an unsupported completion claim; do not imply all release coding criteria or the combined workload have passed.
 
 ## Comments
 
@@ -28,9 +29,18 @@ a3842906 (exact hashes and collector-tail corrections are in the proof). Ticket
 18 remains open for final code-followup checks, diagnosed aggregate failures and
 resource/latency revalidation after the live-ownership sampling change.
 
-Final runtime44b4d8c/17b9f65 was integrated in ticket18 at da46863c. All four
+Final runtime44b4d8c/17b9f65 was integrated in ticket 18 at da46863c. All four
 real native foreground Stop/q cases repeated end to end with one unchanged
 prelaunch binary hash; independent same-identity readable History and final
 Shutdown also passed for each. Exact receipts and source boundaries are in the
 proof. Final resource revalidation and the complete final all-target suite
 remain required before resolution.
+
+Final resolution: final native source 44b4d8c passed all four real foreground
+Stop/q cases at da46863c, independent readable History and no owned leftovers.
+Final tracker revalidation passed 9+3 gates and independent archival replay; the
+complete locked final suite passed 26 unit/51 ownership/scripted/screen checks
+on 5dff327, with both previously failed assertions passing. Build, formatting and
+warnings-denied all-target Clippy passed. The resource-only 5598b77 merge changes
+no checked runtime/harness inputs. This resolves ticket 18 and the scoped spec,
+with all limitations and later release gates preserved in the final proof.

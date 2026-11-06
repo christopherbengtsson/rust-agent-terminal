@@ -14,9 +14,11 @@ evidence; GitHub workflows remain unavailable. The first release targets macOS;
 fixture tests do not establish native-agent compatibility.
 
 The [integrated Milestone 1 evidence](docs/proofs/18-milestone-evidence.md) records
-exact native versions, measured capacity and limits. The discovered default Codex foreground-subprocess Stop failure was fixed and
-real Stop/quit retests passed for both recorded tools. Final source checks and
-resource revalidation remain open; this checkpoint is not declared complete.
+exact native versions, measured capacity and limits. The discovered default
+Codex foreground-subprocess Stop failure was fixed and real Stop/quit retests
+passed for both recorded tools. Final source checks and resource revalidation
+also passed for this scoped checkpoint; full release coordination and GitHub
+workflows remain later work.
 
 ## Run
 
@@ -153,7 +155,7 @@ changed. Authentication/setup prompts remain in the native CLI. A failed spawn
 retains the adopted checkout and discovery; `c` is an explicit retry. A running
 session refuses replacement regardless of the selected launch choice. Launch is
 experimental: see [the native proof](docs/proofs/05-claude-native.md) for the exact
-version and unresolved scenarios. Native tool usage can consume your account's
+version and bounded scenarios. Native tool usage can consume your account's
 allowance. No credential copying or product authentication store is used.
 
 Native status is separate from process lifecycle. For the demonstrated canonical
