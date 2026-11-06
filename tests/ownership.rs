@@ -6219,6 +6219,10 @@ fn first_prompt_and_manual_names_preserve_workspace_and_conversation_identity() 
     );
     let launched = control.request(serde_json::json!({"LaunchNative":{"request":"prompt07","agent":"Claude","prompt":"Fix unicode λ search"}}));
     assert!(launched["launch_result"]["error"].is_null(), "{launched}");
+    assert_eq!(
+        launched["registry"]["workspaces"][0]["name"],
+        "Fix unicode λ search"
+    );
     let native = launched["native_conversation"].clone();
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
@@ -6256,4 +6260,37 @@ fn first_prompt_and_manual_names_preserve_workspace_and_conversation_identity() 
     );
     control.request(serde_json::json!("Stop"));
     control.request(serde_json::json!("Shutdown"));
+}
+
+#[test]
+fn stopped_pending_first_prompt_is_never_submitted_after_storage_recovers() {
+    let fixture = Fixture::new();
+    let mut dashboard = fixture.open();
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted:");
+    dashboard.kill();
+    let mut controller = Controller::connect(&fixture);
+    std::fs::write(fixture.state().join("proof-storage-prepare"), "stall").unwrap();
+    let launch = controller.request_now(serde_json::json!({"LaunchNative":{"request":"cancel-prompt07","agent":"Claude","prompt":"This cancelled prompt must never run"}}));
+    assert_eq!(launch["metadata_pending"], true);
+    assert!(launch["launch_result"].is_null());
+    let stopped = controller.request(serde_json::json!("Stop"));
+    assert_ne!(stopped["lifecycle"], "Running");
+    std::fs::remove_file(fixture.state().join("proof-storage-prepare")).unwrap();
+    for _ in 0..30 {
+        std::thread::sleep(Duration::from_millis(20));
+        let state = controller.request(serde_json::json!("Screen"));
+        assert_ne!(state["lifecycle"], "Running");
+        assert!(state["native_conversation"].is_null());
+        assert_eq!(state["output_bytes"], 0);
+    }
+    let query = controller.request(serde_json::json!({"QueryLaunch":"cancel-prompt07"}));
+    assert!(
+        query["launch_result"]["error"]
+            .as_str()
+            .unwrap()
+            .contains("cancelled")
+    );
+    controller.request(serde_json::json!("Shutdown"));
 }
