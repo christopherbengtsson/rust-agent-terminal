@@ -1666,7 +1666,11 @@ fn decode_record(json: &str) -> Result<Observation> {
 mod concurrent_tests {
     use super::*;
     fn saved(worker: &Worker, session: &str) {
+        saved_at(worker, session, None);
+    }
+    fn saved_at(worker: &Worker, session: &str, checkout: Option<&Path>) {
         let state = Observation {
+            adopted: checkout.map(|path| path.display().to_string()),
             session_identity: Some(crate::events::SessionIdentity {
                 session: session.into(),
                 task: uuid::Uuid::new_v4().to_string(),
@@ -1679,7 +1683,7 @@ mod concurrent_tests {
             .commands
             .send(Command::Save(Snapshot::new(
                 &state,
-                None,
+                checkout,
                 &state.session_identity.as_ref().unwrap().task,
             )))
             .unwrap();
@@ -1740,15 +1744,18 @@ mod concurrent_tests {
         raw.extend(vec![b'H'; 70000]);
         raw.extend("\x07Prompt café\n\x1b[32mAnswer\x1b[0m\ncommand output\n".as_bytes());
         let (worker, _) = Worker::start(root.path()).unwrap();
-        saved(&worker, &session);
+        let checkout = root.path().join("removed-checkout");
+        std::fs::create_dir(&checkout).unwrap();
+        saved_at(&worker, &session, Some(&checkout));
         capture_bytes(&worker, &session, &raw);
         let offset = raw.len() as u64 / PAGE * PAGE;
         let page = projected(&worker, &session, offset);
         let readable = page.readable.unwrap();
         assert_eq!(readable.text, "Prompt café\nAnswer\ncommand output\n");
         assert_eq!(readable.passages[0].raw_start, 70015);
-        assert!(page.checkout.is_empty());
+        assert_eq!(page.checkout, checkout.display().to_string());
         assert_eq!(page.committed, raw.len() as u64);
+        std::fs::remove_dir(&checkout).unwrap();
         drop(worker);
         thread::sleep(Duration::from_millis(20));
         // An uncommitted tail must never appear in either display.
@@ -1759,6 +1766,8 @@ mod concurrent_tests {
         tail.write_all(b"UNCOMMITTED-SECRET").unwrap();
         let (worker, _) = Worker::start(root.path()).unwrap();
         let restored = projected(&worker, &session, offset);
+        assert!(!checkout.exists());
+        assert_eq!(restored.checkout, checkout.display().to_string());
         assert_eq!(restored.readable.unwrap().text, readable.text);
         assert!(!restored.text.contains("UNCOMMITTED"));
         // Exact retained output is independent of the derivative text.
@@ -1768,12 +1777,88 @@ mod concurrent_tests {
         );
     }
     #[test]
+    fn deleting_history_cancels_replay_and_cannot_resurrect_checkpointed_text() {
+        let root = tempfile::tempdir().unwrap();
+        let (worker, _) = Worker::start(root.path()).unwrap();
+        let session = uuid::Uuid::new_v4().to_string();
+        let other = uuid::Uuid::new_v4().to_string();
+        saved(&worker, &session);
+        saved(&worker, &other);
+        capture_bytes(&worker, &session, &vec![b'x'; 200000]);
+        capture_bytes(&worker, &other, b"other retained answer\n");
+        let seal = Operation {
+            purpose: Purpose::Seal,
+            ..final_operation(&session)
+        };
+        worker.commands.send(Command::Seal(seal.clone())).unwrap();
+        committed(&worker, &seal);
+        let request = uuid::Uuid::new_v4();
+        worker
+            .commands
+            .send(Command::HistoryTarget {
+                target: "deleting-reader".into(),
+                request,
+                index: 0,
+                session: Some(session.clone()),
+                offset: 190000,
+            })
+            .unwrap();
+        worker
+            .commands
+            .send(Command::Delete(session.clone()))
+            .unwrap();
+        let mut cancelled = false;
+        let mut deleted = false;
+        while !cancelled || !deleted {
+            match worker.events.recv_timeout(Duration::from_secs(5)).unwrap() {
+                Completion::HistoryTarget(target, actual, Err(error))
+                    if target == "deleting-reader" && actual == request =>
+                {
+                    assert!(error.contains("deleted") || error.contains("committed"));
+                    cancelled = true;
+                }
+                Completion::Deleted(id) if id == session => deleted = true,
+                Completion::HistoryTarget(_, actual, Ok(page)) if actual == request => {
+                    assert!(page.projection_preparing)
+                }
+                Completion::Error(kind, error) => panic!("{kind}: {error}"),
+                _ => {}
+            }
+        }
+        assert_eq!(
+            projected(&worker, &other, 0).readable.unwrap().text,
+            "other retained answer\n"
+        );
+        worker
+            .commands
+            .send(Command::HistoryTarget {
+                target: "deleted-reader".into(),
+                request,
+                index: 0,
+                session: Some(session),
+                offset: 0,
+            })
+            .unwrap();
+        loop {
+            if let Completion::HistoryTarget(target, actual, result) =
+                worker.events.recv_timeout(Duration::from_secs(5)).unwrap()
+                && target == "deleted-reader"
+                && actual == request
+            {
+                assert!(result.is_err());
+                break;
+            }
+        }
+    }
+    #[test]
     #[ignore = "explicit current native committed corpus qualification; no child is launched"]
     fn qualify_readable_native_committed_corpus() {
         let source = PathBuf::from(
             std::env::var_os("RAT_HISTORY_CORPUS").expect("RAT_HISTORY_CORPUS required"),
         );
         let expected = std::env::var("RAT_HISTORY_MARKER").expect("RAT_HISTORY_MARKER required");
+        let output = std::env::var("RAT_HISTORY_OUTPUT").expect("RAT_HISTORY_OUTPUT required");
+        let command = std::env::var("RAT_HISTORY_COMMAND").expect("RAT_HISTORY_COMMAND required");
         let db = Connection::open_with_flags(
             source.join("history.sqlite3"),
             rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
@@ -1813,11 +1898,11 @@ mod concurrent_tests {
             "native response marker missing: {text}"
         );
         assert!(
-            text.contains("heartbeat"),
-            "native visible prompt/command missing: {text}"
+            text.contains(&command),
+            "native visible command missing: {text}"
         );
         assert!(
-            text.contains("beat"),
+            text.contains(&output),
             "native command output missing: {text}"
         );
         let directory = PathBuf::from(

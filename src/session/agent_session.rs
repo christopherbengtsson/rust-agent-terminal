@@ -1450,3 +1450,87 @@ impl Drop for AgentSession {
         let _ = fs::remove_dir(&self.endpoint_directory);
     }
 }
+
+#[cfg(test)]
+mod readable_history_tests {
+    use super::*;
+    use crate::persistence::{Completion, HistoryPage, Worker};
+
+    #[test]
+    fn late_readable_results_and_errors_cannot_replace_a_newer_selected_passage() {
+        let directory = tempfile::tempdir().unwrap();
+        let (worker, restored) = Worker::start(directory.path()).unwrap();
+        let mut owner = AgentSession::restore(directory.path(), restored, &worker).unwrap();
+        owner.handle(
+            Request::History {
+                index: 0,
+                offset: 0,
+            },
+            &worker,
+            false,
+        );
+        let Completion::HistoryTarget(target, old, _) =
+            worker.events.recv_timeout(Duration::from_secs(3)).unwrap()
+        else {
+            panic!("expected history reply");
+        };
+        owner.handle(
+            Request::History {
+                index: 0,
+                offset: 2048,
+            },
+            &worker,
+            false,
+        );
+        let Completion::HistoryTarget(current_target, current, _) =
+            worker.events.recv_timeout(Duration::from_secs(3)).unwrap()
+        else {
+            panic!("expected second history reply");
+        };
+        owner.complete(
+            Completion::HistoryTarget(
+                target.clone(),
+                old,
+                Ok(HistoryPage {
+                    text: "stale text".into(),
+                    ..Default::default()
+                }),
+            ),
+            &worker,
+        );
+        owner.complete(
+            Completion::HistoryTarget(target, old, Err("stale error".into())),
+            &worker,
+        );
+        assert!(owner.observation().history.is_none());
+        assert!(owner.observation().error.is_none());
+        owner.complete(
+            Completion::HistoryTarget(
+                "another owner".into(),
+                current,
+                Ok(HistoryPage {
+                    text: "wrong session".into(),
+                    ..Default::default()
+                }),
+            ),
+            &worker,
+        );
+        assert!(owner.observation().history.is_none());
+        owner.complete(
+            Completion::HistoryTarget(
+                current_target,
+                current,
+                Ok(HistoryPage {
+                    offset: 2048,
+                    text: "selected passage".into(),
+                    ..Default::default()
+                }),
+            ),
+            &worker,
+        );
+        assert_eq!(
+            owner.observation().history.unwrap().text,
+            "selected passage"
+        );
+    }
+}
