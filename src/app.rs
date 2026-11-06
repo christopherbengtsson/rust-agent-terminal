@@ -18,6 +18,8 @@ pub struct CreateForm {
 pub struct App {
     pub create_form: Option<CreateForm>,
     pub creation_open: bool,
+    pub creation_selected: Option<String>,
+    pub diff: Option<crate::working_diff::View>,
     pub workspaces_open: bool,
     pub workspace_selected: Option<String>,
     pub project_input: Option<String>,
@@ -55,6 +57,8 @@ impl App {
         Self {
             create_form: None,
             creation_open: false,
+            creation_selected: None,
+            diff: None,
             workspaces_open: false,
             workspace_selected: None,
             project_input: None,
@@ -136,6 +140,7 @@ impl App {
                     | Request::CancelCreation
                     | Request::SelectSession(_)
                     | Request::Discover { .. }
+                    | Request::InspectWorking { .. }
             )
         {
             Effect::Session(request)
@@ -173,6 +178,11 @@ impl App {
             form.preview_applied = true;
         }
 
+        if let Some(response) = observation.working_diff.take()
+            && let Some(view) = &mut self.diff
+        {
+            view.observe(response);
+        }
         if let Some(discovery) = observation.discovery.take() {
             use std::os::unix::ffi::OsStringExt;
             self.apply(Event::DiscoveryCompleted {
@@ -203,6 +213,13 @@ impl App {
             self.selecting_checkout = false;
         }
         if observation.connection_lost {
+            if let Some(view) = &mut self.diff {
+                view.loading = false;
+                view.error = Some(
+                    "Dashboard disconnected; snapshot is stale. Detach and reconnect to refresh."
+                        .into(),
+                );
+            }
             let error = observation.error.take();
             observation = self.session.clone();
             observation.connection_lost = true;
@@ -220,7 +237,7 @@ impl App {
             && (observation.identity != self.session.identity
                 || self.session.lifecycle != crate::session::Lifecycle::Running)
         {
-            self.attached = true;
+            self.attached = self.diff.is_none();
         }
         if observation.stopped
             || (observation.error.is_some()
@@ -272,6 +289,26 @@ impl App {
             }
             return Some(self.session_effect(Request::Key(key)));
         }
+        if self.creation_open
+            && self.create_form.is_none()
+            && matches!(key.code, KeyCode::Char('[' | ']'))
+            && key.modifiers.is_empty()
+        {
+            let records = &self.session.creation.records;
+            if !records.is_empty() {
+                let index = records
+                    .iter()
+                    .position(|r| Some(&r.intent.request) == self.creation_selected.as_ref())
+                    .unwrap_or(records.len() - 1);
+                let index = if key.code == KeyCode::Char(']') {
+                    (index + 1) % records.len()
+                } else {
+                    (index + records.len() - 1) % records.len()
+                };
+                self.creation_selected = Some(records[index].intent.request.clone());
+            }
+            return None;
+        }
         if self.create_form.is_none() && self.creation_open && key.code == KeyCode::Esc {
             self.creation_open = false;
             return None;
@@ -309,6 +346,7 @@ impl App {
                         return None;
                     }
                     self.selecting_checkout = true;
+                    self.creation_selected = Some(form.intent.request.clone());
                     return Some(Effect::Session(Request::CreateWorkspace(form.intent)));
                 }
                 code => {
@@ -389,12 +427,96 @@ impl App {
                 return Some(Effect::Session(Request::CancelCreation));
             }
             self.creation_open = true;
-            if let Some(record) = self.session.creation.records.last() {
+            if let Some(request) = self
+                .session
+                .creation
+                .retry_request
+                .clone()
+                .or_else(|| self.creation_record().map(|r| r.intent.request.clone()))
+            {
                 return Some(Effect::Session(Request::RecoverCreation {
-                    request: record.intent.request.clone(),
+                    request,
                     local: key.code == KeyCode::Char('L'),
                 }));
             }
+        }
+        if let Some(view) = &mut self.diff {
+            if key.modifiers.is_empty() {
+                match key.code {
+                    KeyCode::Esc | KeyCode::Char('f') => {
+                        self.diff = None;
+                        return None;
+                    }
+                    KeyCode::Char('r') => {
+                        return Some(Effect::Session(view.refresh()));
+                    }
+                    KeyCode::Char('j') => return view.navigate(true).map(Effect::Session),
+                    KeyCode::Char('k') => return view.navigate(false).map(Effect::Session),
+                    KeyCode::Down => {
+                        view.scroll = view.scroll.saturating_add(1);
+                        return None;
+                    }
+                    KeyCode::Up => {
+                        view.scroll = view.scroll.saturating_sub(1);
+                        return None;
+                    }
+                    KeyCode::PageDown => {
+                        view.scroll = view.scroll.saturating_add(8);
+                        return None;
+                    }
+                    KeyCode::PageUp => {
+                        view.scroll = view.scroll.saturating_sub(8);
+                        return None;
+                    }
+                    KeyCode::Right | KeyCode::Char('l') => {
+                        view.horizontal = view.horizontal.saturating_add(8);
+                        return None;
+                    }
+                    KeyCode::Left | KeyCode::Char('h') => {
+                        view.horizontal = view.horizontal.saturating_sub(8);
+                        return None;
+                    }
+                    KeyCode::Home => {
+                        view.scroll = 0;
+                        view.horizontal = 0;
+                        return None;
+                    }
+                    KeyCode::Char('s' | 'q' | 'd' | 'y') => {} // Keep execution/storage controls available.
+                    _ => return None,
+                }
+            } else if key.modifiers != KeyModifiers::CONTROL || key.code != KeyCode::Char('c') {
+                return None;
+            }
+        }
+        if key.modifiers.is_empty() && key.code == KeyCode::Char('f') {
+            if self.session.control_denied {
+                self.error = Some("Comparison unavailable without supervisor control".into());
+                return None;
+            }
+            let workspace = self.session.registry.workspaces.iter().find(|workspace| {
+                if !self.workspaces_open
+                    && let Some(current) = self.current()
+                {
+                    workspace
+                        .checkout
+                        .as_ref()
+                        .is_some_and(|checkout| checkout.root == current.path)
+                } else {
+                    Some(&workspace.id) == self.workspace_selected.as_ref()
+                }
+            });
+            let Some(workspace) = workspace else {
+                self.error = Some("Checkout has no retained workspace yet; wait for adoption metadata or explicitly adopt it before Working inspection".into());
+                return None;
+            };
+            let mut view =
+                crate::working_diff::View::new(workspace.id.clone(), workspace.name.clone());
+            let request = view.refresh();
+            self.diff = Some(view);
+            self.workspaces_open = false;
+            self.history_open = false;
+            self.cleanup_open = false;
+            return Some(Effect::Session(request));
         }
         if self.first_prompt.is_some() || self.rename_workspace.is_some() {
             match key.code {
@@ -870,9 +992,19 @@ impl App {
         None
     }
 
+    pub fn creation_record(&self) -> Option<&crate::creation::Record> {
+        self.session
+            .creation
+            .records
+            .iter()
+            .find(|r| Some(&r.intent.request) == self.creation_selected.as_ref())
+            .or_else(|| self.session.creation.records.last())
+    }
     pub fn keyboard_help(&self) -> &'static str {
         if self.create_form.is_some() {
             "New workspace: Tab fields · Left/Right agent · Enter Create without starting · Ctrl-S Create and start · Esc cancel"
+        } else if self.diff.is_some() {
+            "Working: j/k file · arrows scroll · PgUp/PgDn · r refresh · f/Esc back · s stop · q quit · d detach"
         } else if self.first_prompt.is_some() {
             "First prompt (optional): Enter starts native agent · Esc cancels without launch"
         } else if self.rename_workspace.is_some() {
@@ -880,7 +1012,7 @@ impl App {
         } else if self.project_input.is_some() {
             "Add project: existing local path · Enter register without launch · Esc cancel"
         } else if self.workspaces_open {
-            "Workspaces: N create · j/k select · [/] project · Enter open · a adopt · R rename · h latest history · A add project · w/Esc back · d detach · q quit"
+            "Workspaces: N create · j/k select · [/] project · Enter open · a adopt · R rename · f Working diff · h latest history · A add project · w/Esc back · d detach · q quit"
         } else if self.attached {
             "Native input · Ctrl-C interrupt · Ctrl-] / Ctrl-5 dashboard (keeps session running)"
         } else if self.cleanup_open {
@@ -890,7 +1022,7 @@ impl App {
         } else if self.history_open {
             "q quit/stop/retry · s stop · y retry history · g cleanup · h live · n/p session · [/] page · j/k scroll · d detach"
         } else {
-            "N create · O creation receipt · G recover · L local fallback · w workspaces · A add · Enter attach · x new Codex · v resume · q quit/stop · a adopt · c Claude · C/X prompt and start · R rename · h history · g cleanup · y retry · s stop · d detach · j/k · r refresh"
+            "N create · O creation receipt · G recover · L local fallback · f Working diff · w workspaces · A add · Enter attach · x new Codex · v resume · q quit/stop · a adopt · c Claude · C/X prompt and start · R rename · h history · g cleanup · y retry · s stop · d detach · j/k · r refresh"
         }
     }
 

@@ -65,7 +65,9 @@ impl Ui {
             reviews,
         );
         let focus = if app.attached { "session" } else { "dashboard" };
-        let title = if app.cleanup_open {
+        let title = if let Some(view) = &app.diff {
+            format!(" Working · {} ", crate::working_diff::printable(&view.name))
+        } else if app.cleanup_open {
             " History cleanup · oldest sealed stopped sessions first ".to_owned()
         } else if app.history_open {
             format!(
@@ -106,7 +108,9 @@ impl Ui {
             session,
         );
         let viewport = Self::session_viewport(frame.area());
-        if app.workspaces_open || app.project_input.is_some() {
+        if let Some(view) = &app.diff {
+            draw_working_diff(frame, viewport, view);
+        } else if app.workspaces_open || app.project_input.is_some() {
             let items = app
                 .session
                 .registry
@@ -582,6 +586,89 @@ impl Ui {
                 session,
             );
         }
+        if app.creation_open
+            && app.create_form.is_none()
+            && app.first_prompt.is_none()
+            && app.rename_workspace.is_none()
+        {
+            let text = if let Some(record) = app.creation_record() {
+                let project = app
+                    .session
+                    .registry
+                    .projects
+                    .iter()
+                    .find(|p| p.id == record.intent.project)
+                    .map(|p| p.name.as_str())
+                    .unwrap_or(&record.intent.project);
+                let launch = app
+                    .session
+                    .creation
+                    .launches
+                    .iter()
+                    .find(|r| r.request == record.intent.request);
+                let launch = if record.launch_cancelled {
+                    "Launch cancelled; explicit Start required".into()
+                } else if let Some(receipt) = launch {
+                    if let Some(result) = &receipt.result {
+                        result
+                            .error
+                            .as_ref()
+                            .map(|e| format!("Native launch failed: {}", visible(e)))
+                            .unwrap_or_else(|| {
+                                "Native agent started; attach through its workspace".into()
+                            })
+                    } else if receipt.pending {
+                        "Native launch awaiting durable result".into()
+                    } else {
+                        receipt
+                            .error
+                            .as_ref()
+                            .map(|e| format!("Launch unavailable: {}", visible(e)))
+                            .unwrap_or_else(|| {
+                                "No confirmed native launch result; query original operation".into()
+                            })
+                    }
+                } else if !record.intent.start {
+                    "Created without starting".into()
+                } else {
+                    "No confirmed native launch; explicit Start required after recovery".into()
+                };
+                let action = if record.intent.start && !record.launch_cancelled {
+                    format!("Create locally and start {:?}", record.intent.agent)
+                } else {
+                    "Create locally without starting".into()
+                };
+                format!(
+                    "Project: {}\nPhase: {:?}\nBase: {}\nCommit: {}\nBranch: {}\nFolder: {}\n{}\n\n{}\n\nL: {}\nG: Recover creation without starting\n[/]: receipts · Z: cancel · Esc: return",
+                    visible(project),
+                    record.phase,
+                    visible(record.base_ref.as_deref().unwrap_or(&record.intent.base)),
+                    record.commit.as_deref().unwrap_or("not yet selected"),
+                    visible(&record.intent.branch),
+                    visible(
+                        &crate::creation::path(&record.intent.path)
+                            .display()
+                            .to_string()
+                    ),
+                    launch,
+                    visible(&record.message),
+                    action
+                )
+            } else {
+                app.session
+                    .creation
+                    .error
+                    .clone()
+                    .unwrap_or_else(|| "Creation receipt pending · Z cancels · Esc returns".into())
+            };
+            frame.render_widget(Clear, session);
+            frame.render_widget(
+                Paragraph::new(text)
+                    .block(Block::bordered().title(" Creation receipt · original operation "))
+                    .wrap(Wrap { trim: false }),
+                session,
+            );
+        }
         if app.create_form.is_none()
             && (app.creation_open
                 || app.session.creation.pending
@@ -604,6 +691,13 @@ impl Ui {
         let compact_help;
         let help_text = if app.create_form.is_some() {
             "Tab fields · Left/Right agent · Enter Create without starting\nCtrl-S Create and start · Ctrl-U clear · Esc cancel"
+        } else if app.creation_open {
+            "L explicit local creation (launch choice in receipt) · G recover without starting\n[/] receipt · Z cancel creation · Esc return · q quit"
+        } else if app.diff.is_some()
+            && !app.attached
+            && (frame.area().width < 80 || frame.area().height < 22)
+        {
+            "j/k file · arrows scroll · r refresh · f/Esc back\ns stop · q quit · d detach · PgUp/PgDn"
         } else if app.first_prompt.is_some() || app.rename_workspace.is_some() {
             app.keyboard_help()
         } else if !app.attached
@@ -642,7 +736,7 @@ A add · h history · w/Esc back · d detach · q quit"
                 &compact_help
             } else {
                 compact_help = format!(
-                    "w workspaces · A add · a adopt · c/x new · C/X prompt · R rename · Enter attach\nv resume · g cleanup · q quit/stop · d detach · {} {}",
+                    "f Working diff · w workspaces · A add · a adopt · c/x new · C/X prompt · R rename · Enter attach\nv resume · g cleanup · q quit/stop · d detach · {} {}",
                     if app.session.connection_lost {
                         format!("unknown (last seen {:?})", app.session.lifecycle)
                     } else {
@@ -657,6 +751,136 @@ A add · h history · w/Esc back · d detach · q quit"
         };
         frame.render_widget(Paragraph::new(help_text), help);
     }
+}
+
+fn draw_working_diff(frame: &mut Frame, area: Rect, view: &crate::working_diff::View) {
+    let compact = area.width < 70 || area.height < 18;
+    let snapshot = view.snapshot.as_ref();
+    let freshness = if view.loading {
+        "Refreshing; previous snapshot"
+    } else if view.error.is_some() {
+        "Refresh failed; previous snapshot"
+    } else {
+        "Snapshot; not live"
+    };
+    let request = snapshot.map_or(view.request.as_str(), |snapshot| snapshot.request.as_str());
+    let checkout = snapshot
+        .map(|snapshot| crate::working_diff::printable(&snapshot.checkout.root.to_string_lossy()))
+        .unwrap_or_else(|| "resolving…".into());
+    let identity = format!(
+        "Workspace {}\nCheckout {}\nRequest {}\n{}{}",
+        crate::working_diff::printable(&view.workspace),
+        checkout,
+        request,
+        freshness,
+        snapshot
+            .map(|snapshot| format!(
+                " · {}{}",
+                snapshot.captured_millis,
+                if snapshot.changed_during_capture {
+                    " · changed during capture; refresh"
+                } else {
+                    " · r refresh"
+                }
+            ))
+            .unwrap_or_default()
+    );
+    let [identity_area, error_area, body] = Layout::vertical([
+        Constraint::Length(4),
+        Constraint::Length(if view.error.is_some() { 2 } else { 0 }),
+        Constraint::Min(1),
+    ])
+    .areas(area);
+    frame.render_widget(Paragraph::new(identity), identity_area);
+    if let Some(error) = &view.error {
+        frame.render_widget(
+            Paragraph::new(error.as_str())
+                .style(Style::default().fg(Color::Yellow))
+                .wrap(Wrap { trim: false }),
+            error_area,
+        );
+    }
+    let Some(snapshot) = snapshot else {
+        frame.render_widget(
+            Paragraph::new(if view.loading {
+                "Loading Working comparison…"
+            } else {
+                "Comparison unavailable; r retries. Esc returns."
+            }),
+            body,
+        );
+        return;
+    };
+    let (files_area, content_area) = if compact {
+        let [files, content] = Layout::vertical([
+            Constraint::Length(if snapshot.files.is_empty() { 0 } else { 3 }),
+            Constraint::Min(1),
+        ])
+        .areas(body);
+        (files, content)
+    } else {
+        let [files, content] =
+            Layout::horizontal([Constraint::Percentage(32), Constraint::Min(1)]).areas(body);
+        (files, content)
+    };
+    let items = snapshot
+        .files
+        .iter()
+        .map(|file| {
+            ListItem::new(vec![
+                Line::from(file.label()),
+                Line::from(format!("  {}", file.state)),
+            ])
+        })
+        .collect::<Vec<_>>();
+    let selected = snapshot
+        .files
+        .iter()
+        .position(|file| Some(&file.path) == view.selected.as_ref());
+    let mut state = ListState::default().with_selected(selected);
+    let title = if snapshot.omitted > 0 {
+        format!("Files: {} omitted; status limit", snapshot.omitted)
+    } else {
+        format!("Files ({}) · j/k", snapshot.files.len())
+    };
+    frame.render_stateful_widget(
+        List::new(items)
+            .block(Block::default().title(title))
+            .highlight_symbol("> ")
+            .highlight_style(Style::default().fg(Color::Cyan)),
+        files_area,
+        &mut state,
+    );
+    let content = if view.selected == snapshot.selected {
+        snapshot.content.as_str()
+    } else {
+        "Loading selected file; previous patch withheld."
+    };
+    let lines = content
+        .lines()
+        .map(|line| {
+            let color = if line.starts_with('+') {
+                Color::Green
+            } else if line.starts_with('-') {
+                Color::LightRed
+            } else if line.starts_with("@@") {
+                Color::Cyan
+            } else {
+                Color::Gray
+            };
+            Line::styled(line, Style::default().fg(color))
+        })
+        .collect::<Vec<_>>();
+    frame.render_widget(
+        Paragraph::new(lines)
+            .scroll((view.scroll, view.horizontal))
+            .block(Block::default().title(format!(
+                "Content · line {} · column {}",
+                view.scroll as usize + 1,
+                view.horizontal as usize + 1
+            ))),
+        content_area,
+    );
 }
 
 fn color(color: vt100::Color) -> Color {
@@ -1205,6 +1429,30 @@ mod tests {
                 .join("\n");
             assert!(text.contains("Create without starting"), "{text}");
             assert!(text.contains("Create and start"), "{text}");
+        }
+    }
+    #[test]
+    fn local_fallback_preview_shows_exact_commit_before_the_explicit_choice() {
+        let mut app = App::new("repo".into());
+        app.creation_open = true;
+        let commit = "1234567890123456789012345678901234567890";
+        app.session.creation.records.push(serde_json::from_value(serde_json::json!({"intent":{"request":"request","project":"project","base":"origin/main","branch":"workspace/new","path":b"/managed/workspace".to_vec(),"agent":"Codex","start":true,"prompt":null},"repository":[],"common_dir":[],"phase":"LocalChoice","base_ref":"refs/remotes/origin/main","commit":commit,"message":"Latest code could not be obtained from configured remote. ".repeat(8),"checkout":null})).unwrap());
+        for (cols, rows) in [(160, 40), (60, 18)] {
+            let mut terminal = Terminal::new(TestBackend::new(cols, rows)).unwrap();
+            terminal
+                .draw(|frame| Ui::default().draw(frame, &app))
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            let text = (0..rows)
+                .map(|y| {
+                    (0..cols)
+                        .map(|x| buffer[(x, y)].symbol())
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(text.contains(commit), "{text}");
+            assert!(text.contains("LocalChoice"), "{text}");
         }
     }
 }

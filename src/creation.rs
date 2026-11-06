@@ -64,9 +64,18 @@ pub struct Preview {
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct View {
+    pub launches: Vec<LaunchReceipt>,
+    pub retry_request: Option<String>,
     pub pending: bool,
     pub preview: Option<Preview>,
     pub records: Vec<Record>,
+    pub error: Option<String>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct LaunchReceipt {
+    pub request: String,
+    pub result: Option<crate::events::LaunchResult>,
+    pub pending: bool,
     pub error: Option<String>,
 }
 impl Intent {
@@ -440,6 +449,7 @@ fn create(record: &mut Record, cancel: &AtomicBool) {
 pub struct Coordinator {
     pub view: View,
     loaded: bool,
+    retry_record: Option<Record>,
     job: Option<Job>,
     saving: Option<(uuid::Uuid, Record)>,
     cancelled: bool,
@@ -460,6 +470,7 @@ impl Coordinator {
                 ..View::default()
             },
             loaded: false,
+            retry_record: None,
             job: None,
             saving: None,
             cancelled: false,
@@ -488,6 +499,8 @@ impl Coordinator {
             )) {
             Ok(()) => self.saving = Some((id, record)),
             Err(error) => {
+                self.view.retry_request = Some(record.intent.request.clone());
+                self.retry_record = Some(record);
                 self.view.error = Some(format!(
                     "Creation phase not saved: {error}. Retry same request; no further step authorized"
                 ))
@@ -584,6 +597,16 @@ impl Coordinator {
                 self.save(record, storage);
             }
             Request::RecoverCreation { request, local } => {
+                if self
+                    .retry_record
+                    .as_ref()
+                    .is_some_and(|record| record.intent.request == request)
+                {
+                    let record = self.retry_record.take().unwrap();
+                    self.view.retry_request = None;
+                    self.save(record, storage);
+                    return;
+                }
                 self.launch_authorized = false;
                 let Some(mut record) = self
                     .view
@@ -646,6 +669,8 @@ impl Coordinator {
                 let (_, mut record) = self.saving.take().unwrap();
                 match result {
                     Err(error) => {
+                        self.view.retry_request = Some(record.intent.request.clone());
+                        self.retry_record = Some(record);
                         self.view.error = Some(format!(
                             "Creation phase not durable: {error}. Recover same request before retrying"
                         ))
@@ -700,6 +725,17 @@ impl Coordinator {
         }
         self.view.pending = self.busy();
         None
+    }
+    pub fn retry_storage(&mut self, storage: &crate::persistence::Worker) {
+        if !self.loaded
+            && self.job.is_none()
+            && self.saving.is_none()
+            && let Err(error) = storage
+                .commands
+                .try_send(crate::persistence::Command::CreationLoad)
+        {
+            self.view.error = Some(format!("Creation receipts not loaded: {error}"));
+        }
     }
     pub fn advance(&mut self, storage: &crate::persistence::Worker) {
         if let Some(event) = self.job.as_ref().and_then(|job| job.result.try_recv().ok()) {
@@ -800,12 +836,13 @@ mod tests {
         std::fs::write(repo.path().join("tracked"), "unstaged\n").unwrap();
         std::fs::write(repo.path().join("untracked"), "private\n").unwrap();
         let before = command(repo.path(), &["status", "--porcelain"]);
-        let index = std::fs::read(repo.path().join(".git/index")).unwrap();
         let mut prepared = result(Work::Prepare(record(repo.path(), &folder), false));
         assert_eq!(prepared.phase, Phase::Ready);
         let pinned = prepared.commit.clone().unwrap();
         // The branch can move after preparation; creation must use its saved commit.
         command(repo.path(), &["commit", "-m", "later"]);
+        let index = std::fs::read(repo.path().join(".git/index")).unwrap();
+        let status = command(repo.path(), &["status", "--porcelain"]);
         prepared.phase = Phase::Creating;
         let created = result(Work::Create(prepared.clone()));
         assert_eq!(created.phase, Phase::Created, "{}", created.message);
@@ -823,7 +860,11 @@ mod tests {
             2
         );
         assert!(before.contains("MM tracked"));
-        assert!(!index.is_empty());
+        assert_eq!(
+            std::fs::read(repo.path().join(".git/index")).unwrap(),
+            index
+        );
+        assert_eq!(command(repo.path(), &["status", "--porcelain"]), status);
         assert_eq!(
             std::fs::read_to_string(repo.path().join("tracked")).unwrap(),
             "unstaged\n"
@@ -831,6 +872,40 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(repo.path().join("untracked")).unwrap(),
             "private\n"
+        );
+    }
+    #[test]
+    fn default_ambiguity_and_collisions_require_explicit_choices_without_overwriting() {
+        let repo = repository();
+        let temp = tempfile::tempdir().unwrap();
+        command(repo.path(), &["branch", "other"]);
+        let ResultEvent::Preview(preview) = worker(Work::Preview {
+            project: "project".into(),
+            repository: repo.path().into(),
+            managed_root: temp.path().into(),
+        }) else {
+            panic!("preview expected")
+        };
+        assert!(preview.default_base.is_none());
+        assert_eq!(preview.bases, vec!["main", "other"]);
+        let folder = temp.path().join("existing");
+        std::fs::create_dir(&folder).unwrap();
+        std::fs::write(folder.join("keep"), "untouched").unwrap();
+        let result = result(Work::Prepare(record(repo.path(), &folder), false));
+        assert_eq!(result.phase, Phase::Failed);
+        assert_eq!(
+            std::fs::read_to_string(folder.join("keep")).unwrap(),
+            "untouched"
+        );
+        let folder = temp.path().join("absent");
+        let mut intent = record(repo.path(), &folder);
+        intent.intent.branch = "other".into();
+        let outcome = super::tests::result(Work::Prepare(intent, false));
+        assert_eq!(outcome.phase, Phase::Failed);
+        assert!(!folder.exists());
+        assert_eq!(
+            command(repo.path(), &["branch", "--list"]).lines().count(),
+            2
         );
     }
 }
