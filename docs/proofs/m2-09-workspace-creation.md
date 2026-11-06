@@ -12,8 +12,10 @@ Feature branch `feature/m2-09-create-workspace`, isolated worktree
 The actual native smoke used source `6f4ab06` and binary SHA-256
 `a33b560559fe4ccd7351841a865b82ff699a95f8df28a2a96ed650cd7b18a049`.
 Subsequent amendments cover paste preservation, receipt attribution/rendering,
-cancelled intent labels, relative managed paths and failed worker reporting;
-focused App/Git/Controller checks cover these paths.
+cancelled intent labels, relative managed paths, failed worker reporting, atomic
+Git branch/operation claims and targeted cancellation after native handoff.
+Focused App/Git/Controller checks cover these paths. The final short dashboard
+fixture ran after the creation/Whole comparison merge and cancellation changes.
 
 Host: macOS 26.2 (25C56), arm64; stable Rust 1.99.1, Git 2.50.0.
 Native tools: Claude Code 2.1.319 and Codex CLI 0.167.0, through their existing
@@ -54,7 +56,8 @@ qualification.
   fetch creates nothing, and explicit local fallback retains its originally
   displayed commit after the remote-tracking ref moves.
 - `dashboard_create_and_start_targets_new_checkout_and_retains_failed_launch_without_duplicates`
-  passes (2.57s) through the actual dashboard, outer PTY, supervisor and native
+  passes (final bounded rerun: 3.95s) through the actual dashboard, outer PTY,
+  supervisor and native
   launch boundary. An isolated Claude executable records the native argv and cwd
   before replacing itself with the existing scripted PTY child. An unrelated
   workspace keeps running and selected. The supplied first prompt appears as one
@@ -62,12 +65,25 @@ qualification.
   the same session/process and worktree. An intentionally absent Codex executable
   produces an attributed durable failed native-launch receipt while keeping its
   created row, folder and branch. Retry/query cannot create another checkout or
-  process. Shutdown confirms cleanup and the test waits for owner exit.
+  process. Its final rerun blocks the exact originating native Prepare after
+  checkout durability, cancels by creation UUID/original session UUID, releases
+  storage and observes the durable cancelled outcome without native exec. An old
+  receipt's cancellation leaves a later conversation in the same workspace
+  Running with its unchanged session UUID. Shutdown confirms cleanup and the test
+  waits for owner exit.
 - Git-worker tests prove a saved base commit survives subsequent base movement;
   staged/unstaged/new original files and the original index remain unchanged.
   Same-request lost-result reconciliation retains one checkout. Ambiguous defaults
   require an explicit base, and existing branch/path collisions retain unrelated
-  content. Failed remote fetch offers the exact local commit without mutation.
+  content. A real bare-remote/update-checkout case proves successful fetch obtains
+  the newer commit without moving the original HEAD or index. Failed remote
+  fetch offers the exact local commit without mutation. An operation-specific
+  private Git ref atomically claims the new branch; branch-only interrupted
+  creation resumes its own branch and creates exactly one checkout. A public
+  coordinator/writer fault case was red before correcting reconciliation of an
+  initial intent-write failure: G now always disarms the earlier requested
+  launch. Cancelling that unsaved intent records only the cancelled outcome after
+  repair, without creating a folder.
 - App checks prove the two distinct launch choices, suggested non-UTF-8 path-byte
   preservation and unchanged pasted multiline/Unicode first prompts. Existing
   App selection/targeting tests stay green. All UI tests, including action
@@ -77,7 +93,8 @@ The first two real-PTY fixture attempts failed because the harness reopened befo
 controller release and then typed `N` into attached native focus. The corrected
 harness waits for control release and explicitly returns with Ctrl-] before the
 creation flow. Neither failure was treated as product success. The fallback
-rendering and multiline-paste checks were observed red before their corrections.
+rendering, multiline-paste, branch-only partial recovery and failed-intent-write
+reconciliation checks were observed red before their corrections.
 
 ## Real native smoke and limits
 
@@ -102,7 +119,10 @@ by product code.
 
 ## Checks and remaining qualification
 
-Focused locked Git-worker, App, UI and Controller creation checks passed. Stable
+Focused locked Git-worker/coordinator (6 tests), App and UI checks and the two
+Controller/dashboard creation scenarios passed. The existing legacy-owner guard
+has an additional isolated creation-protocol-zero case; it compiles and awaits the
+merger's combined execution rather than an overlapping outer-PTY rerun. Stable
 locked build, formatting and warnings-denied all-target Clippy are run on the
 final feature source. The frozen combined all-target gate belongs to the merger;
 no overlapping full/native aggregate is claimed here. Configured setup is ticket

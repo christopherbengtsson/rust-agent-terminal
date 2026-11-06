@@ -86,8 +86,19 @@ checkout, request and capture time identify the snapshot: it is not a live or
 atomic view of files an agent can still change. Stop, quit and detach remain
 available. Binary, conflict, submodule, missing/unsupported and oversized content
 have explicit explanations. Inspection neither changes the index nor runs
-repository-defined external diff, text conversion or fsmonitor programs. Whole
-workspace comparison and external-editor inspection follow in separate tickets.
+repository-defined external diff, text conversion or fsmonitor programs.
+
+Within inspection, `w` explicitly switches between Working and Whole workspace.
+Whole workspace compares the common ancestor of the current HEAD and the selected
+local base with current files, including earlier commits, staged/unstaged changes,
+and new files. `b` selects a full local ref such as `refs/heads/main` or
+`refs/remotes/origin/main`; Enter durably saves that base and compares, Esc cancels.
+The selected base ref and its commit are retained separately from the current
+branch. Ref movement uses the new local tip and labels the original selection;
+branch, HEAD, actual base tip and common ancestor identify the snapshot. No fetch
+runs during inspection. Missing bases, unrelated history and multiple common
+ancestors require an explicit related base choice. Every new inspection still
+opens Working. External-editor handoff follows in a separate ticket.
 
 In attached focus, UTF-8 characters, Ctrl-C, legacy control/Alt shortcuts,
 arrows, navigation keys, F1–F12 and Shift-Tab reach the native/fixture PTY. The pane and

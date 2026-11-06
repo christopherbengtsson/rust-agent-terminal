@@ -1082,7 +1082,14 @@ its receipt, and seeds an independent selected comparison base without replacing
 a later user selection. Original creation facts remain on the workspace.
 
 An intent commits before fetch; the exact fetched or explicitly chosen local
-commit commits before branch/worktree creation. Fetch and creation hold the
+commit commits before branch/worktree creation. Git atomically creates the new
+branch together with `refs/rat/creation/<operation UUID>` at that commit. The
+private claim lets a retry finish an operation-owned branch after partial Git
+success, while a branch without that claim remains an external collision. The
+claim retains the original base independently of mutable visible branch names.
+The bounded Git runner accepts at most 512 bytes of transaction input through a
+new owned stdin pipe; its existing cancellation, output and child-reaping bounds
+still apply. Fetch and creation hold the
 per-common-directory Git exclusion, use bounded output and owned process groups,
 and have a 30-second child deadline with cancellation. Read-only Git identity
 checks retain their two-second bound. Git refuses existing branches and folders;
@@ -1091,9 +1098,13 @@ and working files are never used to construct the new checkout.
 
 A failed fetch commits LocalChoice without creating anything. Its explicit local
 continuation uses the already displayed commit, even if a tracking ref has moved.
-Cancellation disarms launch and retains partial Git results. Recovery uses the
+Cancellation disarms launch and retains partial Git results. Its request freezes
+the creation UUID and available original native session UUID. After the checkout
+handoff it also sends Stop only to the owner whose workspace task and launch
+request still match that creation, so an old receipt cannot stop a later
+conversation. Recovery uses the
 same operation and exact target; it recognizes an existing checkout only when
-common directory, branch and pinned HEAD match. Ambiguous partial branch/folder
+common directory, operation claim, branch and pinned HEAD match. Ambiguous partial branch/folder
 state is retained and refused rather than overwritten. Store/transport failure
 never grants the next phase; matching attributed acknowledgements do. Saved
 receipts alone never run Git or native code on restore. Explicit reconciliation
@@ -1109,3 +1120,37 @@ result. Failed native start keeps the registered workspace, branch, folder and
 history; retry remains an explicit Start. Optional configured setup is ticket 10,
 not an inactive control in this creation form. See the
 [scoped evidence and native limits](proofs/m2-09-workspace-creation.md).
+### Whole workspace inspection (Milestone 2 ticket 14)
+
+Working remains the default for each new inspection. Within that view, an explicit
+switch requests Whole workspace through the same workspace-owned bounded worker.
+The supervisor resolves the retained checkout and selected local base; an adopted
+workspace without a base requires explicit selection of a full local branch or
+remote-tracking ref. Inspection never fetches. Multiple merge bases, unrelated
+histories and unavailable refs produce explanations rather than guessed bases.
+
+The selected base's raw ref bytes and selection-time commit live in the additive
+`workspace_comparison_bases` table, separately from current branch and immutable
+workspace-creation facts. Explicit selection resolves the ref in the Git worker,
+then the sole persistence worker commits the choice under an attributed operation.
+Only that completion publishes the successful snapshot. Failed saving preserves
+the previous durable choice and returns an attributed inspection error. Creation
+may seed the comparison choice from its original base with INSERT OR IGNORE;
+subsequent comparison choices never overwrite original creation facts.
+
+Each Whole snapshot names the captured branch, HEAD, actual current local base tip
+and unique common ancestor. Base movement is labelled against the selected commit.
+The file list combines committed changes since that ancestor with current status,
+including untracked files. Selected content compares the ancestor with current
+working files and retains separate staged/unstaged sections where present, so
+staged content remains inspectable even if later edits undo it. Conflicts remain
+explicitly unresolved; submodule nested files are outside the comparison. Raw
+Unix paths, cancellation, Git/process/output caps and external-program exclusions
+reuse Working's boundaries. Ref/branch/status changes observed during capture add
+a warning; snapshots do not claim filesystem atomicity.
+
+Comparison protocol 2 is required before sending Whole fields: protocol 1 would
+ignore them and incorrectly return Working. An incompatible live owner remains
+untouched and requires its compatible dashboard for stop/upgrade. These are local
+coding comparisons. They neither pin future Review revisions nor substitute an
+archive recovery ref for a review base. External-editor handoff is ticket 15.

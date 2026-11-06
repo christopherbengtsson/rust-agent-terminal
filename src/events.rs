@@ -57,6 +57,10 @@ pub enum NativeAgent {
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Request {
     InspectWorking {
+        #[serde(default)]
+        whole: bool,
+        #[serde(default)]
+        base: Option<Vec<u8>>,
         request: String,
         workspace: String,
         selected: Option<Vec<u8>>,
@@ -76,7 +80,11 @@ pub enum Request {
         request: String,
         local: bool,
     },
-    CancelCreation,
+    CancelCreation {
+        request: String,
+        #[serde(default)]
+        native_session: Option<String>,
+    },
     SelectSession(String),
     Discover {
         request: u64,

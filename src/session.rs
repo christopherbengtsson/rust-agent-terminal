@@ -97,7 +97,7 @@ fn transport(
     let mut greeting: Observation = serde_json::from_slice(&read_frame(&mut reader)?)?;
     decode_screen(&mut greeting);
     if greeting.control_denied {
-        if greeting.diff_protocol != 1
+        if greeting.diff_protocol != 2
             || greeting.git_jobs_protocol != 1
             || greeting.registry_protocol != 1
             || greeting.sessions_protocol != 1
@@ -136,7 +136,7 @@ fn transport(
         }
         return Ok(());
     }
-    if greeting.diff_protocol != 1
+    if greeting.diff_protocol != 2
         || greeting.git_jobs_protocol != 1
         || greeting.registry_protocol != 1
         || greeting.sessions_protocol != 1
@@ -144,7 +144,7 @@ fn transport(
         || greeting.creation_protocol != 1
     {
         greeting.control_denied = true;
-        greeting.error = Some("Existing supervisor does not support this dashboard's worktree, registry or session protocol. Use its compatible dashboard to stop activity before upgrading; d detaches locally.".into());
+        greeting.error = Some("Existing supervisor does not support this dashboard's worktree, registry, session or comparison protocol. Use its compatible dashboard to stop activity before upgrading; d detaches locally.".into());
         events.send(greeting)?;
         return Ok(());
     }
@@ -444,6 +444,8 @@ impl Sessions {
             if !state.launch_request.is_empty() {
                 creation_launches.push(crate::creation::LaunchReceipt {
                     request: state.launch_request.clone(),
+                    session: state.session_identity.as_ref().map(|id| id.session.clone()),
+                    lifecycle: state.lifecycle,
                     result: state.launch_result.clone(),
                     pending: state.metadata_pending,
                     error: state.error.clone(),
@@ -559,6 +561,27 @@ impl Sessions {
         }
         Ok(index)
     }
+    fn cancel_creation_launch(
+        &mut self,
+        request: &str,
+        native_session: Option<&str>,
+        storage: &crate::persistence::Worker,
+    ) {
+        for (_, owner) in &mut self.entries {
+            let state = owner.observation();
+            if owner.task() == request
+                && state.launch_request == request
+                && native_session.is_none_or(|expected| {
+                    state
+                        .session_identity
+                        .as_ref()
+                        .is_some_and(|id| id.session == expected && id.request == request)
+                })
+            {
+                owner.handle(Request::Stop, storage, false);
+            }
+        }
+    }
     fn handle(&mut self, request: Request, storage: &crate::persistence::Worker, adopting: bool) {
         let (index, request) = match request {
             Request::Session {
@@ -593,7 +616,7 @@ impl Sessions {
                         | Request::PreviewCreation { .. }
                         | Request::CreateWorkspace(_)
                         | Request::RecoverCreation { .. }
-                        | Request::CancelCreation
+                        | Request::CancelCreation { .. }
                         | Request::RenameWorkspace { .. }
                         | Request::Discover { .. }
                         | Request::InspectWorking { .. }
@@ -765,6 +788,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let mut discovery_result = None;
     let mut diff_job: Option<crate::working_diff::Job> = None;
     let mut diff_result = None;
+    let mut diff_save: Option<(uuid::Uuid, crate::working_diff::Response)> = None;
     let mut adoption_pending = false;
     let mut quitting = false;
     let mut subscriber_frame_high_water = 0;
@@ -774,8 +798,30 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
     loop {
         if diff_job.as_ref().is_some_and(|job| job.is_finished())
             && let Some(job) = diff_job.take()
+            && let Ok(mut response) = job.result.try_recv()
         {
-            diff_result = job.result.try_recv().ok();
+            if let Ok(snapshot) = &mut response.result
+                && let Some(base) = snapshot.save_base.take()
+            {
+                let operation = uuid::Uuid::new_v4();
+                match storage
+                    .commands
+                    .try_send(crate::persistence::Command::ComparisonBase(
+                        operation,
+                        response.workspace.clone(),
+                        base,
+                    )) {
+                    Ok(()) => diff_save = Some((operation, response)),
+                    Err(error) => {
+                        response.result = Err(format!(
+                            "Comparison base not saved: {error}; retry base selection"
+                        ));
+                        diff_result = Some(response);
+                    }
+                }
+            } else {
+                diff_result = Some(response);
+            }
         }
         if adoption
             .as_ref()
@@ -863,6 +909,19 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
                 crate::persistence::Completion::Registered(operation, result) => {
+                    if diff_save.as_ref().is_some_and(|(id, _)| *id == operation) {
+                        let (_, mut response) = diff_save.take().unwrap();
+                        match result {
+                            Ok(snapshot) => registry = snapshot,
+                            Err(error) => {
+                                response.result = Err(format!(
+                                    "Comparison base not saved: {error}; retry base selection"
+                                ))
+                            }
+                        }
+                        diff_result = Some(response);
+                        continue;
+                    }
                     if registry_operation != Some(operation) {
                         continue;
                     }
@@ -921,7 +980,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
         session.advance(&storage, adoption.is_some());
         let mut state = session.observation();
         state.subscriber_frame_high_water = subscriber_frame_high_water;
-        state.diff_protocol = 1;
+        state.diff_protocol = 2;
         state.working_diff = diff_result.clone();
         state.git_jobs_protocol = 1;
         state.registry_protocol = 1;
@@ -949,6 +1008,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             && adoption.is_none()
             && discovery.is_none()
             && diff_job.is_none()
+            && diff_save.is_none()
             && registry_operation.is_none()
             && !creation.busy();
         if state.stopped && controller.is_none() {
@@ -962,7 +1022,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     incoming.set_nonblocking(true)?;
                     if controller.is_some() {
                         let refusal = Observation {
-                            diff_protocol: 1,
+                            diff_protocol: 2,
                             git_jobs_protocol: 1,
                             registry_protocol: 1,
                             sessions_protocol: 1,
@@ -1056,12 +1116,17 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
         }
         match request {
             Request::InspectWorking {
+                whole,
+                base,
                 request,
                 workspace,
                 selected,
             } => {
                 let result = (|| -> Result<(), String> {
-                    if request.len() > 128
+                    if base
+                        .as_ref()
+                        .is_some_and(|base| base.len() > 32768 || base.contains(&0))
+                        || request.len() > 128
                         || workspace.len() > 256
                         || selected
                             .as_ref()
@@ -1069,7 +1134,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     {
                         return Err("Invalid or oversized comparison identity/path".into());
                     }
-                    if diff_job.is_some() {
+                    if diff_job.is_some() || diff_save.is_some() {
                         return Err("Comparison job busy; retry refresh".into());
                     }
                     let known = registry
@@ -1079,11 +1144,14 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                         .ok_or("Workspace unavailable; refresh registry")?;
                     let checkout = known.checkout.as_ref().ok_or("Checkout identity unavailable; explicitly adopt an existing checkout first")?;
                     diff_job = Some(
-                        crate::working_diff::Job::start(
+                        crate::working_diff::Job::start_comparison(
                             checkout.clone(),
                             workspace.clone(),
                             request.clone(),
                             selected,
+                            whole,
+                            registry.comparison_bases.get(&workspace).cloned(),
+                            base,
                         )
                         .map_err(|error| error.to_string())?,
                     );
@@ -1150,10 +1218,24 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
             }
+            Request::CancelCreation {
+                request,
+                native_session,
+            } => {
+                session.cancel_creation_launch(&request, native_session.as_deref(), &storage);
+                creation.handle(
+                    Request::CancelCreation {
+                        request,
+                        native_session,
+                    },
+                    &registry,
+                    &storage,
+                    directory,
+                );
+            }
             request @ (Request::PreviewCreation { .. }
             | Request::CreateWorkspace(_)
-            | Request::RecoverCreation { .. }
-            | Request::CancelCreation) => {
+            | Request::RecoverCreation { .. }) => {
                 creation.handle(request, &registry, &storage, directory);
             }
             Request::Register(bytes) => {
@@ -1228,7 +1310,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
         }
         let mut state = session.observation();
         state.subscriber_frame_high_water = subscriber_frame_high_water;
-        state.diff_protocol = 1;
+        state.diff_protocol = 2;
         state.working_diff = diff_result.clone();
         state.git_jobs_protocol = 1;
         state.registry_protocol = 1;
@@ -1256,6 +1338,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             && adoption.is_none()
             && discovery.is_none()
             && diff_job.is_none()
+            && diff_save.is_none()
             && registry_operation.is_none()
             && !creation.busy();
         if controller.is_some() {

@@ -1,6 +1,6 @@
 use std::{
     ffi::OsString,
-    io::{ErrorKind, Read},
+    io::{ErrorKind, Read, Write},
     os::unix::{io::AsRawFd, process::CommandExt},
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -88,8 +88,30 @@ pub(crate) fn run_git_command_deadline(
     cancelled: &AtomicBool,
     timeout: Duration,
 ) -> Result<Vec<u8>, String> {
+    run_git_command_with_input(command, cancelled, timeout, None)
+}
+pub(crate) fn run_git_command_input(
+    command: &mut Command,
+    cancelled: &AtomicBool,
+    input: &[u8],
+) -> Result<Vec<u8>, String> {
+    if input.len() > 512 {
+        return Err("Git transaction exceeds the 512-byte input bound".into());
+    }
+    run_git_command_with_input(command, cancelled, DEADLINE, Some(input))
+}
+fn run_git_command_with_input(
+    command: &mut Command,
+    cancelled: &AtomicBool,
+    timeout: Duration,
+    input: Option<&[u8]>,
+) -> Result<Vec<u8>, String> {
     command
-        .stdin(Stdio::null())
+        .stdin(if input.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     // SAFETY: setsid is async-signal-safe; this child owns a fresh process group.
@@ -106,6 +128,16 @@ pub(crate) fn run_git_command_deadline(
         .map_err(|e| format!("Cannot run Git: {e}"))?;
     let group = child.id() as i32;
     let result = (|| {
+        if let Some(input) = input {
+            // One write within POSIX minimum PIPE_BUF to an empty owned pipe, then EOF. The
+            // direct child is already owned, including every write-error path.
+            child
+                .stdin
+                .take()
+                .ok_or("Git transaction stdin unavailable")?
+                .write_all(input)
+                .map_err(|e| format!("Git transaction input failed: {e}"))?;
+        }
         let mut stdout = child.stdout.take().ok_or("Git stdout unavailable")?;
         let mut stderr = child.stderr.take().ok_or("Git stderr unavailable")?;
         for fd in [stdout.as_raw_fd(), stderr.as_raw_fd()] {

@@ -137,7 +137,7 @@ impl App {
                     | Request::PreviewCreation { .. }
                     | Request::CreateWorkspace(_)
                     | Request::RecoverCreation { .. }
-                    | Request::CancelCreation
+                    | Request::CancelCreation { .. }
                     | Request::SelectSession(_)
                     | Request::Discover { .. }
                     | Request::InspectWorking { .. }
@@ -334,6 +334,7 @@ impl App {
                 {
                     let mut form = self.create_form.take().unwrap();
                     form.intent.start = key.code != KeyCode::Enter;
+                    form.intent.prompt = form.intent.prompt.filter(|p| !p.trim().is_empty());
                     form.intent.path = form
                         .original_path
                         .as_ref()
@@ -424,7 +425,22 @@ impl App {
                 .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER)
         {
             if key.code == KeyCode::Char('Z') {
-                return Some(Effect::Session(Request::CancelCreation));
+                let request = self
+                    .creation_selected
+                    .clone()
+                    .or_else(|| self.session.creation.active_request.clone())
+                    .or_else(|| self.creation_record().map(|r| r.intent.request.clone()))?;
+                let native_session = self
+                    .session
+                    .creation
+                    .launches
+                    .iter()
+                    .find(|r| r.request == request)
+                    .and_then(|r| r.session.clone());
+                return Some(Effect::Session(Request::CancelCreation {
+                    request,
+                    native_session,
+                }));
             }
             self.creation_open = true;
             if let Some(request) = self
@@ -449,10 +465,49 @@ impl App {
             }
         }
         if let Some(view) = &mut self.diff {
+            if let Some(entry) = &mut view.base_entry {
+                match key.code {
+                    KeyCode::Esc => view.base_entry = None,
+                    KeyCode::Enter => {
+                        view.base_selection = Some(entry.as_bytes().to_vec());
+                        view.base_entry = None;
+                        view.whole = true;
+                        view.snapshot = None;
+                        view.scroll = 0;
+                        return Some(Effect::Session(view.refresh()));
+                    }
+                    KeyCode::Backspace => {
+                        entry.pop();
+                    }
+                    KeyCode::Char('u') if key.modifiers == KeyModifiers::CONTROL => entry.clear(),
+                    KeyCode::Char(c)
+                        if !key
+                            .modifiers
+                            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+                            && entry.len() + c.len_utf8() <= 32768
+                            && !c.is_control() =>
+                    {
+                        entry.push(c)
+                    }
+                    _ => {}
+                }
+                return None;
+            }
             if key.modifiers.is_empty() {
                 match key.code {
                     KeyCode::Esc | KeyCode::Char('f') => {
                         self.diff = None;
+                        return None;
+                    }
+                    KeyCode::Char('w') if !view.loading => {
+                        view.whole = !view.whole;
+                        view.snapshot = None;
+                        view.scroll = 0;
+                        view.horizontal = 0;
+                        return Some(Effect::Session(view.refresh()));
+                    }
+                    KeyCode::Char('b') if !view.loading => {
+                        view.base_entry = Some(String::new());
                         return None;
                     }
                     KeyCode::Char('r') => {
@@ -1015,7 +1070,7 @@ impl App {
         if self.create_form.is_some() {
             "New workspace: Tab fields · Left/Right agent · Enter Create without starting · Ctrl-S Create and start · Esc cancel"
         } else if self.diff.is_some() {
-            "Working: j/k file · arrows scroll · PgUp/PgDn · r refresh · f/Esc back · s stop · q quit · d detach"
+            "j/k file · arrows scroll · w Working/Whole workspace · b local base · r refresh · f/Esc back · s stop · q quit · d detach"
         } else if self.first_prompt.is_some() {
             "First prompt (optional): Enter starts native agent · Esc cancels without launch"
         } else if self.rename_workspace.is_some() {
@@ -1059,6 +1114,12 @@ impl App {
             return None;
         }
 
+        if let Some(entry) = self.diff.as_mut().and_then(|view| view.base_entry.as_mut()) {
+            if entry.len() + text.len() <= 32768 && !text.chars().any(char::is_control) {
+                entry.push_str(&text);
+            }
+            return None;
+        }
         if self.first_prompt.is_some() || self.rename_workspace.is_some() {
             let limit = if self.first_prompt.is_some() {
                 4084

@@ -16,6 +16,12 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Base {
+    pub reference: Vec<u8>,
+    pub commit: String,
+}
+
 const FILE_LIMIT: usize = 1024;
 const CONTENT_LIMIT: usize = 64 * 1024;
 
@@ -43,6 +49,10 @@ impl ChangedFile {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Snapshot {
+    #[serde(default)]
+    pub comparison: String,
+    #[serde(default)]
+    pub save_base: Option<Base>,
     pub workspace: String,
     pub request: String,
     pub captured_millis: u64,
@@ -270,6 +280,8 @@ fn inspect(
     let changed_during_capture = status(&checkout.root, cancelled)? != before;
     let selected = selected.map(|file| file.path.clone());
     Ok(Snapshot {
+        comparison: "Working".into(),
+        save_base: None,
         workspace: workspace.into(),
         request: request.into(),
         checkout,
@@ -285,17 +297,262 @@ fn inspect(
     })
 }
 
+fn revision(root: &Path, reference: &[u8], cancelled: &AtomicBool) -> Result<String, String> {
+    let mut argument = reference.to_vec();
+    argument.extend_from_slice(b"^{commit}");
+    let bytes = crate::git::run_git_command(
+        command(root)
+            .args(["rev-parse", "--verify", "--end-of-options"])
+            .arg(OsStr::from_bytes(&argument)),
+        cancelled,
+    )
+    .map_err(|error| {
+        format!(
+            "Local comparison revision unavailable; press b to select a full local ref: {error}"
+        )
+    })?;
+    let commit = String::from_utf8(bytes).map_err(|_| "Invalid Git commit identity")?;
+    let commit = commit.trim();
+    if !matches!(commit.len(), 40 | 64) || !commit.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err("Invalid Git commit identity".into());
+    }
+    Ok(commit.into())
+}
+
+fn committed_files(
+    root: &Path,
+    ancestor: &str,
+    head: &str,
+    cancelled: &AtomicBool,
+) -> Result<Vec<ChangedFile>, String> {
+    let bytes = crate::git::run_git_command(
+        command(root).args([
+            "diff",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--name-status",
+            "--no-color",
+            "--ignore-submodules=none",
+            "-z",
+            "--find-renames",
+            ancestor,
+            head,
+            "--",
+        ]),
+        cancelled,
+    )?;
+    let mut records = bytes.split(|b| *b == 0).filter(|r| !r.is_empty());
+    let mut changed = Vec::new();
+    while let Some(state) = records.next() {
+        let first = records
+            .next()
+            .ok_or("Incomplete committed file record")?
+            .to_vec();
+        let rename = matches!(state.first(), Some(b'R' | b'C'));
+        let (path, previous) = if rename {
+            (
+                records
+                    .next()
+                    .ok_or("Incomplete committed rename record")?
+                    .to_vec(),
+                Some(first),
+            )
+        } else {
+            (first, None)
+        };
+        changed.push(ChangedFile {
+            path,
+            previous,
+            state: format!(
+                "committed{}",
+                match state.first() {
+                    Some(b'R') => " rename",
+                    Some(b'D') => " deletion",
+                    Some(b'A') => " added",
+                    _ => "",
+                }
+            ),
+            staged: false,
+            unstaged: false,
+            new: false,
+            conflict: false,
+        });
+    }
+    Ok(changed)
+}
+
+fn whole_patch(root: &Path, ancestor: &str, file: &ChangedFile, cancelled: &AtomicBool) -> String {
+    let mut cmd = command(root);
+    cmd.args([
+        "diff",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--no-color",
+        "--find-renames",
+        "--submodule=short",
+        "--ignore-submodules=none",
+        ancestor,
+        "--",
+    ])
+    .arg(OsStr::from_bytes(&file.path));
+    if let Some(previous) = &file.previous {
+        cmd.arg(OsStr::from_bytes(previous));
+    }
+    match crate::git::run_git_command(&mut cmd, cancelled) {
+        Ok(bytes) if bytes.len() <= CONTENT_LIMIT => {
+            if bytes.is_empty() {
+                "No net tracked change against common ancestor (current edits may undo committed work).".into()
+            } else if bytes
+                .windows(b"Subproject commit".len())
+                .any(|w| w == b"Subproject commit")
+            {
+                format!(
+                    "Submodule: nested files are outside this comparison; inspect inside the submodule.\n{}",
+                    content_printable(&bytes)
+                )
+            } else {
+                content_printable(&bytes)
+            }
+        }
+        Ok(_) => "Oversized patch: exceeds 64 KiB; inspect with your own tools".into(),
+        Err(error) => format!("Patch unavailable/oversized: {}", printable(&error)),
+    }
+}
+
+fn inspect_whole(
+    root: &Path,
+    workspace: &str,
+    request: &str,
+    selected: Option<&[u8]>,
+    retained: Option<&Base>,
+    selected_ref: Option<&[u8]>,
+    cancelled: &AtomicBool,
+) -> Result<Snapshot, String> {
+    let reference = selected_ref.or(retained.map(|b| b.reference.as_slice()))
+        .ok_or("Whole workspace needs a selected local base. Press b and enter refs/heads/<branch> or refs/remotes/<remote>/<branch>. Inspection never fetches.")?;
+    if reference.len() > 32768
+        || reference.contains(&0)
+        || !(reference.starts_with(b"refs/heads/") || reference.starts_with(b"refs/remotes/"))
+    {
+        return Err("Select an unambiguous full local ref: refs/heads/<branch> or refs/remotes/<remote>/<branch>; archive/review refs are not comparison bases".into());
+    }
+    let checkout = crate::git::resolve_checkout(root, cancelled)?;
+    let head = revision(&checkout.root, b"HEAD", cancelled)?;
+    let base_commit = revision(&checkout.root, reference, cancelled)?;
+    let ancestors = crate::git::run_git_command(command(&checkout.root).args(["merge-base", "--all", &head, &base_commit]), cancelled)
+        .map_err(|error| format!("No usable common ancestor with selected local base; histories may be unrelated. Press b to select a related base. {error}"))?;
+    let ancestors = String::from_utf8(ancestors).map_err(|_| "Invalid common ancestor")?;
+    let ancestors = ancestors.split_whitespace().collect::<Vec<_>>();
+    if ancestors.len() != 1 {
+        return Err("Ambiguous common ancestors; select another local base with b".into());
+    }
+    let ancestor = ancestors[0];
+    let branch = crate::git::run_git_command(
+        command(&checkout.root).args(["symbolic-ref", "--quiet", "HEAD"]),
+        cancelled,
+    )
+    .map(|b| printable(String::from_utf8_lossy(&b).trim()))
+    .unwrap_or_else(|_| "detached HEAD".into());
+    let before = status(&checkout.root, cancelled)?;
+    let (working, mut omitted) = files(&before)?;
+    let mut combined = committed_files(&checkout.root, ancestor, &head, cancelled)?;
+    for mut file in working {
+        if let Some(old) = combined.iter_mut().find(|old| old.path == file.path) {
+            file.state = format!("{} + {}", old.state, file.state);
+            if file.previous.is_none() {
+                file.previous.clone_from(&old.previous);
+            }
+            *old = file;
+        } else {
+            combined.push(file);
+        }
+    }
+    combined.sort_by(|a, b| a.path.cmp(&b.path));
+    omitted += combined.len().saturating_sub(FILE_LIMIT);
+    combined.truncate(FILE_LIMIT);
+    let chosen = selected
+        .and_then(|path| combined.iter().find(|f| f.path == path))
+        .or_else(|| combined.first());
+    let base = Base {
+        reference: reference.to_vec(),
+        commit: base_commit.clone(),
+    };
+    let comparison = format!(
+        "Whole workspace\nBranch {branch}\nHEAD {head}\nLocal base {} {base_commit}\nCommon ancestor {ancestor}{}",
+        printable(&String::from_utf8_lossy(reference)),
+        retained
+            .filter(|old| old.reference == reference && old.commit != base_commit)
+            .map(|old| format!("\nBase moved since selection {}", old.commit))
+            .unwrap_or_default()
+    );
+    let mut content = format!("{comparison}\n\n");
+    match chosen {
+        None => content.push_str("No workspace changes since common ancestor."),
+        Some(file) if file.new => content.push_str(&format!(
+            "New file (not in index)\n{}",
+            new_content(&checkout.root, &file.path).unwrap_or_else(|e| e)
+        )),
+        Some(file) if file.conflict => content.push_str(&format!(
+            "Conflict: unmerged index; comparison is unresolved. Current file:\n{}",
+            new_content(&checkout.root, &file.path).unwrap_or_else(|e| e)
+        )),
+        Some(file) => {
+            content
+                .push_str("Common ancestor to current working files (commits and current edits)\n");
+            content.push_str(&whole_patch(&checkout.root, ancestor, file, cancelled));
+            if file.staged {
+                content.push_str("\nStaged · HEAD to index\n");
+                content.push_str(&patch(&checkout.root, file, true, cancelled));
+            }
+            if file.unstaged {
+                content.push_str("\nUnstaged · index to working files\n");
+                content.push_str(&patch(&checkout.root, file, false, cancelled));
+            }
+        }
+    }
+    let changed_during_capture = status(&checkout.root, cancelled)? != before
+        || revision(&checkout.root, b"HEAD", cancelled)? != head
+        || revision(&checkout.root, reference, cancelled)? != base_commit
+        || crate::git::run_git_command(
+            command(&checkout.root).args(["symbolic-ref", "--quiet", "HEAD"]),
+            cancelled,
+        )
+        .map(|b| printable(String::from_utf8_lossy(&b).trim()))
+        .unwrap_or_else(|_| "detached HEAD".into())
+            != branch;
+    let selected = chosen.map(|f| f.path.clone());
+    Ok(Snapshot {
+        workspace: workspace.into(),
+        request: request.into(),
+        captured_millis: SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64,
+        checkout,
+        files: combined,
+        omitted,
+        selected,
+        content,
+        changed_during_capture,
+        comparison,
+        save_base: selected_ref.map(|_| base),
+    })
+}
+
 pub struct Job {
     worker: thread::JoinHandle<()>,
     cancelled: Arc<AtomicBool>,
     pub result: Receiver<Response>,
 }
 impl Job {
-    pub fn start(
+    pub fn start_comparison(
         checkout: crate::git::CheckoutIdentity,
         workspace: String,
         request: String,
         selected: Option<Vec<u8>>,
+        whole: bool,
+        retained: Option<Base>,
+        selected_ref: Option<Vec<u8>>,
     ) -> std::io::Result<Self> {
         let cancelled = Arc::new(AtomicBool::new(false));
         let cancellation = cancelled.clone();
@@ -303,13 +560,25 @@ impl Job {
         let worker = thread::Builder::new()
             .name("working-diff".into())
             .spawn(move || {
-                let result = inspect(
-                    &checkout.root,
-                    &workspace,
-                    &request,
-                    selected.as_deref(),
-                    &cancellation,
-                )
+                let result = if whole {
+                    inspect_whole(
+                        &checkout.root,
+                        &workspace,
+                        &request,
+                        selected.as_deref(),
+                        retained.as_ref(),
+                        selected_ref.as_deref(),
+                        &cancellation,
+                    )
+                } else {
+                    inspect(
+                        &checkout.root,
+                        &workspace,
+                        &request,
+                        selected.as_deref(),
+                        &cancellation,
+                    )
+                }
                 .and_then(|snapshot| {
                     if snapshot.checkout != checkout {
                         Err("Checkout identity changed; re-adopt before inspection".into())
@@ -343,6 +612,9 @@ impl Drop for Job {
 }
 
 pub struct View {
+    pub whole: bool,
+    pub base_entry: Option<String>,
+    pub base_selection: Option<Vec<u8>>,
     pub workspace: String,
     pub name: String,
     pub request: String,
@@ -356,6 +628,9 @@ pub struct View {
 impl View {
     pub fn new(workspace: String, name: String) -> Self {
         Self {
+            whole: false,
+            base_entry: None,
+            base_selection: None,
             workspace,
             name,
             request: String::new(),
@@ -372,6 +647,8 @@ impl View {
         self.loading = true;
         self.error = None;
         crate::events::Request::InspectWorking {
+            whole: self.whole,
+            base: self.base_selection.clone(),
             request: self.request.clone(),
             workspace: self.workspace.clone(),
             selected: self.selected.clone(),
@@ -386,6 +663,7 @@ impl View {
         match response.result {
             Err(error) => self.error = Some(printable(&error)),
             Ok(snapshot) => {
+                self.base_selection = None;
                 if self.selected == snapshot.selected {
                     if let Some(old) = &self.snapshot {
                         // Preserve a visible context line where it survives refreshed edits.
@@ -457,6 +735,396 @@ mod tests {
         );
     }
     #[test]
+    fn whole_workspace_includes_commits_and_overlapping_current_edits_without_index_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        git(root, &["init", "-q"]);
+        git(root, &["config", "user.name", "Test"]);
+        git(root, &["config", "user.email", "test@example.com"]);
+        fs::write(root.join("tracked"), "original\n").unwrap();
+        git(root, &["add", "."]);
+        git(root, &["commit", "-qm", "base"]);
+        git(root, &["branch", "base"]);
+        fs::write(root.join("tracked"), "committed\n").unwrap();
+        git(root, &["commit", "-qam", "work"]);
+        fs::write(root.join("tracked"), "staged\n").unwrap();
+        git(root, &["add", "."]);
+        fs::write(root.join("tracked"), "current\n").unwrap();
+        fs::write(root.join("new"), "new text\n").unwrap();
+        let index = fs::read(root.join(".git/index")).unwrap();
+        let snapshot = inspect_whole(
+            root,
+            "w",
+            "r",
+            Some(b"tracked"),
+            None,
+            Some(b"refs/heads/base"),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        assert!(snapshot.content.contains("-original"));
+        assert!(snapshot.content.contains("+current"));
+        assert!(snapshot.files.iter().any(|f| f.path == b"new" && f.new));
+        assert!(snapshot.comparison.contains("Whole workspace"));
+        assert!(snapshot.comparison.contains("HEAD"));
+        assert_eq!(index, fs::read(root.join(".git/index")).unwrap());
+    }
+    #[test]
+    fn whole_refresh_labels_moved_bases_branches_and_ref_failures_without_guessing() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        git(root, &["init", "-q", "-b", "main"]);
+        git(root, &["config", "user.name", "Test"]);
+        git(root, &["config", "user.email", "test@example.com"]);
+        fs::write(root.join("file"), "base\n").unwrap();
+        git(root, &["add", "."]);
+        git(root, &["commit", "-qm", "base"]);
+        git(root, &["branch", "base"]);
+        fs::write(root.join("file"), "committed\n").unwrap();
+        git(root, &["commit", "-qam", "work"]);
+        let first = inspect_whole(
+            root,
+            "w",
+            "first",
+            Some(b"file"),
+            None,
+            Some(b"refs/heads/base"),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        let retained = first.save_base.unwrap();
+        assert!(first.content.contains("-base"));
+        git(root, &["branch", "-f", "base", "HEAD"]);
+        let moved = inspect_whole(
+            root,
+            "w",
+            "moved",
+            None,
+            Some(&retained),
+            None,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        assert!(
+            moved
+                .comparison
+                .contains(&format!("Base moved since selection {}", retained.commit))
+        );
+        assert!(moved.files.is_empty());
+        git(root, &["checkout", "-qb", "switched"]);
+        let switched = inspect_whole(
+            root,
+            "w",
+            "switch",
+            None,
+            Some(&retained),
+            None,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        assert!(switched.comparison.contains("Branch refs/heads/switched"));
+        git(root, &["branch", "-D", "base"]);
+        let missing = inspect_whole(
+            root,
+            "w",
+            "missing",
+            None,
+            Some(&retained),
+            None,
+            &AtomicBool::new(false),
+        )
+        .unwrap_err();
+        assert!(missing.contains("revision unavailable"));
+        for reference in [
+            None,
+            Some(b"main".as_slice()),
+            Some(b"refs/rat/archive/recovery".as_slice()),
+        ] {
+            assert!(
+                inspect_whole(
+                    root,
+                    "w",
+                    "invalid",
+                    None,
+                    None,
+                    reference,
+                    &AtomicBool::new(false)
+                )
+                .is_err()
+            );
+        }
+        git(root, &["checkout", "--orphan", "unrelated"]);
+        git(root, &["commit", "-qm", "unrelated"]);
+        assert!(
+            inspect_whole(
+                root,
+                "w",
+                "unrelated",
+                None,
+                None,
+                Some(b"refs/heads/main"),
+                &AtomicBool::new(false)
+            )
+            .unwrap_err()
+            .contains("unrelated")
+        );
+    }
+
+    #[test]
+    fn whole_rejects_criss_cross_multiple_common_ancestors() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        git(root, &["init", "-q", "-b", "main"]);
+        git(root, &["config", "user.name", "Test"]);
+        git(root, &["config", "user.email", "test@example.com"]);
+        git(root, &["commit", "--allow-empty", "-qm", "initial"]);
+        let output = |args: &[&str]| {
+            let result = Command::new("git")
+                .arg("-C")
+                .arg(root)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(result.status.success());
+            String::from_utf8(result.stdout).unwrap().trim().to_owned()
+        };
+        let original = output(&["rev-parse", "HEAD"]);
+        let tree = output(&["rev-parse", "HEAD^{tree}"]);
+        let left = output(&["commit-tree", &tree, "-p", &original, "-m", "left"]);
+        let right = output(&["commit-tree", &tree, "-p", &original, "-m", "right"]);
+        let merge_left = output(&[
+            "commit-tree",
+            &tree,
+            "-p",
+            &left,
+            "-p",
+            &right,
+            "-m",
+            "merge left",
+        ]);
+        let merge_right = output(&[
+            "commit-tree",
+            &tree,
+            "-p",
+            &right,
+            "-p",
+            &left,
+            "-m",
+            "merge right",
+        ]);
+        git(root, &["update-ref", "refs/heads/main", &merge_left]);
+        git(root, &["update-ref", "refs/heads/base", &merge_right]);
+        let error = inspect_whole(
+            root,
+            "w",
+            "ambiguous",
+            None,
+            None,
+            Some(b"refs/heads/base"),
+            &AtomicBool::new(false),
+        )
+        .unwrap_err();
+        assert!(error.contains("Ambiguous common ancestors"));
+    }
+
+    #[test]
+    fn dashboard_switches_explicitly_selects_base_and_reopens_working_at_both_sizes() {
+        use crate::{
+            app::App,
+            events::{Effect, Observation, Request},
+            ui::Ui,
+        };
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        use ratatui::{Terminal, backend::TestBackend};
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        git(root, &["init", "-q", "-b", "main"]);
+        git(root, &["config", "user.name", "Test"]);
+        git(root, &["config", "user.email", "test@example.com"]);
+        fs::write(root.join("file"), "base\n").unwrap();
+        git(root, &["add", "."]);
+        git(root, &["commit", "-qm", "base"]);
+        git(root, &["branch", "base"]);
+        fs::write(root.join("file"), "committed\n").unwrap();
+        git(root, &["commit", "-qam", "work"]);
+        let mut app = App::new(root.into());
+        app.workspace_selected = Some("w".into());
+        app.session
+            .registry
+            .workspaces
+            .push(crate::registry::Workspace {
+                creation: None,
+                id: "w".into(),
+                task: "t".into(),
+                legacy_tasks: vec![],
+                name: "coding".into(),
+                project: None,
+                path: None,
+                checkout: None,
+                sessions: vec![],
+            });
+        let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        let complete = |app: &mut App, effect| {
+            let Some(Effect::Session(Request::InspectWorking {
+                request,
+                workspace,
+                selected,
+                whole,
+                base,
+            })) = effect
+            else {
+                panic!("missing inspection")
+            };
+            let result = if whole {
+                inspect_whole(
+                    root,
+                    &workspace,
+                    &request,
+                    selected.as_deref(),
+                    None,
+                    base.as_deref(),
+                    &AtomicBool::new(false),
+                )
+            } else {
+                inspect(
+                    root,
+                    &workspace,
+                    &request,
+                    selected.as_deref(),
+                    &AtomicBool::new(false),
+                )
+            };
+            app.observe_session(Observation {
+                working_diff: Some(Response {
+                    workspace,
+                    request,
+                    result,
+                }),
+                ..app.session.clone()
+            });
+        };
+        let effect = app.input(key(KeyCode::Char('f')));
+        complete(&mut app, effect);
+        assert!(!app.diff.as_ref().unwrap().whole);
+        let effect = app.input(key(KeyCode::Char('w')));
+        complete(&mut app, effect);
+        assert!(
+            app.diff
+                .as_ref()
+                .unwrap()
+                .error
+                .as_ref()
+                .unwrap()
+                .contains("selected local base")
+        );
+        app.input(key(KeyCode::Char('b')));
+        app.paste("refs/heads/base".into());
+        let effect = app.input(key(KeyCode::Enter));
+        complete(&mut app, effect);
+        assert!(app.diff.as_ref().unwrap().whole);
+        assert!(
+            app.diff
+                .as_ref()
+                .unwrap()
+                .snapshot
+                .as_ref()
+                .unwrap()
+                .content
+                .contains("+committed")
+        );
+        for (cols, rows) in [(160, 40), (60, 18)] {
+            app.diff.as_mut().unwrap().scroll = 0;
+            let mut terminal = Terminal::new(TestBackend::new(cols, rows)).unwrap();
+            terminal
+                .draw(|frame| Ui::default().draw(frame, &app))
+                .unwrap();
+            let text = terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|c| c.symbol())
+                .collect::<String>();
+            assert!(text.contains("Whole workspace"), "{text}");
+            assert!(text.contains("Branch refs/heads/main"), "{text}");
+            assert!(
+                text.contains("b base") || text.contains("b local base"),
+                "{text}"
+            );
+            assert!(text.contains("Snapshot"), "{text}");
+            for _ in 0..12 {
+                app.input(key(KeyCode::Down));
+            }
+            terminal
+                .draw(|frame| Ui::default().draw(frame, &app))
+                .unwrap();
+            let text = terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|c| c.symbol())
+                .collect::<String>();
+            assert!(text.contains("+committed"), "{text}");
+        }
+        app.input(key(KeyCode::Esc));
+        let effect = app.input(key(KeyCode::Char('f')));
+        complete(&mut app, effect);
+        let view = app.diff.as_ref().unwrap();
+        assert!(!view.whole);
+        assert!(view.snapshot.as_ref().unwrap().files.is_empty());
+    }
+
+    #[test]
+    fn whole_preserves_committed_renames_deletions_binary_and_unix_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        git(root, &["init", "-q"]);
+        git(root, &["config", "user.name", "Test"]);
+        git(root, &["config", "user.email", "test@example.com"]);
+        fs::write(root.join("before"), "rename content\n").unwrap();
+        fs::write(root.join("deleted"), "deleted content\n").unwrap();
+        fs::write(root.join("binary"), [0, 1, 2]).unwrap();
+        git(root, &["add", "."]);
+        git(root, &["commit", "-qm", "base"]);
+        git(root, &["branch", "base"]);
+        git(root, &["mv", "before", "after"]);
+        git(root, &["rm", "deleted"]);
+        fs::write(root.join("binary"), [0, 3, 4]).unwrap();
+        git(root, &["commit", "-qam", "workspace changes"]);
+        // APFS rejects invalid UTF-8 filenames (EILSEQ); other Unix filesystems
+        // additionally exercise non-UTF-8 bytes through the same public snapshot.
+        let raw: &[u8] = if cfg!(target_os = "macos") {
+            b"new\nfile"
+        } else {
+            b"new\xff\nfile"
+        };
+        fs::write(root.join(OsStr::from_bytes(raw)), "raw path content\n").unwrap();
+        let index = fs::read(root.join(".git/index")).unwrap();
+        for (path, expected) in [
+            (b"after".as_slice(), "rename from before"),
+            (b"deleted".as_slice(), "-deleted content"),
+            (b"binary".as_slice(), "Binary files"),
+            (raw, "raw path content"),
+        ] {
+            let whole = inspect_whole(
+                root,
+                "w",
+                "committed-edge",
+                Some(path),
+                None,
+                Some(b"refs/heads/base"),
+                &AtomicBool::new(false),
+            )
+            .unwrap();
+            assert_eq!(whole.selected.as_deref(), Some(path));
+            assert!(whole.content.contains(expected), "{}", whole.content);
+            assert!(whole.files.iter().any(|f| f.path == raw && f.new));
+        }
+        assert_eq!(index, fs::read(root.join(".git/index")).unwrap());
+    }
+
+    #[test]
     fn oversized_file_lists_remain_bounded_with_an_explicit_omission_count() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
@@ -481,6 +1149,7 @@ mod tests {
         fs::write(root.join(".gitattributes"), "tracked diff=untrusted\n").unwrap();
         git(root, &["add", "."]);
         git(root, &["commit", "-qm", "initial"]);
+        git(root, &["branch", "base"]);
         let program = root.join("program");
         fs::write(
             &program,
@@ -499,6 +1168,17 @@ mod tests {
         fs::write(root.join("tracked"), "changed\n").unwrap();
         let snapshot = inspect(root, "w", "r", Some(b"tracked"), &AtomicBool::new(false)).unwrap();
         assert!(snapshot.content.contains("+changed"));
+        let whole = inspect_whole(
+            root,
+            "w",
+            "whole",
+            Some(b"tracked"),
+            None,
+            Some(b"refs/heads/base"),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        assert!(whole.content.contains("+changed"));
         assert!(
             !root.join("program.called").exists(),
             "inspection ran configured repository code"
@@ -570,6 +1250,7 @@ mod tests {
                 request,
                 workspace,
                 selected,
+                ..
             })) = effect
             else {
                 panic!("comparison request missing")
@@ -667,6 +1348,7 @@ mod tests {
         fs::write(root.join("binary"), [0, 1, 2]).unwrap();
         git(root, &["add", "."]);
         git(root, &["commit", "-qm", "initial"]);
+        git(root, &["branch", "base"]);
         git(root, &["mv", "old", "renamed"]);
         fs::remove_file(root.join("delete")).unwrap();
         fs::write(root.join("binary"), [0, 3, 4]).unwrap();
@@ -690,6 +1372,23 @@ mod tests {
         assert!(binary.content.contains("Binary files"));
         let large = inspect(root, "w", "r", Some(b"large"), &AtomicBool::new(false)).unwrap();
         assert!(large.content.contains("Oversized"));
+        for (path, expected) in [
+            (b"renamed".as_slice(), "rename from old"),
+            (b"delete".as_slice(), "-delete me"),
+            (b"binary".as_slice(), "Binary files"),
+        ] {
+            let whole = inspect_whole(
+                root,
+                "w",
+                "edge",
+                Some(path),
+                None,
+                Some(b"refs/heads/base"),
+                &AtomicBool::new(false),
+            )
+            .unwrap();
+            assert!(whole.content.contains(expected), "{}", whole.content);
+        }
         // A real unmerged index, independent of porcelain parser implementation.
         git(root, &["reset", "--hard", "HEAD"]);
         git(root, &["checkout", "-qb", "other"]);
@@ -716,6 +1415,18 @@ mod tests {
                 .any(|file| file.path == b"old" && file.conflict)
         );
         assert!(conflict.content.contains("<<<<<<< HEAD"));
+        let whole = inspect_whole(
+            root,
+            "w",
+            "conflict",
+            Some(b"old"),
+            None,
+            Some(b"refs/heads/base"),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        assert!(whole.content.contains("comparison is unresolved"));
+        assert!(whole.content.contains("<<<<<<< HEAD"));
     }
     #[test]
     fn working_inspection_preserves_index_and_includes_overlapping_and_new_changes() {

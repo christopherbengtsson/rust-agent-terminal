@@ -66,6 +66,7 @@ pub struct Preview {
 pub struct View {
     pub launches: Vec<LaunchReceipt>,
     pub retry_request: Option<String>,
+    pub active_request: Option<String>,
     pub pending: bool,
     pub preview: Option<Preview>,
     pub records: Vec<Record>,
@@ -74,13 +75,19 @@ pub struct View {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LaunchReceipt {
     pub request: String,
+    pub session: Option<String>,
+    pub lifecycle: crate::events::Lifecycle,
     pub result: Option<crate::events::LaunchResult>,
     pub pending: bool,
     pub error: Option<String>,
 }
 impl Intent {
     pub fn validate(&self) -> Result<(), String> {
-        uuid::Uuid::parse_str(&self.request).map_err(|_| "Invalid creation request UUID")?;
+        let request =
+            uuid::Uuid::parse_str(&self.request).map_err(|_| "Invalid creation request UUID")?;
+        if request.to_string() != self.request {
+            return Err("Creation request must be a canonical UUID".into());
+        }
         if self.base.is_empty()
             || self.base.len() > 1024
             || self.base.starts_with('-')
@@ -117,8 +124,11 @@ pub fn path(bytes: &[u8]) -> PathBuf {
     PathBuf::from(std::ffi::OsString::from_vec(bytes.to_vec()))
 }
 fn text(bytes: Vec<u8>) -> Result<String, String> {
+    let mut bytes = bytes;
+    if bytes.last() == Some(&b'\n') {
+        bytes.pop();
+    }
     String::from_utf8(bytes)
-        .map(|s| s.trim().to_owned())
         .map_err(|_| "Git reference is not UTF-8; choose a supported explicit base".into())
 }
 fn git(repo: &Path, args: &[&str], cancel: &AtomicBool) -> Result<String, String> {
@@ -142,7 +152,7 @@ pub enum Work {
         repository: PathBuf,
         managed_root: PathBuf,
     },
-    Prepare(Record, bool),
+    Prepare(Record),
     Create(Record),
 }
 pub enum ResultEvent {
@@ -184,8 +194,8 @@ impl Job {
                         result.managed_root = crate::session::path_bytes(&managed_root);
                         ResultEvent::Preview(result)
                     }
-                    Work::Prepare(mut record, local) => {
-                        prepare(&mut record, local, &cancellation);
+                    Work::Prepare(mut record) => {
+                        prepare(&mut record, &cancellation);
                         ResultEvent::Record(Box::new(record))
                     }
                     Work::Create(mut record) => {
@@ -253,7 +263,7 @@ fn preview(project: String, repo: &Path, cancel: &AtomicBool) -> Preview {
     }
     result
 }
-fn prepare(record: &mut Record, _local: bool, cancel: &AtomicBool) {
+fn prepare(record: &mut Record, cancel: &AtomicBool) {
     let result = (|| -> Result<(), String> {
         let repo = path(&record.repository);
         let identity = crate::git::resolve_checkout(&repo, cancel)?;
@@ -371,7 +381,9 @@ fn prepare(record: &mut Record, _local: bool, cancel: &AtomicBool) {
 }
 
 fn create(record: &mut Record, cancel: &AtomicBool) {
+    let mut reconciled = false;
     let result = (|| -> Result<CheckoutIdentity, String> {
+        record.intent.validate()?;
         let repo = path(&record.repository);
         let folder = path(&record.intent.path);
         let identity = crate::git::resolve_checkout(&repo, cancel)?;
@@ -383,7 +395,31 @@ fn create(record: &mut Record, cancel: &AtomicBool) {
             .commit
             .as_deref()
             .ok_or("No committed creation base")?;
+        if !matches!(commit.len(), 40 | 64) || !commit.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err("Saved base commit is invalid; creation refused".into());
+        }
         let branch = &record.intent.branch;
+        let branch_ref = format!("refs/heads/{branch}");
+        let claim_ref = format!("refs/rat/creation/{}", record.intent.request);
+        let claimed = git(&repo, &["rev-parse", "--verify", &claim_ref], cancel).ok();
+        let branch_head = git(&repo, &["rev-parse", "--verify", &branch_ref], cancel).ok();
+        if claimed.as_deref().is_some_and(|head| head != commit) {
+            return Err("Creation claim changed; retained without mutation".into());
+        }
+        if branch_head.is_some()
+            && (claimed.as_deref() != Some(commit) || branch_head.as_deref() != Some(commit))
+        {
+            return Err(
+                "Branch exists without this operation's matching claim; retained without mutation"
+                    .into(),
+            );
+        }
+        if claimed.is_some()
+            && (git(&repo, &["symbolic-ref", "--quiet", &branch_ref], cancel).is_ok()
+                || git(&repo, &["symbolic-ref", "--quiet", &claim_ref], cancel).is_ok())
+        {
+            return Err("Claimed branch is now symbolic; retained without mutation".into());
+        }
         git(&repo, &["check-ref-format", "--branch", branch], cancel)?;
         if folder.exists() {
             // Reconcile a lost completion only for the exact durable target and pinned Git facts.
@@ -394,22 +430,30 @@ fn create(record: &mut Record, cancel: &AtomicBool) {
                 && actual == *branch
                 && head == commit
                 && record.phase == Phase::Creating
+                && claimed.as_deref() == Some(commit)
+                && folder.canonicalize().ok().as_ref() == Some(&checkout.root)
             {
+                reconciled = true;
                 return Ok(checkout);
             }
             return Err("Folder exists; retained without modification. Choose a new request/folder or reconcile the original creation".into());
         }
-        if git(
-            &repo,
-            &["show-ref", "--verify", &format!("refs/heads/{branch}")],
-            cancel,
-        )
-        .is_ok()
-        {
-            return Err(
-                "Branch already exists; retained without modification. Choose another branch"
-                    .into(),
-            );
+        if claimed.is_none() || branch_head.is_none() {
+            let claim = if claimed.is_none() {
+                format!("create {claim_ref} {commit}\n")
+            } else {
+                format!("verify {claim_ref} {commit}\n")
+            };
+            let transaction =
+                format!("start\ncreate {branch_ref} {commit}\n{claim}prepare\ncommit\n");
+            crate::git::run_git_command_input(
+                std::process::Command::new("git")
+                    .arg("-C")
+                    .arg(&repo)
+                    .args(["update-ref", "--no-deref", "--stdin"]),
+                cancel,
+                transaction.as_bytes(),
+            )?;
         }
         if cancel.load(Ordering::Acquire) {
             return Err("Creation cancelled before Git mutation".into());
@@ -421,9 +465,9 @@ fn create(record: &mut Record, cancel: &AtomicBool) {
         command
             .arg("-C")
             .arg(&repo)
-            .args(["worktree", "add", "-b", branch, "--"])
+            .args(["worktree", "add", "--"])
             .arg(&folder)
-            .arg(commit);
+            .arg(branch);
         let parent = folder
             .parent()
             .ok_or("Workspace parent unavailable")?
@@ -440,13 +484,22 @@ fn create(record: &mut Record, cancel: &AtomicBool) {
             cancel,
             std::time::Duration::from_secs(30),
         )?;
-        crate::git::resolve_checkout(&folder, cancel)
+        let checkout = crate::git::resolve_checkout(&folder, cancel)?;
+        if git(&folder, &["rev-parse", "HEAD"], cancel)? != commit
+            || folder.canonicalize().ok().as_ref() != Some(&checkout.root)
+        {
+            return Err(
+                "Created checkout or branch changed during mutation; retained without launch"
+                    .into(),
+            );
+        }
+        Ok(checkout)
     })();
     match result {
         Ok(checkout) => {
             record.checkout = Some(checkout);
             record.phase = Phase::Created;
-            record.message="Workspace created. Start remains an explicit action if launch fails or this operation is recovered.".into();
+            record.message=if reconciled {"Existing operation checkout reconciled; working files retained as found. Start remains explicit."}else{"Workspace created. Start remains an explicit action if launch fails or this operation is recovered."}.into();
         }
         Err(error) => {
             record.phase = Phase::Failed;
@@ -534,8 +587,48 @@ impl Coordinator {
         directory: &Path,
     ) {
         use crate::events::Request;
-        if matches!(request, Request::CancelCreation) {
-            self.cancel();
+        if let Request::CancelCreation { request, .. } = request {
+            if let Some(record) = self
+                .retry_record
+                .as_mut()
+                .filter(|r| r.intent.request == request)
+            {
+                record.launch_cancelled = true;
+                if record.checkout.is_none() {
+                    record.phase = Phase::Cancelled;
+                }
+                record.message="Cancelled intent retained; G records this same cancellation after storage repair".into();
+                if self
+                    .view
+                    .active_request
+                    .as_ref()
+                    .is_none_or(|current| *current == request)
+                {
+                    self.launch_authorized = false;
+                    self.cancelled = true;
+                }
+                return;
+            }
+            if self.view.active_request.as_ref() == Some(&request) {
+                self.cancel();
+            } else if !self.busy()
+                && let Some(mut record) = self
+                    .view
+                    .records
+                    .iter()
+                    .find(|r| r.intent.request == request)
+                    .cloned()
+            {
+                self.cancelled = true;
+                self.launch_authorized = false;
+                record.launch_cancelled = true;
+                if record.checkout.is_none() {
+                    record.phase = Phase::Cancelled;
+                }
+                record.message="Creation launch intent cancelled; completed Git work retained. Native stop has its own observed outcome.".into();
+                self.view.active_request = Some(request);
+                self.save(record, storage);
+            }
             return;
         }
         self.view.error = None;
@@ -577,6 +670,7 @@ impl Coordinator {
                     return;
                 }
                 self.launch_authorized = intent.start;
+                self.view.active_request = Some(intent.request.clone());
                 if let Err(error) = intent.validate() {
                     self.view.error = Some(error);
                     return;
@@ -610,12 +704,17 @@ impl Coordinator {
                 self.save(record, storage);
             }
             Request::RecoverCreation { request, local } => {
+                self.launch_authorized = false;
+                self.view.active_request = Some(request.clone());
                 if self
                     .retry_record
                     .as_ref()
                     .is_some_and(|record| record.intent.request == request)
                 {
-                    let record = self.retry_record.take().unwrap();
+                    let mut record = self.retry_record.take().unwrap();
+                    if !local && record.intent.start {
+                        record.launch_cancelled = true;
+                    }
                     self.view.retry_request = None;
                     self.save(record, storage);
                     return;
@@ -632,6 +731,10 @@ impl Coordinator {
                         Some("Creation outcome unknown; do not repeat with a new identity".into());
                     return;
                 };
+                if local && record.phase != Phase::LocalChoice {
+                    self.view.error=Some("Local fallback is available only after a failed fetch; query or recover with G".into());
+                    return;
+                }
                 let local_choice = record.phase == Phase::LocalChoice && local;
                 self.launch_authorized =
                     local_choice && record.intent.start && !record.launch_cancelled;
@@ -654,12 +757,12 @@ impl Coordinator {
                         "Fetch failed. Choose explicit local fallback to use the displayed commit"
                             .into(),
                     ),
-                    Phase::Requested => self.work(Work::Prepare(record, false)),
+                    Phase::Requested => self.work(Work::Prepare(record)),
                     _ if record.commit.is_some() => {
                         record.phase = Phase::Creating;
                         self.save(record, storage);
                     }
-                    _ => self.work(Work::Prepare(record, false)),
+                    _ => self.work(Work::Prepare(record)),
                 }
             }
             _ => {}
@@ -694,6 +797,12 @@ impl Coordinator {
                 let (_, mut record) = self.saving.take().unwrap();
                 match result {
                     Err(error) => {
+                        if self.cancelled {
+                            record.launch_cancelled = true;
+                            if record.checkout.is_none() {
+                                record.phase = Phase::Cancelled;
+                            }
+                        }
                         self.view.retry_request = Some(record.intent.request.clone());
                         self.retry_record = Some(record);
                         self.view.error = Some(format!(
@@ -727,7 +836,7 @@ impl Coordinator {
                             }
                         } else {
                             match record.phase {
-                                Phase::Requested => self.work(Work::Prepare(record, false)),
+                                Phase::Requested => self.work(Work::Prepare(record)),
                                 Phase::Ready => {
                                     record.phase = Phase::Creating;
                                     record.message =
@@ -795,6 +904,9 @@ impl Coordinator {
         }
 
         self.view.pending = self.busy();
+        if !self.view.pending {
+            self.view.active_request = None;
+        }
     }
 }
 
@@ -870,7 +982,7 @@ mod tests {
         std::fs::write(repo.path().join("tracked"), "unstaged\n").unwrap();
         std::fs::write(repo.path().join("untracked"), "private\n").unwrap();
         let before = command(repo.path(), &["status", "--porcelain"]);
-        let mut prepared = result(Work::Prepare(record(repo.path(), &folder), false));
+        let mut prepared = result(Work::Prepare(record(repo.path(), &folder)));
         assert_eq!(prepared.phase, Phase::Ready);
         let pinned = prepared.commit.clone().unwrap();
         // The branch can move after preparation; creation must use its saved commit.
@@ -881,6 +993,17 @@ mod tests {
         let created = result(Work::Create(prepared.clone()));
         assert_eq!(created.phase, Phase::Created, "{}", created.message);
         assert_eq!(command(&folder, &["rev-parse", "HEAD"]), pinned);
+        assert_eq!(
+            command(
+                repo.path(),
+                &[
+                    "rev-parse",
+                    "--verify",
+                    &format!("refs/rat/creation/{}", created.intent.request)
+                ]
+            ),
+            pinned
+        );
         assert_eq!(
             std::fs::read_to_string(folder.join("tracked")).unwrap(),
             "original\n"
@@ -925,7 +1048,7 @@ mod tests {
         let folder = temp.path().join("existing");
         std::fs::create_dir(&folder).unwrap();
         std::fs::write(folder.join("keep"), "untouched").unwrap();
-        let result = result(Work::Prepare(record(repo.path(), &folder), false));
+        let result = result(Work::Prepare(record(repo.path(), &folder)));
         assert_eq!(result.phase, Phase::Failed);
         assert_eq!(
             std::fs::read_to_string(folder.join("keep")).unwrap(),
@@ -934,13 +1057,231 @@ mod tests {
         let folder = temp.path().join("absent");
         let mut intent = record(repo.path(), &folder);
         intent.intent.branch = "other".into();
-        let outcome = super::tests::result(Work::Prepare(intent, false));
+        let outcome = super::tests::result(Work::Prepare(intent));
         assert_eq!(outcome.phase, Phase::Failed);
         assert!(!folder.exists());
         assert_eq!(
             command(repo.path(), &["branch", "--list"]).lines().count(),
             2
         );
+    }
+    #[test]
+    fn remote_creation_fetches_a_new_commit_without_moving_the_original_checkout() {
+        let repo = repository();
+        let temp = tempfile::tempdir().unwrap();
+        let remote = temp.path().join("remote.git");
+        std::fs::create_dir(&remote).unwrap();
+        command(&remote, &["init", "--bare", "-b", "main"]);
+        command(
+            repo.path(),
+            &["remote", "add", "origin", remote.to_str().unwrap()],
+        );
+        command(repo.path(), &["push", "-u", "origin", "main"]);
+        command(
+            repo.path(),
+            &[
+                "symbolic-ref",
+                "refs/remotes/origin/HEAD",
+                "refs/remotes/origin/main",
+            ],
+        );
+        let original = command(repo.path(), &["rev-parse", "HEAD"]);
+        let index = std::fs::read(repo.path().join(".git/index")).unwrap();
+        let updater = temp.path().join("updater");
+        command(
+            temp.path(),
+            &["clone", remote.to_str().unwrap(), updater.to_str().unwrap()],
+        );
+        command(
+            &updater,
+            &[
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "remote advance",
+            ],
+        );
+        command(&updater, &["push", "origin", "main"]);
+        let expected = command(&updater, &["rev-parse", "HEAD"]);
+        assert_ne!(expected, original);
+        let ResultEvent::Preview(preview) = worker(Work::Preview {
+            project: "project".into(),
+            repository: repo.path().into(),
+            managed_root: temp.path().join("managed"),
+        }) else {
+            panic!("preview expected")
+        };
+        assert_eq!(preview.default_base.as_deref(), Some("origin/main"));
+        let folder = temp.path().join("created");
+        let mut requested = record(repo.path(), &folder);
+        requested.intent.base = "origin/main".into();
+        let mut pinned = result(Work::Prepare(requested));
+        assert_eq!(pinned.phase, Phase::Ready, "{}", pinned.message);
+        assert_eq!(pinned.commit.as_deref(), Some(expected.as_str()));
+        assert_eq!(pinned.base_ref.as_deref(), Some("refs/remotes/origin/main"));
+        pinned.phase = Phase::Creating;
+        let created = result(Work::Create(pinned));
+        assert_eq!(created.phase, Phase::Created, "{}", created.message);
+        assert_eq!(command(&folder, &["rev-parse", "HEAD"]), expected);
+        assert_eq!(command(repo.path(), &["rev-parse", "HEAD"]), original);
+        assert_eq!(
+            std::fs::read(repo.path().join(".git/index")).unwrap(),
+            index
+        );
+    }
+    #[test]
+    fn same_request_finishes_its_claimed_branch_after_checkout_creation_was_interrupted() {
+        let repo = repository();
+        let temp = tempfile::tempdir().unwrap();
+        let folder = temp.path().join("workspace");
+        let mut pending = result(Work::Prepare(record(repo.path(), &folder)));
+        assert_eq!(pending.phase, Phase::Ready);
+        pending.phase = Phase::Creating;
+        let commit = pending.commit.as_deref().unwrap();
+        // A committed creation claim is Git's own atomic branch/operation pair;
+        // this reproduces restart after that pair committed but before checkout.
+        command(
+            repo.path(),
+            &[
+                "update-ref",
+                &format!("refs/heads/{}", pending.intent.branch),
+                commit,
+            ],
+        );
+        command(
+            repo.path(),
+            &[
+                "update-ref",
+                &format!("refs/rat/creation/{}", pending.intent.request),
+                commit,
+            ],
+        );
+        let created = result(Work::Create(pending.clone()));
+        assert_eq!(created.phase, Phase::Created, "{}", created.message);
+        assert_eq!(command(&folder, &["rev-parse", "HEAD"]), commit);
+        let repeated = result(Work::Create(pending));
+        assert_eq!(repeated.phase, Phase::Created);
+        assert_eq!(
+            command(repo.path(), &["worktree", "list", "--porcelain"])
+                .matches("worktree ")
+                .count(),
+            2
+        );
+    }
+    #[test]
+    fn recovering_a_failed_intent_write_disarms_the_previously_requested_native_launch() {
+        for cancel_before_recovery in [false, true] {
+            let repo = repository();
+            let state = tempfile::tempdir().unwrap();
+            let folder = state.path().join("workspace");
+            let (storage, _) = crate::persistence::Worker::start(state.path()).unwrap();
+            let mut coordinator = Coordinator::new(&storage);
+            let drive = |coordinator: &mut Coordinator| {
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+                loop {
+                    while let Ok(event) = storage.events.try_recv() {
+                        coordinator.complete(&event, &storage);
+                    }
+                    coordinator.advance(&storage);
+                    if !coordinator.busy() {
+                        break;
+                    }
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "{:?}",
+                        coordinator.view
+                    );
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+            };
+            drive(&mut coordinator);
+            let root = repo.path().canonicalize().unwrap();
+            let common = root.join(".git");
+            let operation = uuid::Uuid::new_v4();
+            storage
+                .commands
+                .send(crate::persistence::Command::Register(
+                    operation,
+                    CheckoutIdentity {
+                        root,
+                        git_dir: common.clone(),
+                        common_dir: common,
+                    },
+                ))
+                .unwrap();
+            let registry = loop {
+                let event = storage
+                    .events
+                    .recv_timeout(std::time::Duration::from_secs(3))
+                    .unwrap();
+                if let crate::persistence::Completion::Registered(id, registry) = event
+                    && id == operation
+                {
+                    break registry.unwrap();
+                }
+            };
+            let mut intent = record(repo.path(), &folder).intent;
+            intent.project = registry.projects[0].id.clone();
+            intent.start = true;
+            std::fs::write(state.path().join("proof-storage-registry"), "error").unwrap();
+            coordinator.handle(
+                crate::events::Request::CreateWorkspace(intent.clone()),
+                &registry,
+                &storage,
+                state.path(),
+            );
+            drive(&mut coordinator);
+            assert_eq!(
+                coordinator.view.retry_request.as_deref(),
+                Some(intent.request.as_str())
+            );
+            assert!(!folder.exists());
+            if cancel_before_recovery {
+                coordinator.handle(
+                    crate::events::Request::CancelCreation {
+                        request: intent.request.clone(),
+                        native_session: None,
+                    },
+                    &registry,
+                    &storage,
+                    state.path(),
+                );
+            }
+            std::fs::remove_file(state.path().join("proof-storage-registry")).unwrap();
+            coordinator.handle(
+                crate::events::Request::RecoverCreation {
+                    request: intent.request,
+                    local: false,
+                },
+                &registry,
+                &storage,
+                state.path(),
+            );
+            drive(&mut coordinator);
+            if cancel_before_recovery {
+                assert!(coordinator.launch.is_none());
+                assert!(!folder.exists());
+                assert_eq!(
+                    coordinator.view.records.last().unwrap().phase,
+                    Phase::Cancelled
+                );
+            } else {
+                let completed = coordinator
+                    .launch
+                    .take()
+                    .expect("created workspace handoff");
+                assert_eq!(completed.phase, Phase::Created, "{}", completed.message);
+                assert!(
+                    !completed.intent.start,
+                    "reconciliation must never rearm an earlier launch"
+                );
+                assert!(folder.join(".git").exists());
+            }
+        }
     }
 }
 
@@ -1007,7 +1348,7 @@ mod fetch_tests {
             message: String::new(),
             checkout: None,
         };
-        let job = Job::start(Work::Prepare(record, false)).unwrap();
+        let job = Job::start(Work::Prepare(record)).unwrap();
         let ResultEvent::Record(record) = job
             .result
             .recv_timeout(std::time::Duration::from_secs(5))
