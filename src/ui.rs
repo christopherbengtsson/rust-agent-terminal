@@ -3,7 +3,7 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::Line,
-    widgets::{Block, List, ListItem, ListState, Paragraph, Wrap},
+    widgets::{Block, Clear, List, ListItem, ListState, Paragraph, Wrap},
 };
 
 use crate::app::App;
@@ -489,6 +489,7 @@ impl Ui {
             status,
         );
         if let Some((_, text)) = &app.first_prompt {
+            frame.render_widget(Clear, session);
             frame.render_widget(
                 Paragraph::new(visible(text))
                     .block(
@@ -499,6 +500,7 @@ impl Ui {
                 session,
             );
         } else if let Some((_, text)) = &app.rename_workspace {
+            frame.render_widget(Clear, session);
             frame.render_widget(
                 Paragraph::new(visible(text))
                     .block(Block::bordered().title(
