@@ -2660,10 +2660,12 @@ fn storage_saturation_keeps_navigation_retry_stop_and_exact_retained_bytes() {
     let persistent = controller.request(serde_json::json!("Screen"));
     assert!(!persistent["storage_error"].is_null());
     std::fs::remove_file(fault).unwrap();
-    controller.request(serde_json::json!("RetryStorage"));
+    let mut repaired_response = Some(controller.request(serde_json::json!("RetryStorage")));
     let deadline = Instant::now() + Duration::from_secs(6);
     let final_state = loop {
-        let state = controller.request(serde_json::json!("Screen"));
+        let state = repaired_response
+            .take()
+            .unwrap_or_else(|| controller.request(serde_json::json!("Screen")));
         if state["accepted_bytes"] == state["durable_bytes"]
             && state["capture_pending_bytes"] == 0
             && state["storage_error"].is_null()

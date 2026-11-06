@@ -164,6 +164,7 @@ impl Worker {
                         }
                     };
                     status.lock().unwrap().operation = None;
+                    store.publish(&mut status.lock().unwrap());
                     let event = result.unwrap_or_else(|e: Box<dyn std::error::Error + Send + Sync>| Completion::Error(kind, e.to_string()));
                     if tx.send(event).is_err() { break; }
                 }
@@ -191,13 +192,7 @@ impl Worker {
                     status.lock().unwrap().operation = None;
                     since = Instant::now();
                 }
-                let mut p = status.lock().unwrap();
-                p.written = store.active.as_ref().map_or(0, |(_, _, offset)| *offset);
-                p.durable = store.total;
-                p.last_flush_micros = store.sync_micros;
-                p.flush_count = store.completions;
-                p.completed_millis = store.completed_millis;
-                p.accepted_to_durable_millis = store.accepted_to_durable_millis;
+                store.publish(&mut status.lock().unwrap());
             }
         })?;
         let restored = ready.recv()?.map_err(io::Error::other)?;
@@ -228,6 +223,14 @@ struct Store {
     accepted_to_durable_millis: u64,
 }
 impl Store {
+    fn publish(&self, progress: &mut Progress) {
+        progress.written = self.active.as_ref().map_or(0, |(_, _, offset)| *offset);
+        progress.durable = self.total;
+        progress.last_flush_micros = self.sync_micros;
+        progress.flush_count = self.completions;
+        progress.completed_millis = self.completed_millis;
+        progress.accepted_to_durable_millis = self.accepted_to_durable_millis;
+    }
     fn open(directory: PathBuf) -> Result<Self> {
         let path = directory.join("history.sqlite3");
         // Create privately before SQLite opens it; the parent is already validated.
