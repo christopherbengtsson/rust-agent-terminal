@@ -99,6 +99,10 @@ fn dashboard_adopts_launches_and_interacts_without_discovery_mutation() {
     wait("Adopted");
     writer.write_all(b"l").unwrap();
     wait("fixture>");
+    writer.write_all(b"status-working\r").unwrap();
+    wait("semantic status: working");
+    writer.write_all(b"status-wrong-session\r").unwrap();
+    wait("invalid or unattributed evidence");
     let screen = wait(&format!(
         "cwd={}",
         repository.canonicalize().unwrap().display()
@@ -112,6 +116,13 @@ fn dashboard_adopts_launches_and_interacts_without_discovery_mutation() {
         .unwrap()
         .to_string();
     wait("task=");
+    writer.write_all(b"status-working\r").unwrap();
+    wait("semantic status: working");
+    writer.write_all(b"fixture-failed-test\r").unwrap();
+    wait("test result: FAILED; agent continues");
+    wait("semantic status: working");
+    writer.write_all(b"status-native-question\r").unwrap();
+    wait("semantic status: input needed");
     writer.write_all(b"hello\r").unwrap();
     wait("received: hello");
     writer.write_all(&[0xce]).unwrap();
