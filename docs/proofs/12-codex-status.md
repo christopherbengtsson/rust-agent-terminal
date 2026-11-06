@@ -137,5 +137,9 @@ completion does not archive or stop a task.
 
 An integration run exposed the existing partial-write JSON EOF in the bounded
 history test. Ticket 13's cc97e30 transport fix was merged rather than weakening
-that test. Final locked build, formatting, warnings-denied Clippy and all-target
-test results are recorded in the completion comment for this ticket.
+that test. Locked build, formatting and warnings-denied Clippy passed after that merge.
+The next full suite passed the former history failure and the Codex regression,
+then stalled in the older bounded-PTY cleanup harness. That run and only its
+known fixture were explicitly stopped. Ticket 13 cleanup checkpoint a3841db and
+fresh integrated full checks remain pending; ticket 12 stays unresolved until
+that verification completes. See the ticket's verification comment.
