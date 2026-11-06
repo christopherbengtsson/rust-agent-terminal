@@ -298,9 +298,12 @@ impl Ui {
                 "History storage pending {} ms · {} bytes retained · y retry / s stop\n{message}",
                 app.session.storage_wait_millis, app.session.capture_pending_bytes
             )
-        } else if app.session.capture_loss_possible {
+        } else {
+            message
+        };
+        let message = if app.session.capture_loss_possible {
             format!(
-                "Stopped during history capture trouble: accepted bytes retained; unread agent output may have been lost.\n{message}"
+                "Stopped during capture trouble: unread agent output may have been lost. Accepted bytes retained; y retry history.\n{message}"
             )
         } else {
             message
@@ -448,6 +451,29 @@ fn visible(text: &str) -> String {
 mod tests {
     use super::*;
     use ratatui::{Terminal, backend::TestBackend};
+
+    #[test]
+    fn stopped_capture_fault_keeps_possible_loss_and_retry_visible() {
+        let mut app = App::new("repo".into());
+        app.session.lifecycle = crate::session::Lifecycle::Stopped;
+        app.session.capture_loss_possible = true;
+        app.session.capture_pending_bytes = 4096;
+        app.session.storage_error =
+            Some("History capture blocked: No space; y retry or s stop".into());
+        let mut terminal = Terminal::new(TestBackend::new(160, 40)).unwrap();
+        terminal
+            .draw(|frame| Ui::default().draw(frame, &app))
+            .unwrap();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(text.contains("unread agent output may have been lost"));
+        assert!(text.contains("y retry"));
+    }
 
     #[test]
     fn native_cells_keep_style_width_and_cursor() {
