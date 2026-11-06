@@ -67,6 +67,11 @@ Acceptance:
    or a frozen dashboard, and verify explicit history cleanup; see [the storage
    decision](adr/0004-preserve-history-with-explicit-cleanup.md).
 
+The [integrated evidence record](proofs/18-milestone-evidence.md) tracks the
+versioned native proofs, resource measurements, visual comparison and final
+checks. Its actual native foreground-tool Stop failure remains an open gate;
+Milestone 1 is not yet declared complete.
+
 These checks resolve the highest-risk boundary; they do not claim the complete
 release workload or all coding acceptance criteria C1–C9 are satisfied. New-task
 worktree creation, multiple projects, history search, editor/diff integration,

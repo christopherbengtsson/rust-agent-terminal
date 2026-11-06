@@ -1,0 +1,2858 @@
+{
+  "action": "approve-stop",
+  "dashboard_pid": 88642,
+  "dashboard_exit": 0,
+  "terminal_restored": true,
+  "stop_evidence": {
+    "before_count": 5,
+    "after_count": 13,
+    "stable_after_stop": false,
+    "before_ps": "  PID  PPID  PGID STARTED                      COMMAND\n88651 72113 88651 Fri Nov  6 17:42:00 2026     /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python proof-heartbeat.py\n72113 72086 72113 Fri Nov  6 17:30:09 2026     codex --no-daemon -c hooks.SessionStart=[{hooks=[{type=\"command\",command=\"'/private/tmp/rat-ticket-18/target/debug/agent-terminal' --codex-status-hook '/private/tmp/rat18-codex-state/codex-status.sock' '029c99cc-7efd-4341-84f5-760cad0df834'\",timeout=1}]}] -c hooks.PreModelRequest=[{hooks=[{type=\"command\",command=\"'/private/tmp/rat-ticket-18/target/debug/agent-terminal' --codex-status-hook '/private/tmp/rat18-codex-state/codex-status.sock' '029c99cc-7efd-4341-84f5-760cad0df834'\",timeout=1}]}] -c hooks.PostModelRequest=[{hooks=[{type=\"command\",command=\"'/private/tmp/rat-ticket-18/target/debug/agent-terminal' --codex-status-hook '/private/tmp/rat18-codex-state/codex-status.sock' '029c99cc-7efd-4341-84f5-760cad0df834'\",timeout=1}]}] -c hooks.UserPromptSubmit=[{hooks=[{type=\"command\",command=\"'/private/tmp/rat-ticket-18/target/debug/agent-terminal' --codex-status-hook '/private/tmp/rat18-codex-state/codex-status.sock' '029c99cc-7efd-4341-84f5-760cad0df834'\",timeout=1}]}] -c hooks.PreToolUse=[{hooks=[{type=\"command\",command=\"'/private/tmp/rat-ticket-18/target/debug/agent-terminal' --codex-status-hook '/private/tmp/rat18-codex-state/codex-status.sock' '029c99cc-7efd-4341-84f5-760cad0df834'\",timeout=1}]}] -c hooks.PermissionRequest=[{hooks=[{type=\"command\",command=\"'/private/tmp/rat-ticket-18/target/debug/agent-terminal' --codex-status-hook '/private/tmp/rat18-codex-state/codex-status.sock' '029c99cc-7efd-4341-84f5-760cad0df834'\",timeout=1}]}] -c hooks.PostToolUse=[{hooks=[{type=\"command\",command=\"'/private/tmp/rat-ticket-18/target/debug/agent-terminal' --codex-status-hook '/private/tmp/rat18-codex-state/codex-status.sock' '029c99cc-7efd-4341-84f5-760cad0df834'\",timeout=1}]}] -c hooks.Stop=[{hooks=[{type=\"command\",command=\"'/private/tmp/rat-ticket-18/target/debug/agent-terminal' --codex-status-hook '/private/tmp/rat18-codex-state/codex-status.sock' '029c99cc-7efd-4341-84f5-760cad0df834'\",timeout=1}]}] -c hooks.Interrupt=[{hooks=[{type=\"command\",command=\"'/private/tmp/rat-ticket-18/target/debug/agent-terminal' --codex-status-hook '/private/tmp/rat18-codex-state/codex-status.sock' '029c99cc-7efd-4341-84f5-760cad0df834'\",timeout=1}]}] -c hooks.SessionEnd=[{hooks=[{type=\"command\",command=\"'/private/tmp/rat-ticket-18/target/debug/agent-terminal' --codex-status-hook '/private/tmp/rat18-codex-state/codex-status.sock' '029c99cc-7efd-4341-84f5-760cad0df834'\",timeout=1}]}]\n",
+    "after_ps": "  PID  PPID  PGID STARTED                      COMMAND\n88651     1 88651 Fri Nov  6 17:42:00 2026     /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python proof-heartbeat.py\n",
+    "last_before": {
+      "pid": 88651,
+      "ppid": 72113,
+      "pgid": 88651,
+      "n": 4,
+      "time": 1793983322.33198
+    }
+  },
+  "captures": [
+    {
+      "path": "/private/tmp/rat-ticket-18/docs/proofs/screens/18-codex-approve-stop.raw",
+      "rows": 40,
+      "cols": 160
+    },
+    {
+      "path": "/private/tmp/rat-ticket-18/docs/proofs/screens/18-codex-approve-stop-dashboard.raw",
+      "rows": 40,
+      "cols": 160
+    }
+  ],
+  "source": "4ec3a8b",
+  "observation": {
+    "connection_lost": false,
+    "capacity": {
+      "available": 196979752960,
+      "error": null
+    },
+    "cleanup": null,
+    "cleanup_message": null,
+    "capture_pending_bytes": 0,
+    "accepted_bytes": 108085,
+    "written_bytes": 108085,
+    "storage_wait_millis": 0,
+    "producer_wait_millis": 0,
+    "storage_error": null,
+    "capture_loss_possible": false,
+    "capture_high_water": 2175,
+    "capture_backpressure_count": 0,
+    "capture_backpressure_micros": 0,
+    "subscriber_frame_high_water": 52515,
+    "execution": null,
+    "reconciled": false,
+    "history": null,
+    "history_index": 0,
+    "durable_bytes": 108085,
+    "metadata_pending": false,
+    "durable_flush_count": 393,
+    "durable_commits": [
+      {
+        "sequence": 1,
+        "prefix": 55,
+        "completed_micros": 2795227,
+        "sync_commit_micros": 18907,
+        "oldest_accepted_micros": 219568
+      },
+      {
+        "sequence": 2,
+        "prefix": 3600,
+        "completed_micros": 3068973,
+        "sync_commit_micros": 20462,
+        "oldest_accepted_micros": 242650
+      },
+      {
+        "sequence": 3,
+        "prefix": 3699,
+        "completed_micros": 3341855,
+        "sync_commit_micros": 22444,
+        "oldest_accepted_micros": 274270
+      },
+      {
+        "sequence": 4,
+        "prefix": 5135,
+        "completed_micros": 3615873,
+        "sync_commit_micros": 19828,
+        "oldest_accepted_micros": 73184
+      },
+      {
+        "sequence": 5,
+        "prefix": 6208,
+        "completed_micros": 79267454,
+        "sync_commit_micros": 21241,
+        "oldest_accepted_micros": 27443
+      },
+      {
+        "sequence": 6,
+        "prefix": 8383,
+        "completed_micros": 79547611,
+        "sync_commit_micros": 24877,
+        "oldest_accepted_micros": 301248
+      },
+      {
+        "sequence": 7,
+        "prefix": 9264,
+        "completed_micros": 80073392,
+        "sync_commit_micros": 20862,
+        "oldest_accepted_micros": 94676
+      },
+      {
+        "sequence": 8,
+        "prefix": 12032,
+        "completed_micros": 100604717,
+        "sync_commit_micros": 22473,
+        "oldest_accepted_micros": 83431
+      },
+      {
+        "sequence": 9,
+        "prefix": 12369,
+        "completed_micros": 100887492,
+        "sync_commit_micros": 27196,
+        "oldest_accepted_micros": 283437
+      },
+      {
+        "sequence": 10,
+        "prefix": 12522,
+        "completed_micros": 101164363,
+        "sync_commit_micros": 22723,
+        "oldest_accepted_micros": 290678
+      },
+      {
+        "sequence": 11,
+        "prefix": 12642,
+        "completed_micros": 101439886,
+        "sync_commit_micros": 19689,
+        "oldest_accepted_micros": 260130
+      },
+      {
+        "sequence": 12,
+        "prefix": 12853,
+        "completed_micros": 101713410,
+        "sync_commit_micros": 22652,
+        "oldest_accepted_micros": 286811
+      },
+      {
+        "sequence": 13,
+        "prefix": 13289,
+        "completed_micros": 144234187,
+        "sync_commit_micros": 22865,
+        "oldest_accepted_micros": 129771
+      },
+      {
+        "sequence": 14,
+        "prefix": 14020,
+        "completed_micros": 144754804,
+        "sync_commit_micros": 18532,
+        "oldest_accepted_micros": 124290
+      },
+      {
+        "sequence": 15,
+        "prefix": 14371,
+        "completed_micros": 145024930,
+        "sync_commit_micros": 17567,
+        "oldest_accepted_micros": 260968
+      },
+      {
+        "sequence": 16,
+        "prefix": 14833,
+        "completed_micros": 145292224,
+        "sync_commit_micros": 16740,
+        "oldest_accepted_micros": 257394
+      },
+      {
+        "sequence": 17,
+        "prefix": 15163,
+        "completed_micros": 145568176,
+        "sync_commit_micros": 22470,
+        "oldest_accepted_micros": 292786
+      },
+      {
+        "sequence": 18,
+        "prefix": 15533,
+        "completed_micros": 145842316,
+        "sync_commit_micros": 20514,
+        "oldest_accepted_micros": 288325
+      },
+      {
+        "sequence": 19,
+        "prefix": 15900,
+        "completed_micros": 146113402,
+        "sync_commit_micros": 20765,
+        "oldest_accepted_micros": 289615
+      },
+      {
+        "sequence": 20,
+        "prefix": 16222,
+        "completed_micros": 146385337,
+        "sync_commit_micros": 20799,
+        "oldest_accepted_micros": 289291
+      },
+      {
+        "sequence": 21,
+        "prefix": 16626,
+        "completed_micros": 146658754,
+        "sync_commit_micros": 20734,
+        "oldest_accepted_micros": 291836
+      },
+      {
+        "sequence": 22,
+        "prefix": 16996,
+        "completed_micros": 146932445,
+        "sync_commit_micros": 18791,
+        "oldest_accepted_micros": 260239
+      },
+      {
+        "sequence": 23,
+        "prefix": 17363,
+        "completed_micros": 147207397,
+        "sync_commit_micros": 21767,
+        "oldest_accepted_micros": 265991
+      },
+      {
+        "sequence": 24,
+        "prefix": 17685,
+        "completed_micros": 147478422,
+        "sync_commit_micros": 19787,
+        "oldest_accepted_micros": 265544
+      },
+      {
+        "sequence": 25,
+        "prefix": 18229,
+        "completed_micros": 147753692,
+        "sync_commit_micros": 19874,
+        "oldest_accepted_micros": 267562
+      },
+      {
+        "sequence": 26,
+        "prefix": 18391,
+        "completed_micros": 149299654,
+        "sync_commit_micros": 25785,
+        "oldest_accepted_micros": 241932
+      },
+      {
+        "sequence": 27,
+        "prefix": 18771,
+        "completed_micros": 199693199,
+        "sync_commit_micros": 25932,
+        "oldest_accepted_micros": 238814
+      },
+      {
+        "sequence": 28,
+        "prefix": 19917,
+        "completed_micros": 200235747,
+        "sync_commit_micros": 34348,
+        "oldest_accepted_micros": 277851
+      },
+      {
+        "sequence": 29,
+        "prefix": 20394,
+        "completed_micros": 200508837,
+        "sync_commit_micros": 21852,
+        "oldest_accepted_micros": 304965
+      },
+      {
+        "sequence": 30,
+        "prefix": 20798,
+        "completed_micros": 200776305,
+        "sync_commit_micros": 17446,
+        "oldest_accepted_micros": 267703
+      },
+      {
+        "sequence": 31,
+        "prefix": 21261,
+        "completed_micros": 201053594,
+        "sync_commit_micros": 24851,
+        "oldest_accepted_micros": 273813
+      },
+      {
+        "sequence": 32,
+        "prefix": 21721,
+        "completed_micros": 201325293,
+        "sync_commit_micros": 16339,
+        "oldest_accepted_micros": 272560
+      },
+      {
+        "sequence": 33,
+        "prefix": 22165,
+        "completed_micros": 201598770,
+        "sync_commit_micros": 17538,
+        "oldest_accepted_micros": 274411
+      },
+      {
+        "sequence": 34,
+        "prefix": 22569,
+        "completed_micros": 201871568,
+        "sync_commit_micros": 17492,
+        "oldest_accepted_micros": 275054
+      },
+      {
+        "sequence": 35,
+        "prefix": 23032,
+        "completed_micros": 202146182,
+        "sync_commit_micros": 21054,
+        "oldest_accepted_micros": 277909
+      },
+      {
+        "sequence": 36,
+        "prefix": 24949,
+        "completed_micros": 202430388,
+        "sync_commit_micros": 28864,
+        "oldest_accepted_micros": 289820
+      },
+      {
+        "sequence": 37,
+        "prefix": 25326,
+        "completed_micros": 202705404,
+        "sync_commit_micros": 19634,
+        "oldest_accepted_micros": 300185
+      },
+      {
+        "sequence": 38,
+        "prefix": 25623,
+        "completed_micros": 202974350,
+        "sync_commit_micros": 17386,
+        "oldest_accepted_micros": 286482
+      },
+      {
+        "sequence": 39,
+        "prefix": 25883,
+        "completed_micros": 203257119,
+        "sync_commit_micros": 29622,
+        "oldest_accepted_micros": 265780
+      },
+      {
+        "sequence": 40,
+        "prefix": 26180,
+        "completed_micros": 203534162,
+        "sync_commit_micros": 26393,
+        "oldest_accepted_micros": 305962
+      },
+      {
+        "sequence": 41,
+        "prefix": 26540,
+        "completed_micros": 203816004,
+        "sync_commit_micros": 26439,
+        "oldest_accepted_micros": 282662
+      },
+      {
+        "sequence": 42,
+        "prefix": 26823,
+        "completed_micros": 204092031,
+        "sync_commit_micros": 24879,
+        "oldest_accepted_micros": 287911
+      },
+      {
+        "sequence": 43,
+        "prefix": 27107,
+        "completed_micros": 204381102,
+        "sync_commit_micros": 33937,
+        "oldest_accepted_micros": 304906
+      },
+      {
+        "sequence": 44,
+        "prefix": 27484,
+        "completed_micros": 204665044,
+        "sync_commit_micros": 29664,
+        "oldest_accepted_micros": 316854
+      },
+      {
+        "sequence": 45,
+        "prefix": 27764,
+        "completed_micros": 204948944,
+        "sync_commit_micros": 33640,
+        "oldest_accepted_micros": 294549
+      },
+      {
+        "sequence": 46,
+        "prefix": 28080,
+        "completed_micros": 205229285,
+        "sync_commit_micros": 26555,
+        "oldest_accepted_micros": 303185
+      },
+      {
+        "sequence": 47,
+        "prefix": 28364,
+        "completed_micros": 205514376,
+        "sync_commit_micros": 33272,
+        "oldest_accepted_micros": 283420
+      },
+      {
+        "sequence": 48,
+        "prefix": 28708,
+        "completed_micros": 205806148,
+        "sync_commit_micros": 36237,
+        "oldest_accepted_micros": 303541
+      },
+      {
+        "sequence": 49,
+        "prefix": 29034,
+        "completed_micros": 206079107,
+        "sync_commit_micros": 17752,
+        "oldest_accepted_micros": 302782
+      },
+      {
+        "sequence": 50,
+        "prefix": 29298,
+        "completed_micros": 206357123,
+        "sync_commit_micros": 22151,
+        "oldest_accepted_micros": 274203
+      },
+      {
+        "sequence": 51,
+        "prefix": 29662,
+        "completed_micros": 206629312,
+        "sync_commit_micros": 18455,
+        "oldest_accepted_micros": 274078
+      },
+      {
+        "sequence": 52,
+        "prefix": 29926,
+        "completed_micros": 206907348,
+        "sync_commit_micros": 26948,
+        "oldest_accepted_micros": 279404
+      },
+      {
+        "sequence": 53,
+        "prefix": 30209,
+        "completed_micros": 207184436,
+        "sync_commit_micros": 26959,
+        "oldest_accepted_micros": 284753
+      },
+      {
+        "sequence": 54,
+        "prefix": 30489,
+        "completed_micros": 207467753,
+        "sync_commit_micros": 31765,
+        "oldest_accepted_micros": 295866
+      },
+      {
+        "sequence": 55,
+        "prefix": 31820,
+        "completed_micros": 207737448,
+        "sync_commit_micros": 19576,
+        "oldest_accepted_micros": 295077
+      },
+      {
+        "sequence": 56,
+        "prefix": 32274,
+        "completed_micros": 208012847,
+        "sync_commit_micros": 21025,
+        "oldest_accepted_micros": 286311
+      },
+      {
+        "sequence": 57,
+        "prefix": 32522,
+        "completed_micros": 264700646,
+        "sync_commit_micros": 19514,
+        "oldest_accepted_micros": 123753
+      },
+      {
+        "sequence": 58,
+        "prefix": 32771,
+        "completed_micros": 265224827,
+        "sync_commit_micros": 19594,
+        "oldest_accepted_micros": 137452
+      },
+      {
+        "sequence": 59,
+        "prefix": 33122,
+        "completed_micros": 334262991,
+        "sync_commit_micros": 19426,
+        "oldest_accepted_micros": 25866
+      },
+      {
+        "sequence": 60,
+        "prefix": 34734,
+        "completed_micros": 334784924,
+        "sync_commit_micros": 18840,
+        "oldest_accepted_micros": 35611
+      },
+      {
+        "sequence": 61,
+        "prefix": 36371,
+        "completed_micros": 335056305,
+        "sync_commit_micros": 16372,
+        "oldest_accepted_micros": 290273
+      },
+      {
+        "sequence": 62,
+        "prefix": 36815,
+        "completed_micros": 335330147,
+        "sync_commit_micros": 19379,
+        "oldest_accepted_micros": 268594
+      },
+      {
+        "sequence": 63,
+        "prefix": 37279,
+        "completed_micros": 335603845,
+        "sync_commit_micros": 19495,
+        "oldest_accepted_micros": 272063
+      },
+      {
+        "sequence": 64,
+        "prefix": 37682,
+        "completed_micros": 335873772,
+        "sync_commit_micros": 16564,
+        "oldest_accepted_micros": 272849
+      },
+      {
+        "sequence": 65,
+        "prefix": 38142,
+        "completed_micros": 336148076,
+        "sync_commit_micros": 19504,
+        "oldest_accepted_micros": 275753
+      },
+      {
+        "sequence": 66,
+        "prefix": 38586,
+        "completed_micros": 336417758,
+        "sync_commit_micros": 17454,
+        "oldest_accepted_micros": 274095
+      },
+      {
+        "sequence": 67,
+        "prefix": 38990,
+        "completed_micros": 336688575,
+        "sync_commit_micros": 18538,
+        "oldest_accepted_micros": 272926
+      },
+      {
+        "sequence": 68,
+        "prefix": 39453,
+        "completed_micros": 336962144,
+        "sync_commit_micros": 19500,
+        "oldest_accepted_micros": 276220
+      },
+      {
+        "sequence": 69,
+        "prefix": 39913,
+        "completed_micros": 337230879,
+        "sync_commit_micros": 18479,
+        "oldest_accepted_micros": 272863
+      },
+      {
+        "sequence": 70,
+        "prefix": 40357,
+        "completed_micros": 337501228,
+        "sync_commit_micros": 18618,
+        "oldest_accepted_micros": 273450
+      },
+      {
+        "sequence": 71,
+        "prefix": 40741,
+        "completed_micros": 337771161,
+        "sync_commit_micros": 18630,
+        "oldest_accepted_micros": 272889
+      },
+      {
+        "sequence": 72,
+        "prefix": 41214,
+        "completed_micros": 338043898,
+        "sync_commit_micros": 19535,
+        "oldest_accepted_micros": 275031
+      },
+      {
+        "sequence": 73,
+        "prefix": 41658,
+        "completed_micros": 338317180,
+        "sync_commit_micros": 19561,
+        "oldest_accepted_micros": 276585
+      },
+      {
+        "sequence": 74,
+        "prefix": 42058,
+        "completed_micros": 338588173,
+        "sync_commit_micros": 19507,
+        "oldest_accepted_micros": 275454
+      },
+      {
+        "sequence": 75,
+        "prefix": 44283,
+        "completed_micros": 338863757,
+        "sync_commit_micros": 19607,
+        "oldest_accepted_micros": 280014
+      },
+      {
+        "sequence": 76,
+        "prefix": 44363,
+        "completed_micros": 339894037,
+        "sync_commit_micros": 18770,
+        "oldest_accepted_micros": 145882
+      },
+      {
+        "sequence": 77,
+        "prefix": 44443,
+        "completed_micros": 340922049,
+        "sync_commit_micros": 18521,
+        "oldest_accepted_micros": 172197
+      },
+      {
+        "sequence": 78,
+        "prefix": 44523,
+        "completed_micros": 341949843,
+        "sync_commit_micros": 17571,
+        "oldest_accepted_micros": 197697
+      },
+      {
+        "sequence": 79,
+        "prefix": 44603,
+        "completed_micros": 342978756,
+        "sync_commit_micros": 17626,
+        "oldest_accepted_micros": 226158
+      },
+      {
+        "sequence": 80,
+        "prefix": 44683,
+        "completed_micros": 344015011,
+        "sync_commit_micros": 17596,
+        "oldest_accepted_micros": 46445
+      },
+      {
+        "sequence": 81,
+        "prefix": 44763,
+        "completed_micros": 345042231,
+        "sync_commit_micros": 19079,
+        "oldest_accepted_micros": 72061
+      },
+      {
+        "sequence": 82,
+        "prefix": 44843,
+        "completed_micros": 346066371,
+        "sync_commit_micros": 19242,
+        "oldest_accepted_micros": 94187
+      },
+      {
+        "sequence": 83,
+        "prefix": 44923,
+        "completed_micros": 347092171,
+        "sync_commit_micros": 18693,
+        "oldest_accepted_micros": 117455
+      },
+      {
+        "sequence": 84,
+        "prefix": 45003,
+        "completed_micros": 348123731,
+        "sync_commit_micros": 18676,
+        "oldest_accepted_micros": 147461
+      },
+      {
+        "sequence": 85,
+        "prefix": 45083,
+        "completed_micros": 349150262,
+        "sync_commit_micros": 19603,
+        "oldest_accepted_micros": 171817
+      },
+      {
+        "sequence": 86,
+        "prefix": 45163,
+        "completed_micros": 350181051,
+        "sync_commit_micros": 19593,
+        "oldest_accepted_micros": 200484
+      },
+      {
+        "sequence": 87,
+        "prefix": 45243,
+        "completed_micros": 351209803,
+        "sync_commit_micros": 18541,
+        "oldest_accepted_micros": 228132
+      },
+      {
+        "sequence": 88,
+        "prefix": 45323,
+        "completed_micros": 352235996,
+        "sync_commit_micros": 18518,
+        "oldest_accepted_micros": 252182
+      },
+      {
+        "sequence": 89,
+        "prefix": 45403,
+        "completed_micros": 353009187,
+        "sync_commit_micros": 17045,
+        "oldest_accepted_micros": 23436
+      },
+      {
+        "sequence": 90,
+        "prefix": 45483,
+        "completed_micros": 354041728,
+        "sync_commit_micros": 18617,
+        "oldest_accepted_micros": 53822
+      },
+      {
+        "sequence": 91,
+        "prefix": 45563,
+        "completed_micros": 355076013,
+        "sync_commit_micros": 18800,
+        "oldest_accepted_micros": 86555
+      },
+      {
+        "sequence": 92,
+        "prefix": 45643,
+        "completed_micros": 356111278,
+        "sync_commit_micros": 17561,
+        "oldest_accepted_micros": 119525
+      },
+      {
+        "sequence": 93,
+        "prefix": 45723,
+        "completed_micros": 357144885,
+        "sync_commit_micros": 18613,
+        "oldest_accepted_micros": 150983
+      },
+      {
+        "sequence": 94,
+        "prefix": 45803,
+        "completed_micros": 358172981,
+        "sync_commit_micros": 19185,
+        "oldest_accepted_micros": 176958
+      },
+      {
+        "sequence": 95,
+        "prefix": 45883,
+        "completed_micros": 359209900,
+        "sync_commit_micros": 19965,
+        "oldest_accepted_micros": 211918
+      },
+      {
+        "sequence": 96,
+        "prefix": 45963,
+        "completed_micros": 360239948,
+        "sync_commit_micros": 18716,
+        "oldest_accepted_micros": 239829
+      },
+      {
+        "sequence": 97,
+        "prefix": 46043,
+        "completed_micros": 361020190,
+        "sync_commit_micros": 18752,
+        "oldest_accepted_micros": 18909
+      },
+      {
+        "sequence": 98,
+        "prefix": 46123,
+        "completed_micros": 362049407,
+        "sync_commit_micros": 17802,
+        "oldest_accepted_micros": 46389
+      },
+      {
+        "sequence": 99,
+        "prefix": 46203,
+        "completed_micros": 363078913,
+        "sync_commit_micros": 19690,
+        "oldest_accepted_micros": 74417
+      },
+      {
+        "sequence": 100,
+        "prefix": 46283,
+        "completed_micros": 364111732,
+        "sync_commit_micros": 19927,
+        "oldest_accepted_micros": 104903
+      },
+      {
+        "sequence": 101,
+        "prefix": 46363,
+        "completed_micros": 365136682,
+        "sync_commit_micros": 18996,
+        "oldest_accepted_micros": 127975
+      },
+      {
+        "sequence": 102,
+        "prefix": 46443,
+        "completed_micros": 366177317,
+        "sync_commit_micros": 19792,
+        "oldest_accepted_micros": 166400
+      },
+      {
+        "sequence": 103,
+        "prefix": 46523,
+        "completed_micros": 367209483,
+        "sync_commit_micros": 18712,
+        "oldest_accepted_micros": 196407
+      },
+      {
+        "sequence": 104,
+        "prefix": 46603,
+        "completed_micros": 368245056,
+        "sync_commit_micros": 20687,
+        "oldest_accepted_micros": 230454
+      },
+      {
+        "sequence": 105,
+        "prefix": 46683,
+        "completed_micros": 369278328,
+        "sync_commit_micros": 17239,
+        "oldest_accepted_micros": 261798
+      },
+      {
+        "sequence": 106,
+        "prefix": 46763,
+        "completed_micros": 370055118,
+        "sync_commit_micros": 17646,
+        "oldest_accepted_micros": 36483
+      },
+      {
+        "sequence": 107,
+        "prefix": 46843,
+        "completed_micros": 371098934,
+        "sync_commit_micros": 28705,
+        "oldest_accepted_micros": 78684
+      },
+      {
+        "sequence": 108,
+        "prefix": 46923,
+        "completed_micros": 372131849,
+        "sync_commit_micros": 19535,
+        "oldest_accepted_micros": 109124
+      },
+      {
+        "sequence": 109,
+        "prefix": 47003,
+        "completed_micros": 373164931,
+        "sync_commit_micros": 20576,
+        "oldest_accepted_micros": 140273
+      },
+      {
+        "sequence": 110,
+        "prefix": 47083,
+        "completed_micros": 374189955,
+        "sync_commit_micros": 18592,
+        "oldest_accepted_micros": 163849
+      },
+      {
+        "sequence": 111,
+        "prefix": 47163,
+        "completed_micros": 375218872,
+        "sync_commit_micros": 19378,
+        "oldest_accepted_micros": 192455
+      },
+      {
+        "sequence": 112,
+        "prefix": 47243,
+        "completed_micros": 376253839,
+        "sync_commit_micros": 18462,
+        "oldest_accepted_micros": 224875
+      },
+      {
+        "sequence": 113,
+        "prefix": 47323,
+        "completed_micros": 377290945,
+        "sync_commit_micros": 19437,
+        "oldest_accepted_micros": 259904
+      },
+      {
+        "sequence": 114,
+        "prefix": 47403,
+        "completed_micros": 378068893,
+        "sync_commit_micros": 18378,
+        "oldest_accepted_micros": 36269
+      },
+      {
+        "sequence": 115,
+        "prefix": 47483,
+        "completed_micros": 379097335,
+        "sync_commit_micros": 18562,
+        "oldest_accepted_micros": 62553
+      },
+      {
+        "sequence": 116,
+        "prefix": 47563,
+        "completed_micros": 380128433,
+        "sync_commit_micros": 19521,
+        "oldest_accepted_micros": 92025
+      },
+      {
+        "sequence": 117,
+        "prefix": 47643,
+        "completed_micros": 381155052,
+        "sync_commit_micros": 17481,
+        "oldest_accepted_micros": 116524
+      },
+      {
+        "sequence": 118,
+        "prefix": 47723,
+        "completed_micros": 382187908,
+        "sync_commit_micros": 18589,
+        "oldest_accepted_micros": 147246
+      },
+      {
+        "sequence": 119,
+        "prefix": 47803,
+        "completed_micros": 383220061,
+        "sync_commit_micros": 18594,
+        "oldest_accepted_micros": 178605
+      },
+      {
+        "sequence": 120,
+        "prefix": 47883,
+        "completed_micros": 384256185,
+        "sync_commit_micros": 19471,
+        "oldest_accepted_micros": 213215
+      },
+      {
+        "sequence": 121,
+        "prefix": 47963,
+        "completed_micros": 385283467,
+        "sync_commit_micros": 17332,
+        "oldest_accepted_micros": 238528
+      },
+      {
+        "sequence": 122,
+        "prefix": 48043,
+        "completed_micros": 386308508,
+        "sync_commit_micros": 17438,
+        "oldest_accepted_micros": 261833
+      },
+      {
+        "sequence": 123,
+        "prefix": 48123,
+        "completed_micros": 387088521,
+        "sync_commit_micros": 17457,
+        "oldest_accepted_micros": 40426
+      },
+      {
+        "sequence": 124,
+        "prefix": 48203,
+        "completed_micros": 388122708,
+        "sync_commit_micros": 18496,
+        "oldest_accepted_micros": 72871
+      },
+      {
+        "sequence": 125,
+        "prefix": 48283,
+        "completed_micros": 389153741,
+        "sync_commit_micros": 18549,
+        "oldest_accepted_micros": 102401
+      },
+      {
+        "sequence": 126,
+        "prefix": 48363,
+        "completed_micros": 390181557,
+        "sync_commit_micros": 17169,
+        "oldest_accepted_micros": 128078
+      },
+      {
+        "sequence": 127,
+        "prefix": 48443,
+        "completed_micros": 391211553,
+        "sync_commit_micros": 17392,
+        "oldest_accepted_micros": 156355
+      },
+      {
+        "sequence": 128,
+        "prefix": 48523,
+        "completed_micros": 392250813,
+        "sync_commit_micros": 18842,
+        "oldest_accepted_micros": 193498
+      },
+      {
+        "sequence": 129,
+        "prefix": 48603,
+        "completed_micros": 393282553,
+        "sync_commit_micros": 19790,
+        "oldest_accepted_micros": 223955
+      },
+      {
+        "sequence": 130,
+        "prefix": 48683,
+        "completed_micros": 394318772,
+        "sync_commit_micros": 17396,
+        "oldest_accepted_micros": 258417
+      },
+      {
+        "sequence": 131,
+        "prefix": 48763,
+        "completed_micros": 395093936,
+        "sync_commit_micros": 18387,
+        "oldest_accepted_micros": 31040
+      },
+      {
+        "sequence": 132,
+        "prefix": 48843,
+        "completed_micros": 396127937,
+        "sync_commit_micros": 19614,
+        "oldest_accepted_micros": 63690
+      },
+      {
+        "sequence": 133,
+        "prefix": 48923,
+        "completed_micros": 397164770,
+        "sync_commit_micros": 18526,
+        "oldest_accepted_micros": 99421
+      },
+      {
+        "sequence": 134,
+        "prefix": 49003,
+        "completed_micros": 398191332,
+        "sync_commit_micros": 18963,
+        "oldest_accepted_micros": 123880
+      },
+      {
+        "sequence": 135,
+        "prefix": 49083,
+        "completed_micros": 399225721,
+        "sync_commit_micros": 20524,
+        "oldest_accepted_micros": 155672
+      },
+      {
+        "sequence": 136,
+        "prefix": 49163,
+        "completed_micros": 400256991,
+        "sync_commit_micros": 18370,
+        "oldest_accepted_micros": 185938
+      },
+      {
+        "sequence": 137,
+        "prefix": 49243,
+        "completed_micros": 401292889,
+        "sync_commit_micros": 19401,
+        "oldest_accepted_micros": 219762
+      },
+      {
+        "sequence": 138,
+        "prefix": 49323,
+        "completed_micros": 402321910,
+        "sync_commit_micros": 19573,
+        "oldest_accepted_micros": 247679
+      },
+      {
+        "sequence": 139,
+        "prefix": 49403,
+        "completed_micros": 403102485,
+        "sync_commit_micros": 20396,
+        "oldest_accepted_micros": 25802
+      },
+      {
+        "sequence": 140,
+        "prefix": 49483,
+        "completed_micros": 403629829,
+        "sync_commit_micros": 18425,
+        "oldest_accepted_micros": 68284
+      },
+      {
+        "sequence": 141,
+        "prefix": 49563,
+        "completed_micros": 404655283,
+        "sync_commit_micros": 19434,
+        "oldest_accepted_micros": 91654
+      },
+      {
+        "sequence": 142,
+        "prefix": 49643,
+        "completed_micros": 405689724,
+        "sync_commit_micros": 18435,
+        "oldest_accepted_micros": 124095
+      },
+      {
+        "sequence": 143,
+        "prefix": 49723,
+        "completed_micros": 406723069,
+        "sync_commit_micros": 18396,
+        "oldest_accepted_micros": 155100
+      },
+      {
+        "sequence": 144,
+        "prefix": 49803,
+        "completed_micros": 407754172,
+        "sync_commit_micros": 18479,
+        "oldest_accepted_micros": 184978
+      },
+      {
+        "sequence": 145,
+        "prefix": 49883,
+        "completed_micros": 408786876,
+        "sync_commit_micros": 19353,
+        "oldest_accepted_micros": 216283
+      },
+      {
+        "sequence": 146,
+        "prefix": 49963,
+        "completed_micros": 409815487,
+        "sync_commit_micros": 19446,
+        "oldest_accepted_micros": 242789
+      },
+      {
+        "sequence": 147,
+        "prefix": 50043,
+        "completed_micros": 410843098,
+        "sync_commit_micros": 19385,
+        "oldest_accepted_micros": 268493
+      },
+      {
+        "sequence": 148,
+        "prefix": 50123,
+        "completed_micros": 411626150,
+        "sync_commit_micros": 18353,
+        "oldest_accepted_micros": 49370
+      },
+      {
+        "sequence": 149,
+        "prefix": 50203,
+        "completed_micros": 412656748,
+        "sync_commit_micros": 18587,
+        "oldest_accepted_micros": 78421
+      },
+      {
+        "sequence": 150,
+        "prefix": 50283,
+        "completed_micros": 413693831,
+        "sync_commit_micros": 19562,
+        "oldest_accepted_micros": 113801
+      },
+      {
+        "sequence": 151,
+        "prefix": 50363,
+        "completed_micros": 414721100,
+        "sync_commit_micros": 19350,
+        "oldest_accepted_micros": 139052
+      },
+      {
+        "sequence": 152,
+        "prefix": 50443,
+        "completed_micros": 415751128,
+        "sync_commit_micros": 19358,
+        "oldest_accepted_micros": 167522
+      },
+      {
+        "sequence": 153,
+        "prefix": 50523,
+        "completed_micros": 416785159,
+        "sync_commit_micros": 18621,
+        "oldest_accepted_micros": 199546
+      },
+      {
+        "sequence": 154,
+        "prefix": 50603,
+        "completed_micros": 417817247,
+        "sync_commit_micros": 18537,
+        "oldest_accepted_micros": 229866
+      },
+      {
+        "sequence": 155,
+        "prefix": 50683,
+        "completed_micros": 418849336,
+        "sync_commit_micros": 20397,
+        "oldest_accepted_micros": 259914
+      },
+      {
+        "sequence": 156,
+        "prefix": 50763,
+        "completed_micros": 419623531,
+        "sync_commit_micros": 19460,
+        "oldest_accepted_micros": 31971
+      },
+      {
+        "sequence": 157,
+        "prefix": 50843,
+        "completed_micros": 420653861,
+        "sync_commit_micros": 18279,
+        "oldest_accepted_micros": 60385
+      },
+      {
+        "sequence": 158,
+        "prefix": 50923,
+        "completed_micros": 421689056,
+        "sync_commit_micros": 19484,
+        "oldest_accepted_micros": 94401
+      },
+      {
+        "sequence": 159,
+        "prefix": 51003,
+        "completed_micros": 422715144,
+        "sync_commit_micros": 18364,
+        "oldest_accepted_micros": 118958
+      },
+      {
+        "sequence": 160,
+        "prefix": 51083,
+        "completed_micros": 423745075,
+        "sync_commit_micros": 19345,
+        "oldest_accepted_micros": 146211
+      },
+      {
+        "sequence": 161,
+        "prefix": 51163,
+        "completed_micros": 424772732,
+        "sync_commit_micros": 17606,
+        "oldest_accepted_micros": 171636
+      },
+      {
+        "sequence": 162,
+        "prefix": 51243,
+        "completed_micros": 425808884,
+        "sync_commit_micros": 18384,
+        "oldest_accepted_micros": 207145
+      },
+      {
+        "sequence": 163,
+        "prefix": 51323,
+        "completed_micros": 426835693,
+        "sync_commit_micros": 17336,
+        "oldest_accepted_micros": 231824
+      },
+      {
+        "sequence": 164,
+        "prefix": 51403,
+        "completed_micros": 427866139,
+        "sync_commit_micros": 19502,
+        "oldest_accepted_micros": 260101
+      },
+      {
+        "sequence": 165,
+        "prefix": 51483,
+        "completed_micros": 428644486,
+        "sync_commit_micros": 19225,
+        "oldest_accepted_micros": 37404
+      },
+      {
+        "sequence": 166,
+        "prefix": 51563,
+        "completed_micros": 429674391,
+        "sync_commit_micros": 16342,
+        "oldest_accepted_micros": 66190
+      },
+      {
+        "sequence": 167,
+        "prefix": 51643,
+        "completed_micros": 430706553,
+        "sync_commit_micros": 18327,
+        "oldest_accepted_micros": 96040
+      },
+      {
+        "sequence": 168,
+        "prefix": 51723,
+        "completed_micros": 431735770,
+        "sync_commit_micros": 18347,
+        "oldest_accepted_micros": 123228
+      },
+      {
+        "sequence": 169,
+        "prefix": 51803,
+        "completed_micros": 432769964,
+        "sync_commit_micros": 20560,
+        "oldest_accepted_micros": 155164
+      },
+      {
+        "sequence": 170,
+        "prefix": 51883,
+        "completed_micros": 433801017,
+        "sync_commit_micros": 20511,
+        "oldest_accepted_micros": 183924
+      },
+      {
+        "sequence": 171,
+        "prefix": 51963,
+        "completed_micros": 434830039,
+        "sync_commit_micros": 18551,
+        "oldest_accepted_micros": 211719
+      },
+      {
+        "sequence": 172,
+        "prefix": 52043,
+        "completed_micros": 435858856,
+        "sync_commit_micros": 17732,
+        "oldest_accepted_micros": 238397
+      },
+      {
+        "sequence": 173,
+        "prefix": 52123,
+        "completed_micros": 436891110,
+        "sync_commit_micros": 17502,
+        "oldest_accepted_micros": 268546
+      },
+      {
+        "sequence": 174,
+        "prefix": 52203,
+        "completed_micros": 437665450,
+        "sync_commit_micros": 18358,
+        "oldest_accepted_micros": 40749
+      },
+      {
+        "sequence": 175,
+        "prefix": 52207,
+        "completed_micros": 438207298,
+        "sync_commit_micros": 35309,
+        "oldest_accepted_micros": 149063
+      },
+      {
+        "sequence": 176,
+        "prefix": 53149,
+        "completed_micros": 440253778,
+        "sync_commit_micros": 22377,
+        "oldest_accepted_micros": 194466
+      },
+      {
+        "sequence": 177,
+        "prefix": 53805,
+        "completed_micros": 442310060,
+        "sync_commit_micros": 28035,
+        "oldest_accepted_micros": 249546
+      },
+      {
+        "sequence": 178,
+        "prefix": 55417,
+        "completed_micros": 444094740,
+        "sync_commit_micros": 19345,
+        "oldest_accepted_micros": 32592
+      },
+      {
+        "sequence": 179,
+        "prefix": 56634,
+        "completed_micros": 446142891,
+        "sync_commit_micros": 17148,
+        "oldest_accepted_micros": 79906
+      },
+      {
+        "sequence": 180,
+        "prefix": 58378,
+        "completed_micros": 448187721,
+        "sync_commit_micros": 21539,
+        "oldest_accepted_micros": 122758
+      },
+      {
+        "sequence": 181,
+        "prefix": 59014,
+        "completed_micros": 450232390,
+        "sync_commit_micros": 19369,
+        "oldest_accepted_micros": 165640
+      },
+      {
+        "sequence": 182,
+        "prefix": 60662,
+        "completed_micros": 452274955,
+        "sync_commit_micros": 18417,
+        "oldest_accepted_micros": 207149
+      },
+      {
+        "sequence": 183,
+        "prefix": 60742,
+        "completed_micros": 453307001,
+        "sync_commit_micros": 19376,
+        "oldest_accepted_micros": 160574
+      },
+      {
+        "sequence": 184,
+        "prefix": 60822,
+        "completed_micros": 454340127,
+        "sync_commit_micros": 18388,
+        "oldest_accepted_micros": 192377
+      },
+      {
+        "sequence": 185,
+        "prefix": 60902,
+        "completed_micros": 455374721,
+        "sync_commit_micros": 20367,
+        "oldest_accepted_micros": 225669
+      },
+      {
+        "sequence": 186,
+        "prefix": 60982,
+        "completed_micros": 456403101,
+        "sync_commit_micros": 17271,
+        "oldest_accepted_micros": 251925
+      },
+      {
+        "sequence": 187,
+        "prefix": 61062,
+        "completed_micros": 457179304,
+        "sync_commit_micros": 19534,
+        "oldest_accepted_micros": 26018
+      },
+      {
+        "sequence": 188,
+        "prefix": 61142,
+        "completed_micros": 458206996,
+        "sync_commit_micros": 20489,
+        "oldest_accepted_micros": 51658
+      },
+      {
+        "sequence": 189,
+        "prefix": 61222,
+        "completed_micros": 459243609,
+        "sync_commit_micros": 18379,
+        "oldest_accepted_micros": 86257
+      },
+      {
+        "sequence": 190,
+        "prefix": 61302,
+        "completed_micros": 460279485,
+        "sync_commit_micros": 19458,
+        "oldest_accepted_micros": 119857
+      },
+      {
+        "sequence": 191,
+        "prefix": 61382,
+        "completed_micros": 461316651,
+        "sync_commit_micros": 19350,
+        "oldest_accepted_micros": 154846
+      },
+      {
+        "sequence": 192,
+        "prefix": 61462,
+        "completed_micros": 462349394,
+        "sync_commit_micros": 19389,
+        "oldest_accepted_micros": 185518
+      },
+      {
+        "sequence": 193,
+        "prefix": 61542,
+        "completed_micros": 463378364,
+        "sync_commit_micros": 19486,
+        "oldest_accepted_micros": 212982
+      },
+      {
+        "sequence": 194,
+        "prefix": 61622,
+        "completed_micros": 464161088,
+        "sync_commit_micros": 20558,
+        "oldest_accepted_micros": 117896
+      },
+      {
+        "sequence": 195,
+        "prefix": 61702,
+        "completed_micros": 465198891,
+        "sync_commit_micros": 19512,
+        "oldest_accepted_micros": 152726
+      },
+      {
+        "sequence": 196,
+        "prefix": 61782,
+        "completed_micros": 466228161,
+        "sync_commit_micros": 18724,
+        "oldest_accepted_micros": 179047
+      },
+      {
+        "sequence": 197,
+        "prefix": 61862,
+        "completed_micros": 467257024,
+        "sync_commit_micros": 18426,
+        "oldest_accepted_micros": 205829
+      },
+      {
+        "sequence": 198,
+        "prefix": 61942,
+        "completed_micros": 468283533,
+        "sync_commit_micros": 19460,
+        "oldest_accepted_micros": 230692
+      },
+      {
+        "sequence": 199,
+        "prefix": 62022,
+        "completed_micros": 469317619,
+        "sync_commit_micros": 19469,
+        "oldest_accepted_micros": 263143
+      },
+      {
+        "sequence": 200,
+        "prefix": 62102,
+        "completed_micros": 470088198,
+        "sync_commit_micros": 19391,
+        "oldest_accepted_micros": 31431
+      },
+      {
+        "sequence": 201,
+        "prefix": 62182,
+        "completed_micros": 471121223,
+        "sync_commit_micros": 18649,
+        "oldest_accepted_micros": 62784
+      },
+      {
+        "sequence": 202,
+        "prefix": 62262,
+        "completed_micros": 472150828,
+        "sync_commit_micros": 18417,
+        "oldest_accepted_micros": 90270
+      },
+      {
+        "sequence": 203,
+        "prefix": 62342,
+        "completed_micros": 473179540,
+        "sync_commit_micros": 18436,
+        "oldest_accepted_micros": 117045
+      },
+      {
+        "sequence": 204,
+        "prefix": 62422,
+        "completed_micros": 474207559,
+        "sync_commit_micros": 19416,
+        "oldest_accepted_micros": 143152
+      },
+      {
+        "sequence": 205,
+        "prefix": 62502,
+        "completed_micros": 475234632,
+        "sync_commit_micros": 19519,
+        "oldest_accepted_micros": 168041
+      },
+      {
+        "sequence": 206,
+        "prefix": 62582,
+        "completed_micros": 476267571,
+        "sync_commit_micros": 18969,
+        "oldest_accepted_micros": 198786
+      },
+      {
+        "sequence": 207,
+        "prefix": 62662,
+        "completed_micros": 477304572,
+        "sync_commit_micros": 19648,
+        "oldest_accepted_micros": 234150
+      },
+      {
+        "sequence": 208,
+        "prefix": 62742,
+        "completed_micros": 478338548,
+        "sync_commit_micros": 19475,
+        "oldest_accepted_micros": 265952
+      },
+      {
+        "sequence": 209,
+        "prefix": 62822,
+        "completed_micros": 479116507,
+        "sync_commit_micros": 17980,
+        "oldest_accepted_micros": 41775
+      },
+      {
+        "sequence": 210,
+        "prefix": 62902,
+        "completed_micros": 480148663,
+        "sync_commit_micros": 16749,
+        "oldest_accepted_micros": 72493
+      },
+      {
+        "sequence": 211,
+        "prefix": 62982,
+        "completed_micros": 481180726,
+        "sync_commit_micros": 16455,
+        "oldest_accepted_micros": 102924
+      },
+      {
+        "sequence": 212,
+        "prefix": 63062,
+        "completed_micros": 482214190,
+        "sync_commit_micros": 18352,
+        "oldest_accepted_micros": 134819
+      },
+      {
+        "sequence": 213,
+        "prefix": 63142,
+        "completed_micros": 483240888,
+        "sync_commit_micros": 18449,
+        "oldest_accepted_micros": 159857
+      },
+      {
+        "sequence": 214,
+        "prefix": 63222,
+        "completed_micros": 484273189,
+        "sync_commit_micros": 17376,
+        "oldest_accepted_micros": 190404
+      },
+      {
+        "sequence": 215,
+        "prefix": 63302,
+        "completed_micros": 485304635,
+        "sync_commit_micros": 19195,
+        "oldest_accepted_micros": 219915
+      },
+      {
+        "sequence": 216,
+        "prefix": 63382,
+        "completed_micros": 486339901,
+        "sync_commit_micros": 29056,
+        "oldest_accepted_micros": 252875
+      },
+      {
+        "sequence": 217,
+        "prefix": 63462,
+        "completed_micros": 487120816,
+        "sync_commit_micros": 19577,
+        "oldest_accepted_micros": 32223
+      },
+      {
+        "sequence": 218,
+        "prefix": 63542,
+        "completed_micros": 488152388,
+        "sync_commit_micros": 19399,
+        "oldest_accepted_micros": 62238
+      },
+      {
+        "sequence": 219,
+        "prefix": 63622,
+        "completed_micros": 489183301,
+        "sync_commit_micros": 18383,
+        "oldest_accepted_micros": 91970
+      },
+      {
+        "sequence": 220,
+        "prefix": 63702,
+        "completed_micros": 490213480,
+        "sync_commit_micros": 17256,
+        "oldest_accepted_micros": 120264
+      },
+      {
+        "sequence": 221,
+        "prefix": 63782,
+        "completed_micros": 491246955,
+        "sync_commit_micros": 16860,
+        "oldest_accepted_micros": 152162
+      },
+      {
+        "sequence": 222,
+        "prefix": 63862,
+        "completed_micros": 492278527,
+        "sync_commit_micros": 18278,
+        "oldest_accepted_micros": 181521
+      },
+      {
+        "sequence": 223,
+        "prefix": 63942,
+        "completed_micros": 493306598,
+        "sync_commit_micros": 17293,
+        "oldest_accepted_micros": 208774
+      },
+      {
+        "sequence": 224,
+        "prefix": 64022,
+        "completed_micros": 494337417,
+        "sync_commit_micros": 18265,
+        "oldest_accepted_micros": 237398
+      },
+      {
+        "sequence": 225,
+        "prefix": 64102,
+        "completed_micros": 495373486,
+        "sync_commit_micros": 16205,
+        "oldest_accepted_micros": 271357
+      },
+      {
+        "sequence": 226,
+        "prefix": 64182,
+        "completed_micros": 496143770,
+        "sync_commit_micros": 16477,
+        "oldest_accepted_micros": 41166
+      },
+      {
+        "sequence": 227,
+        "prefix": 64262,
+        "completed_micros": 497185736,
+        "sync_commit_micros": 32280,
+        "oldest_accepted_micros": 81090
+      },
+      {
+        "sequence": 228,
+        "prefix": 64342,
+        "completed_micros": 498214934,
+        "sync_commit_micros": 18478,
+        "oldest_accepted_micros": 108642
+      },
+      {
+        "sequence": 229,
+        "prefix": 64422,
+        "completed_micros": 499242385,
+        "sync_commit_micros": 16507,
+        "oldest_accepted_micros": 134078
+      },
+      {
+        "sequence": 230,
+        "prefix": 64502,
+        "completed_micros": 500265794,
+        "sync_commit_micros": 18624,
+        "oldest_accepted_micros": 155101
+      },
+      {
+        "sequence": 231,
+        "prefix": 64582,
+        "completed_micros": 501300230,
+        "sync_commit_micros": 17866,
+        "oldest_accepted_micros": 187339
+      },
+      {
+        "sequence": 232,
+        "prefix": 64662,
+        "completed_micros": 502333372,
+        "sync_commit_micros": 22824,
+        "oldest_accepted_micros": 218355
+      },
+      {
+        "sequence": 233,
+        "prefix": 64742,
+        "completed_micros": 503359970,
+        "sync_commit_micros": 18411,
+        "oldest_accepted_micros": 244586
+      },
+      {
+        "sequence": 234,
+        "prefix": 64822,
+        "completed_micros": 504136594,
+        "sync_commit_micros": 18396,
+        "oldest_accepted_micros": 18516
+      },
+      {
+        "sequence": 235,
+        "prefix": 64902,
+        "completed_micros": 505166752,
+        "sync_commit_micros": 17486,
+        "oldest_accepted_micros": 47535
+      },
+      {
+        "sequence": 236,
+        "prefix": 64982,
+        "completed_micros": 506199816,
+        "sync_commit_micros": 17553,
+        "oldest_accepted_micros": 78429
+      },
+      {
+        "sequence": 237,
+        "prefix": 65062,
+        "completed_micros": 507227709,
+        "sync_commit_micros": 16968,
+        "oldest_accepted_micros": 103780
+      },
+      {
+        "sequence": 238,
+        "prefix": 65142,
+        "completed_micros": 508261726,
+        "sync_commit_micros": 17883,
+        "oldest_accepted_micros": 136353
+      },
+      {
+        "sequence": 239,
+        "prefix": 65222,
+        "completed_micros": 509297546,
+        "sync_commit_micros": 21864,
+        "oldest_accepted_micros": 170479
+      },
+      {
+        "sequence": 240,
+        "prefix": 65302,
+        "completed_micros": 510328232,
+        "sync_commit_micros": 18926,
+        "oldest_accepted_micros": 200062
+      },
+      {
+        "sequence": 241,
+        "prefix": 65382,
+        "completed_micros": 511372209,
+        "sync_commit_micros": 27952,
+        "oldest_accepted_micros": 242392
+      },
+      {
+        "sequence": 242,
+        "prefix": 65462,
+        "completed_micros": 512150549,
+        "sync_commit_micros": 19176,
+        "oldest_accepted_micros": 19457
+      },
+      {
+        "sequence": 243,
+        "prefix": 65536,
+        "completed_micros": 513161495,
+        "sync_commit_micros": 26142,
+        "oldest_accepted_micros": 30085
+      },
+      {
+        "sequence": 244,
+        "prefix": 65542,
+        "completed_micros": 513183494,
+        "sync_commit_micros": 17016,
+        "oldest_accepted_micros": 52085
+      },
+      {
+        "sequence": 245,
+        "prefix": 65622,
+        "completed_micros": 514218723,
+        "sync_commit_micros": 17206,
+        "oldest_accepted_micros": 85165
+      },
+      {
+        "sequence": 246,
+        "prefix": 65702,
+        "completed_micros": 515246351,
+        "sync_commit_micros": 17461,
+        "oldest_accepted_micros": 111651
+      },
+      {
+        "sequence": 247,
+        "prefix": 65782,
+        "completed_micros": 516277530,
+        "sync_commit_micros": 25710,
+        "oldest_accepted_micros": 141099
+      },
+      {
+        "sequence": 248,
+        "prefix": 65862,
+        "completed_micros": 517310319,
+        "sync_commit_micros": 18870,
+        "oldest_accepted_micros": 171611
+      },
+      {
+        "sequence": 249,
+        "prefix": 65942,
+        "completed_micros": 518348225,
+        "sync_commit_micros": 18735,
+        "oldest_accepted_micros": 207949
+      },
+      {
+        "sequence": 250,
+        "prefix": 66022,
+        "completed_micros": 519379500,
+        "sync_commit_micros": 18586,
+        "oldest_accepted_micros": 237371
+      },
+      {
+        "sequence": 251,
+        "prefix": 66102,
+        "completed_micros": 520410289,
+        "sync_commit_micros": 17511,
+        "oldest_accepted_micros": 267406
+      },
+      {
+        "sequence": 252,
+        "prefix": 66182,
+        "completed_micros": 521200126,
+        "sync_commit_micros": 25077,
+        "oldest_accepted_micros": 55633
+      },
+      {
+        "sequence": 253,
+        "prefix": 66262,
+        "completed_micros": 522235715,
+        "sync_commit_micros": 19624,
+        "oldest_accepted_micros": 88962
+      },
+      {
+        "sequence": 254,
+        "prefix": 66342,
+        "completed_micros": 523272008,
+        "sync_commit_micros": 18756,
+        "oldest_accepted_micros": 123936
+      },
+      {
+        "sequence": 255,
+        "prefix": 66422,
+        "completed_micros": 524300636,
+        "sync_commit_micros": 17287,
+        "oldest_accepted_micros": 150997
+      },
+      {
+        "sequence": 256,
+        "prefix": 66502,
+        "completed_micros": 524823562,
+        "sync_commit_micros": 17435,
+        "oldest_accepted_micros": 231980
+      },
+      {
+        "sequence": 257,
+        "prefix": 68472,
+        "completed_micros": 525871080,
+        "sync_commit_micros": 33803,
+        "oldest_accepted_micros": 277614
+      },
+      {
+        "sequence": 258,
+        "prefix": 68968,
+        "completed_micros": 526158927,
+        "sync_commit_micros": 36185,
+        "oldest_accepted_micros": 317489
+      },
+      {
+        "sequence": 259,
+        "prefix": 69412,
+        "completed_micros": 526446453,
+        "sync_commit_micros": 32873,
+        "oldest_accepted_micros": 295707
+      },
+      {
+        "sequence": 260,
+        "prefix": 69909,
+        "completed_micros": 526732284,
+        "sync_commit_micros": 30980,
+        "oldest_accepted_micros": 308814
+      },
+      {
+        "sequence": 261,
+        "prefix": 70372,
+        "completed_micros": 527019101,
+        "sync_commit_micros": 34505,
+        "oldest_accepted_micros": 290362
+      },
+      {
+        "sequence": 262,
+        "prefix": 70772,
+        "completed_micros": 527303645,
+        "sync_commit_micros": 30345,
+        "oldest_accepted_micros": 301589
+      },
+      {
+        "sequence": 263,
+        "prefix": 71249,
+        "completed_micros": 527585003,
+        "sync_commit_micros": 29041,
+        "oldest_accepted_micros": 309018
+      },
+      {
+        "sequence": 264,
+        "prefix": 71713,
+        "completed_micros": 527872674,
+        "sync_commit_micros": 34488,
+        "oldest_accepted_micros": 288429
+      },
+      {
+        "sequence": 265,
+        "prefix": 72176,
+        "completed_micros": 528151348,
+        "sync_commit_micros": 24340,
+        "oldest_accepted_micros": 291818
+      },
+      {
+        "sequence": 266,
+        "prefix": 72636,
+        "completed_micros": 528426150,
+        "sync_commit_micros": 23858,
+        "oldest_accepted_micros": 293054
+      },
+      {
+        "sequence": 267,
+        "prefix": 73080,
+        "completed_micros": 528705938,
+        "sync_commit_micros": 25059,
+        "oldest_accepted_micros": 301133
+      },
+      {
+        "sequence": 268,
+        "prefix": 74937,
+        "completed_micros": 528978922,
+        "sync_commit_micros": 20753,
+        "oldest_accepted_micros": 297648
+      },
+      {
+        "sequence": 269,
+        "prefix": 76514,
+        "completed_micros": 529251980,
+        "sync_commit_micros": 16847,
+        "oldest_accepted_micros": 290448
+      },
+      {
+        "sequence": 270,
+        "prefix": 76663,
+        "completed_micros": 549005626,
+        "sync_commit_micros": 19879,
+        "oldest_accepted_micros": 255128
+      },
+      {
+        "sequence": 271,
+        "prefix": 78279,
+        "completed_micros": 616897513,
+        "sync_commit_micros": 20840,
+        "oldest_accepted_micros": 101678
+      },
+      {
+        "sequence": 272,
+        "prefix": 81826,
+        "completed_micros": 617432888,
+        "sync_commit_micros": 32067,
+        "oldest_accepted_micros": 122758
+      },
+      {
+        "sequence": 273,
+        "prefix": 82270,
+        "completed_micros": 617702589,
+        "sync_commit_micros": 18563,
+        "oldest_accepted_micros": 273966
+      },
+      {
+        "sequence": 274,
+        "prefix": 82674,
+        "completed_micros": 617975725,
+        "sync_commit_micros": 18597,
+        "oldest_accepted_micros": 276253
+      },
+      {
+        "sequence": 275,
+        "prefix": 83118,
+        "completed_micros": 618248624,
+        "sync_commit_micros": 20873,
+        "oldest_accepted_micros": 277265
+      },
+      {
+        "sequence": 276,
+        "prefix": 83581,
+        "completed_micros": 618523242,
+        "sync_commit_micros": 19822,
+        "oldest_accepted_micros": 279714
+      },
+      {
+        "sequence": 277,
+        "prefix": 84041,
+        "completed_micros": 618800099,
+        "sync_commit_micros": 20910,
+        "oldest_accepted_micros": 279796
+      },
+      {
+        "sequence": 278,
+        "prefix": 84425,
+        "completed_micros": 619077211,
+        "sync_commit_micros": 20817,
+        "oldest_accepted_micros": 282642
+      },
+      {
+        "sequence": 279,
+        "prefix": 84889,
+        "completed_micros": 619347609,
+        "sync_commit_micros": 19961,
+        "oldest_accepted_micros": 282016
+      },
+      {
+        "sequence": 280,
+        "prefix": 85352,
+        "completed_micros": 619624404,
+        "sync_commit_micros": 21985,
+        "oldest_accepted_micros": 285924
+      },
+      {
+        "sequence": 281,
+        "prefix": 85752,
+        "completed_micros": 619898916,
+        "sync_commit_micros": 19869,
+        "oldest_accepted_micros": 288051
+      },
+      {
+        "sequence": 282,
+        "prefix": 86196,
+        "completed_micros": 620172854,
+        "sync_commit_micros": 20009,
+        "oldest_accepted_micros": 290603
+      },
+      {
+        "sequence": 283,
+        "prefix": 86669,
+        "completed_micros": 620447375,
+        "sync_commit_micros": 19917,
+        "oldest_accepted_micros": 291534
+      },
+      {
+        "sequence": 284,
+        "prefix": 87113,
+        "completed_micros": 620721794,
+        "sync_commit_micros": 20996,
+        "oldest_accepted_micros": 291270
+      },
+      {
+        "sequence": 285,
+        "prefix": 87513,
+        "completed_micros": 620997102,
+        "sync_commit_micros": 21888,
+        "oldest_accepted_micros": 292037
+      },
+      {
+        "sequence": 286,
+        "prefix": 87982,
+        "completed_micros": 621271931,
+        "sync_commit_micros": 20976,
+        "oldest_accepted_micros": 294687
+      },
+      {
+        "sequence": 287,
+        "prefix": 88620,
+        "completed_micros": 621540153,
+        "sync_commit_micros": 17997,
+        "oldest_accepted_micros": 289371
+      },
+      {
+        "sequence": 288,
+        "prefix": 88740,
+        "completed_micros": 621816441,
+        "sync_commit_micros": 20931,
+        "oldest_accepted_micros": 223053
+      },
+      {
+        "sequence": 289,
+        "prefix": 90692,
+        "completed_micros": 622092019,
+        "sync_commit_micros": 19958,
+        "oldest_accepted_micros": 294100
+      },
+      {
+        "sequence": 290,
+        "prefix": 91152,
+        "completed_micros": 622365728,
+        "sync_commit_micros": 20958,
+        "oldest_accepted_micros": 278686
+      },
+      {
+        "sequence": 291,
+        "prefix": 91615,
+        "completed_micros": 622639435,
+        "sync_commit_micros": 17918,
+        "oldest_accepted_micros": 277794
+      },
+      {
+        "sequence": 292,
+        "prefix": 94121,
+        "completed_micros": 622909072,
+        "sync_commit_micros": 18360,
+        "oldest_accepted_micros": 271141
+      },
+      {
+        "sequence": 293,
+        "prefix": 94201,
+        "completed_micros": 623940770,
+        "sync_commit_micros": 17519,
+        "oldest_accepted_micros": 61395
+      },
+      {
+        "sequence": 294,
+        "prefix": 94281,
+        "completed_micros": 624976276,
+        "sync_commit_micros": 19792,
+        "oldest_accepted_micros": 94763
+      },
+      {
+        "sequence": 295,
+        "prefix": 94361,
+        "completed_micros": 626007978,
+        "sync_commit_micros": 20755,
+        "oldest_accepted_micros": 124694
+      },
+      {
+        "sequence": 296,
+        "prefix": 94441,
+        "completed_micros": 627035910,
+        "sync_commit_micros": 17465,
+        "oldest_accepted_micros": 150409
+      },
+      {
+        "sequence": 297,
+        "prefix": 94521,
+        "completed_micros": 628066066,
+        "sync_commit_micros": 20493,
+        "oldest_accepted_micros": 178400
+      },
+      {
+        "sequence": 298,
+        "prefix": 94601,
+        "completed_micros": 629091183,
+        "sync_commit_micros": 19866,
+        "oldest_accepted_micros": 202221
+      },
+      {
+        "sequence": 299,
+        "prefix": 94681,
+        "completed_micros": 630113170,
+        "sync_commit_micros": 17645,
+        "oldest_accepted_micros": 222085
+      },
+      {
+        "sequence": 300,
+        "prefix": 94761,
+        "completed_micros": 631146185,
+        "sync_commit_micros": 20637,
+        "oldest_accepted_micros": 253958
+      },
+      {
+        "sequence": 301,
+        "prefix": 94841,
+        "completed_micros": 631925794,
+        "sync_commit_micros": 20950,
+        "oldest_accepted_micros": 32290
+      },
+      {
+        "sequence": 302,
+        "prefix": 94921,
+        "completed_micros": 632952408,
+        "sync_commit_micros": 18883,
+        "oldest_accepted_micros": 56716
+      },
+      {
+        "sequence": 303,
+        "prefix": 95001,
+        "completed_micros": 633986290,
+        "sync_commit_micros": 20962,
+        "oldest_accepted_micros": 89272
+      },
+      {
+        "sequence": 304,
+        "prefix": 95081,
+        "completed_micros": 635013062,
+        "sync_commit_micros": 20015,
+        "oldest_accepted_micros": 114283
+      },
+      {
+        "sequence": 305,
+        "prefix": 95161,
+        "completed_micros": 636046536,
+        "sync_commit_micros": 19803,
+        "oldest_accepted_micros": 145593
+      },
+      {
+        "sequence": 306,
+        "prefix": 95241,
+        "completed_micros": 637081393,
+        "sync_commit_micros": 21054,
+        "oldest_accepted_micros": 178197
+      },
+      {
+        "sequence": 307,
+        "prefix": 95321,
+        "completed_micros": 638125928,
+        "sync_commit_micros": 37617,
+        "oldest_accepted_micros": 221515
+      },
+      {
+        "sequence": 308,
+        "prefix": 95401,
+        "completed_micros": 639157883,
+        "sync_commit_micros": 24687,
+        "oldest_accepted_micros": 251395
+      },
+      {
+        "sequence": 309,
+        "prefix": 95481,
+        "completed_micros": 639941402,
+        "sync_commit_micros": 21021,
+        "oldest_accepted_micros": 33324
+      },
+      {
+        "sequence": 310,
+        "prefix": 95561,
+        "completed_micros": 640977269,
+        "sync_commit_micros": 25631,
+        "oldest_accepted_micros": 68016
+      },
+      {
+        "sequence": 311,
+        "prefix": 95641,
+        "completed_micros": 642007254,
+        "sync_commit_micros": 20036,
+        "oldest_accepted_micros": 95165
+      },
+      {
+        "sequence": 312,
+        "prefix": 95721,
+        "completed_micros": 643039125,
+        "sync_commit_micros": 21146,
+        "oldest_accepted_micros": 126701
+      },
+      {
+        "sequence": 313,
+        "prefix": 95801,
+        "completed_micros": 644071889,
+        "sync_commit_micros": 20933,
+        "oldest_accepted_micros": 157553
+      },
+      {
+        "sequence": 314,
+        "prefix": 95881,
+        "completed_micros": 645114625,
+        "sync_commit_micros": 22997,
+        "oldest_accepted_micros": 198108
+      },
+      {
+        "sequence": 315,
+        "prefix": 95961,
+        "completed_micros": 646655366,
+        "sync_commit_micros": 18866,
+        "oldest_accepted_micros": 238758
+      },
+      {
+        "sequence": 316,
+        "prefix": 96041,
+        "completed_micros": 647688397,
+        "sync_commit_micros": 22008,
+        "oldest_accepted_micros": 269714
+      },
+      {
+        "sequence": 317,
+        "prefix": 96121,
+        "completed_micros": 648466750,
+        "sync_commit_micros": 21061,
+        "oldest_accepted_micros": 46323
+      },
+      {
+        "sequence": 318,
+        "prefix": 96201,
+        "completed_micros": 649500538,
+        "sync_commit_micros": 21711,
+        "oldest_accepted_micros": 78293
+      },
+      {
+        "sequence": 319,
+        "prefix": 96281,
+        "completed_micros": 650529928,
+        "sync_commit_micros": 19858,
+        "oldest_accepted_micros": 105927
+      },
+      {
+        "sequence": 320,
+        "prefix": 96361,
+        "completed_micros": 651557769,
+        "sync_commit_micros": 17733,
+        "oldest_accepted_micros": 131762
+      },
+      {
+        "sequence": 321,
+        "prefix": 96441,
+        "completed_micros": 652589739,
+        "sync_commit_micros": 17883,
+        "oldest_accepted_micros": 162319
+      },
+      {
+        "sequence": 322,
+        "prefix": 96521,
+        "completed_micros": 653627993,
+        "sync_commit_micros": 19967,
+        "oldest_accepted_micros": 199087
+      },
+      {
+        "sequence": 323,
+        "prefix": 96601,
+        "completed_micros": 654661249,
+        "sync_commit_micros": 20989,
+        "oldest_accepted_micros": 230048
+      },
+      {
+        "sequence": 324,
+        "prefix": 96681,
+        "completed_micros": 655696460,
+        "sync_commit_micros": 18949,
+        "oldest_accepted_micros": 264217
+      },
+      {
+        "sequence": 325,
+        "prefix": 96761,
+        "completed_micros": 656474127,
+        "sync_commit_micros": 20038,
+        "oldest_accepted_micros": 39572
+      },
+      {
+        "sequence": 326,
+        "prefix": 96841,
+        "completed_micros": 657505112,
+        "sync_commit_micros": 17821,
+        "oldest_accepted_micros": 68351
+      },
+      {
+        "sequence": 327,
+        "prefix": 96921,
+        "completed_micros": 658538268,
+        "sync_commit_micros": 19751,
+        "oldest_accepted_micros": 99392
+      },
+      {
+        "sequence": 328,
+        "prefix": 97001,
+        "completed_micros": 659568293,
+        "sync_commit_micros": 19948,
+        "oldest_accepted_micros": 127642
+      },
+      {
+        "sequence": 329,
+        "prefix": 97081,
+        "completed_micros": 660606418,
+        "sync_commit_micros": 28491,
+        "oldest_accepted_micros": 164021
+      },
+      {
+        "sequence": 330,
+        "prefix": 97161,
+        "completed_micros": 661630467,
+        "sync_commit_micros": 17609,
+        "oldest_accepted_micros": 186167
+      },
+      {
+        "sequence": 331,
+        "prefix": 97241,
+        "completed_micros": 662658580,
+        "sync_commit_micros": 18583,
+        "oldest_accepted_micros": 211616
+      },
+      {
+        "sequence": 332,
+        "prefix": 97321,
+        "completed_micros": 663694986,
+        "sync_commit_micros": 18399,
+        "oldest_accepted_micros": 245980
+      },
+      {
+        "sequence": 333,
+        "prefix": 97401,
+        "completed_micros": 664476507,
+        "sync_commit_micros": 19532,
+        "oldest_accepted_micros": 25956
+      },
+      {
+        "sequence": 334,
+        "prefix": 97481,
+        "completed_micros": 665508672,
+        "sync_commit_micros": 17683,
+        "oldest_accepted_micros": 55980
+      },
+      {
+        "sequence": 335,
+        "prefix": 97561,
+        "completed_micros": 666548849,
+        "sync_commit_micros": 28456,
+        "oldest_accepted_micros": 94487
+      },
+      {
+        "sequence": 336,
+        "prefix": 97641,
+        "completed_micros": 667579062,
+        "sync_commit_micros": 17560,
+        "oldest_accepted_micros": 121878
+      },
+      {
+        "sequence": 337,
+        "prefix": 97721,
+        "completed_micros": 668610046,
+        "sync_commit_micros": 19766,
+        "oldest_accepted_micros": 150534
+      },
+      {
+        "sequence": 338,
+        "prefix": 97801,
+        "completed_micros": 669638901,
+        "sync_commit_micros": 18824,
+        "oldest_accepted_micros": 177749
+      },
+      {
+        "sequence": 339,
+        "prefix": 97881,
+        "completed_micros": 670668120,
+        "sync_commit_micros": 17396,
+        "oldest_accepted_micros": 204934
+      },
+      {
+        "sequence": 340,
+        "prefix": 97961,
+        "completed_micros": 671700734,
+        "sync_commit_micros": 19777,
+        "oldest_accepted_micros": 236225
+      },
+      {
+        "sequence": 341,
+        "prefix": 98041,
+        "completed_micros": 672730559,
+        "sync_commit_micros": 18762,
+        "oldest_accepted_micros": 264402
+      },
+      {
+        "sequence": 342,
+        "prefix": 98121,
+        "completed_micros": 673508905,
+        "sync_commit_micros": 17843,
+        "oldest_accepted_micros": 41235
+      },
+      {
+        "sequence": 343,
+        "prefix": 98201,
+        "completed_micros": 674546867,
+        "sync_commit_micros": 21764,
+        "oldest_accepted_micros": 76825
+      },
+      {
+        "sequence": 344,
+        "prefix": 98281,
+        "completed_micros": 675578129,
+        "sync_commit_micros": 18072,
+        "oldest_accepted_micros": 107089
+      },
+      {
+        "sequence": 345,
+        "prefix": 98361,
+        "completed_micros": 676622956,
+        "sync_commit_micros": 28685,
+        "oldest_accepted_micros": 150574
+      },
+      {
+        "sequence": 346,
+        "prefix": 98441,
+        "completed_micros": 677662230,
+        "sync_commit_micros": 20930,
+        "oldest_accepted_micros": 187517
+      },
+      {
+        "sequence": 347,
+        "prefix": 98521,
+        "completed_micros": 678685750,
+        "sync_commit_micros": 20567,
+        "oldest_accepted_micros": 209392
+      },
+      {
+        "sequence": 348,
+        "prefix": 98601,
+        "completed_micros": 679713914,
+        "sync_commit_micros": 19672,
+        "oldest_accepted_micros": 235221
+      },
+      {
+        "sequence": 349,
+        "prefix": 98681,
+        "completed_micros": 680743385,
+        "sync_commit_micros": 17555,
+        "oldest_accepted_micros": 262377
+      },
+      {
+        "sequence": 350,
+        "prefix": 98761,
+        "completed_micros": 681534933,
+        "sync_commit_micros": 36437,
+        "oldest_accepted_micros": 53405
+      },
+      {
+        "sequence": 351,
+        "prefix": 98841,
+        "completed_micros": 682563640,
+        "sync_commit_micros": 19894,
+        "oldest_accepted_micros": 79724
+      },
+      {
+        "sequence": 352,
+        "prefix": 98921,
+        "completed_micros": 683592216,
+        "sync_commit_micros": 19736,
+        "oldest_accepted_micros": 107075
+      },
+      {
+        "sequence": 353,
+        "prefix": 99001,
+        "completed_micros": 684629445,
+        "sync_commit_micros": 18840,
+        "oldest_accepted_micros": 142698
+      },
+      {
+        "sequence": 354,
+        "prefix": 99081,
+        "completed_micros": 685664876,
+        "sync_commit_micros": 17840,
+        "oldest_accepted_micros": 175787
+      },
+      {
+        "sequence": 355,
+        "prefix": 99161,
+        "completed_micros": 686696935,
+        "sync_commit_micros": 21962,
+        "oldest_accepted_micros": 206546
+      },
+      {
+        "sequence": 356,
+        "prefix": 99241,
+        "completed_micros": 687724262,
+        "sync_commit_micros": 19752,
+        "oldest_accepted_micros": 231651
+      },
+      {
+        "sequence": 357,
+        "prefix": 99321,
+        "completed_micros": 688759247,
+        "sync_commit_micros": 22159,
+        "oldest_accepted_micros": 264205
+      },
+      {
+        "sequence": 358,
+        "prefix": 99401,
+        "completed_micros": 689538148,
+        "sync_commit_micros": 18657,
+        "oldest_accepted_micros": 41749
+      },
+      {
+        "sequence": 359,
+        "prefix": 99481,
+        "completed_micros": 690572008,
+        "sync_commit_micros": 25126,
+        "oldest_accepted_micros": 73903
+      },
+      {
+        "sequence": 360,
+        "prefix": 99561,
+        "completed_micros": 691598968,
+        "sync_commit_micros": 18846,
+        "oldest_accepted_micros": 100147
+      },
+      {
+        "sequence": 361,
+        "prefix": 99641,
+        "completed_micros": 692625513,
+        "sync_commit_micros": 17948,
+        "oldest_accepted_micros": 124816
+      },
+      {
+        "sequence": 362,
+        "prefix": 99721,
+        "completed_micros": 693651929,
+        "sync_commit_micros": 19883,
+        "oldest_accepted_micros": 149277
+      },
+      {
+        "sequence": 363,
+        "prefix": 99801,
+        "completed_micros": 694681765,
+        "sync_commit_micros": 16508,
+        "oldest_accepted_micros": 176952
+      },
+      {
+        "sequence": 364,
+        "prefix": 99881,
+        "completed_micros": 695706469,
+        "sync_commit_micros": 18491,
+        "oldest_accepted_micros": 199698
+      },
+      {
+        "sequence": 365,
+        "prefix": 99961,
+        "completed_micros": 696734237,
+        "sync_commit_micros": 17525,
+        "oldest_accepted_micros": 225397
+      },
+      {
+        "sequence": 366,
+        "prefix": 100041,
+        "completed_micros": 697764297,
+        "sync_commit_micros": 17638,
+        "oldest_accepted_micros": 253289
+      },
+      {
+        "sequence": 367,
+        "prefix": 100121,
+        "completed_micros": 698541725,
+        "sync_commit_micros": 17372,
+        "oldest_accepted_micros": 29311
+      },
+      {
+        "sequence": 368,
+        "prefix": 100201,
+        "completed_micros": 699578456,
+        "sync_commit_micros": 20577,
+        "oldest_accepted_micros": 63905
+      },
+      {
+        "sequence": 369,
+        "prefix": 100281,
+        "completed_micros": 700610755,
+        "sync_commit_micros": 18500,
+        "oldest_accepted_micros": 94291
+      },
+      {
+        "sequence": 370,
+        "prefix": 100361,
+        "completed_micros": 701636691,
+        "sync_commit_micros": 18451,
+        "oldest_accepted_micros": 118580
+      },
+      {
+        "sequence": 371,
+        "prefix": 100441,
+        "completed_micros": 702671498,
+        "sync_commit_micros": 19589,
+        "oldest_accepted_micros": 151910
+      },
+      {
+        "sequence": 372,
+        "prefix": 100521,
+        "completed_micros": 703706614,
+        "sync_commit_micros": 19946,
+        "oldest_accepted_micros": 184491
+      },
+      {
+        "sequence": 373,
+        "prefix": 100601,
+        "completed_micros": 704740967,
+        "sync_commit_micros": 20722,
+        "oldest_accepted_micros": 218110
+      },
+      {
+        "sequence": 374,
+        "prefix": 100681,
+        "completed_micros": 705772782,
+        "sync_commit_micros": 20864,
+        "oldest_accepted_micros": 247964
+      },
+      {
+        "sequence": 375,
+        "prefix": 100761,
+        "completed_micros": 706043617,
+        "sync_commit_micros": 19867,
+        "oldest_accepted_micros": 69402
+      },
+      {
+        "sequence": 376,
+        "prefix": 100841,
+        "completed_micros": 707077517,
+        "sync_commit_micros": 19760,
+        "oldest_accepted_micros": 100389
+      },
+      {
+        "sequence": 377,
+        "prefix": 100921,
+        "completed_micros": 708114330,
+        "sync_commit_micros": 19886,
+        "oldest_accepted_micros": 136871
+      },
+      {
+        "sequence": 378,
+        "prefix": 101001,
+        "completed_micros": 709148967,
+        "sync_commit_micros": 19833,
+        "oldest_accepted_micros": 169114
+      },
+      {
+        "sequence": 379,
+        "prefix": 101081,
+        "completed_micros": 710180335,
+        "sync_commit_micros": 19543,
+        "oldest_accepted_micros": 198245
+      },
+      {
+        "sequence": 380,
+        "prefix": 101161,
+        "completed_micros": 711216537,
+        "sync_commit_micros": 21401,
+        "oldest_accepted_micros": 233533
+      },
+      {
+        "sequence": 381,
+        "prefix": 101241,
+        "completed_micros": 712250148,
+        "sync_commit_micros": 19376,
+        "oldest_accepted_micros": 265664
+      },
+      {
+        "sequence": 382,
+        "prefix": 103265,
+        "completed_micros": 713029507,
+        "sync_commit_micros": 17859,
+        "oldest_accepted_micros": 66986
+      },
+      {
+        "sequence": 383,
+        "prefix": 103709,
+        "completed_micros": 713302968,
+        "sync_commit_micros": 19406,
+        "oldest_accepted_micros": 275507
+      },
+      {
+        "sequence": 384,
+        "prefix": 104112,
+        "completed_micros": 713575854,
+        "sync_commit_micros": 17993,
+        "oldest_accepted_micros": 276818
+      },
+      {
+        "sequence": 385,
+        "prefix": 104576,
+        "completed_micros": 713848749,
+        "sync_commit_micros": 17474,
+        "oldest_accepted_micros": 276517
+      },
+      {
+        "sequence": 386,
+        "prefix": 105020,
+        "completed_micros": 714124496,
+        "sync_commit_micros": 19465,
+        "oldest_accepted_micros": 278315
+      },
+      {
+        "sequence": 387,
+        "prefix": 105480,
+        "completed_micros": 714395674,
+        "sync_commit_micros": 18444,
+        "oldest_accepted_micros": 276557
+      },
+      {
+        "sequence": 388,
+        "prefix": 105883,
+        "completed_micros": 714670205,
+        "sync_commit_micros": 18623,
+        "oldest_accepted_micros": 277393
+      },
+      {
+        "sequence": 389,
+        "prefix": 106347,
+        "completed_micros": 714939087,
+        "sync_commit_micros": 17589,
+        "oldest_accepted_micros": 271094
+      },
+      {
+        "sequence": 390,
+        "prefix": 106791,
+        "completed_micros": 715208464,
+        "sync_commit_micros": 17617,
+        "oldest_accepted_micros": 264610
+      },
+      {
+        "sequence": 391,
+        "prefix": 107237,
+        "completed_micros": 715480279,
+        "sync_commit_micros": 18620,
+        "oldest_accepted_micros": 261129
+      },
+      {
+        "sequence": 392,
+        "prefix": 107621,
+        "completed_micros": 715751583,
+        "sync_commit_micros": 18454,
+        "oldest_accepted_micros": 289009
+      },
+      {
+        "sequence": 393,
+        "prefix": 108085,
+        "completed_micros": 716024617,
+        "sync_commit_micros": 17867,
+        "oldest_accepted_micros": 288817
+      }
+    ],
+    "durable_completed_millis": 716024,
+    "sync_commit_micros": 17867,
+    "accepted_to_durable_millis": 288,
+    "launch_request": "070e593a-08a6-4283-ae5e-87bef5fafc87",
+    "launch_result": {
+      "request": "070e593a-08a6-4283-ae5e-87bef5fafc87",
+      "identity": "task=7d871851-3b11-4be8-a85e-f0d9fc8315c3 session=b393cac9-1334-4c4f-9e36-129607704b67 request=070e593a-08a6-4283-ae5e-87bef5fafc87",
+      "error": null
+    },
+    "adopted": "/private/tmp/rat18-codex-checkout",
+    "agent": "Codex CLI",
+    "native_conversation": "01a1b1b3-b889-7860-a85f-7cd1960e4bbc",
+    "identity": "task=7d871851-3b11-4be8-a85e-f0d9fc8315c3 session=b393cac9-1334-4c4f-9e36-129607704b67 request=070e593a-08a6-4283-ae5e-87bef5fafc87",
+    "status": {
+      "state": "Unknown",
+      "evidence": "native model request started",
+      "reason": "execution not running",
+      "recent": [
+        "PostModelRequest:01a1b1b5-3ce1-7b91-bd8d-a92747d49258::",
+        "Stop:01a1b1b5-3ce1-7b91-bd8d-a92747d49258::",
+        "UserPromptSubmit:01a1b1b7-4b6a-74b1-a5be-536602e1b7b7::",
+        "PreModelRequest:01a1b1b7-4b6a-74b1-a5be-536602e1b7b7::",
+        "PostModelRequest:01a1b1b7-4b6a-74b1-a5be-536602e1b7b7::",
+        "PreToolUse:01a1b1b7-4b6a-74b1-a5be-536602e1b7b7:request_user_input:call_3d14610df2ff4cdb9167fdf4b8bb3527",
+        "PostToolUse:01a1b1b7-4b6a-74b1-a5be-536602e1b7b7:request_user_input:call_3d14610df2ff4cdb9167fdf4b8bb3527",
+        "PreModelRequest:01a1b1b7-4b6a-74b1-a5be-536602e1b7b7::",
+        "PostModelRequest:01a1b1b7-4b6a-74b1-a5be-536602e1b7b7::",
+        "Stop:01a1b1b7-4b6a-74b1-a5be-536602e1b7b7::",
+        "UserPromptSubmit:01a1b1bb-9b30-7e21-aa84-939988b2102c::",
+        "PreModelRequest:01a1b1bb-9b30-7e21-aa84-939988b2102c::",
+        "PostModelRequest:01a1b1bb-9b30-7e21-aa84-939988b2102c::",
+        "PreToolUse:01a1b1bb-9b30-7e21-aa84-939988b2102c:Bash:exec-b05dca32-075d-4ead-8124-1495431c5efa",
+        "PermissionRequest:01a1b1bb-9b30-7e21-aa84-939988b2102c:Bash:",
+        "PreModelRequest:01a1b1bb-9b30-7e21-aa84-939988b2102c::"
+      ]
+    },
+    "screen": "› Use request_user_input to ask me to choose alpha or beta. Do not run commands, read files or write\n  files. Wait for my native choice.\n \n \n• Questions 1/1 answered\n  • Choose alpha or beta.\n    answer: alpha\n \n• You chose alpha.\n \n  Worked for 3m 14s • 17:38                                                                             \n \n \n› Run exactly python3 proof-heartbeat.py in the foreground using require_escalated permission and\n  justification so I can approve once. This authorized harmless bounded heartbeat tests dashboard Stop.\n  Do not run other commands or change files.\n \n \n• I’ll run the heartbeat in the foreground with the requested approval prompt.\n \n✔ You approved codex to run python3 proof-heartbeat.py this time\n \n• Running python3 proof-heartbeat.py\n \n◦ Working (8s • esc to interrupt)\n  └ Tip: Run /review to get a code review of your current changes.\n \n \n› Ask Codex to do anything\n\n  GPT-6.1-Sol medium · /private/tmp/rat18-codex-checkout · Reply with native-proof text\n  ← for agents · ? for shortcuts",
+    "formatted": "\u001b[?25h\u001b[m\u001b[H\u001b[J\u001b[2m› \u001b[mUse request_user_input to\u001b[Cask me to\u001b[Cchoose\u001b[Calpha\u001b[Cor\u001b[Cbeta.\u001b[CDo\u001b[Cnot\u001b[Crun\u001b[Ccommands,\u001b[Cread\u001b[Cfiles\u001b[Cor\u001b[Cwrite\r\n  files. Wait for my native choice.\r\n \r\n \r\n\u001b[2m•\u001b[C\u001b[1mQuestions\u001b[2m 1/1 answered\r\n\u001b[m  • Choose alpha or beta.\r\n\u001b[2m    answer: \u001b[malpha\r\n \r\n\u001b[2m• \u001b[mYou chose alpha.\r\n \r\n\u001b[2m  Worked for 3m 14s • 17:38                                                                             \r\n\u001b[m \r\n \r\n\u001b[2m› \u001b[mRun exactly python3 proof-heartbeat.py in the foreground using require_escalated permission and\r\n  justification so I can approve once. This authorized harmless bounded heartbeat tests dashboard Stop.\r\n  Do not run other commands or change files.\r\n \r\n \r\n\u001b[2m• \u001b[mI’ll run the heartbeat in the foreground with\u001b[Cthe\u001b[Crequested\u001b[Capproval\u001b[Cprompt.\r\n \r\n✔ You \u001b[1mapproved\u001b[m codex\u001b[Cto\u001b[Crun\u001b[C\u001b[2mpython3 proof-heartbeat.py\u001b[1m this time\r\n\u001b[m \r\n•\u001b[C\u001b[1mRunning\u001b[C\u001b[mpython3 proof-heartbeat.py\r\n \r\n\u001b[2m◦\u001b[CWorking\u001b[m \u001b[2m(8s • \u001b[1mesc\u001b[2m to interrupt)\r\n  └ \u001b[1mTip:\u001b[C\u001b[mRun\u001b[C\u001b[1m/review\u001b[C\u001b[mto\u001b[Cget\u001b[Ca\u001b[Ccode\u001b[Creview\u001b[Cof\u001b[Cyour\u001b[Ccurrent\u001b[Cchanges.\r\n \r\n \r\n\u001b[1m›\u001b[C\u001b[2mAsk Codex to do anything\u001b[31;3H\u001b[mGPT-6.1-Sol\u001b[Cmedium\u001b[C·\u001b[C/private/tmp/rat18-codex-checkout\u001b[C·\u001b[CReply\u001b[Cwith\u001b[Cnative-proof\u001b[Ctext\u001b[32;3H\u001b[1m←\u001b[m for agents · \u001b[1m?\u001b[m for shortcuts\u001b[29;3H\u001b>\u001b[?1l\u001b[?2004h\u001b[?1003h\u001b[?1006h",
+    "rows": 32,
+    "cols": 104,
+    "output_bytes": 108085,
+    "error": null,
+    "stopped": false,
+    "lifecycle": "Stopped",
+    "control_denied": false
+  }
+}

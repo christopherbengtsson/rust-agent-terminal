@@ -9,9 +9,14 @@ The dashboard discovers real Git worktrees, explicitly adopts a checkout, and
 launches Claude Code (`c`), Codex CLI (`x`), or a scripted PTY fixture (`l`). Native
 launch is experimental; see the recorded version-specific proofs below. Durable
 readable history, supervisor reconnect, conservative launch reconciliation and
-explicit native recovery are implemented. Remaining native status and GitHub
-workflows have separate gates. The first
-release targets macOS; fixture tests do not establish native-agent compatibility.
+explicit native recovery are implemented. Native status has bounded per-version
+evidence; GitHub workflows remain unavailable. The first release targets macOS;
+fixture tests do not establish native-agent compatibility.
+
+The [integrated Milestone 1 evidence](docs/proofs/18-milestone-evidence.md) records
+exact native versions, measured capacity and limits. A discovered default Codex
+foreground-subprocess Stop failure remains an open gate pending its fix and real
+native retest; this checkpoint is not declared complete.
 
 ## Run
 
@@ -39,18 +44,19 @@ Errors appear in the dashboard, where you can retry or quit.
 | `l` | Launch the scripted PTY fixture in the adopted checkout |
 | Enter | Attach to the existing managed session |
 | Ctrl-] | Return from attached focus to dashboard navigation |
-| `s` | In dashboard focus, stop the fixture and keep the dashboard open |
+| `s` | In dashboard focus, stop the managed native/fixture session and keep the dashboard open |
 | `g` | Inspect history cleanup; `j`/`k` select, `n`/`p` page, Enter preview, `D` confirm selected deletion, Esc cancel/back |
 | `y` | Retry history storage after repair; the sole writer retains pending bytes |
 | `d` | In dashboard focus, detach and exit while preserving execution |
 | `q` / Esc / Ctrl-C | In dashboard focus, request supervisor shutdown and quit after confirmed stop |
 
 In attached focus, UTF-8 characters, Ctrl-C, legacy control/Alt shortcuts,
-arrows, navigation keys, F1–F12 and Shift-Tab reach the fixture PTY. The pane and
+arrows, navigation keys, F1–F12 and Shift-Tab reach the native/fixture PTY. The pane and
 help show input focus; attached `q` and Esc are native input. Ctrl-] (the same
-legacy byte as Ctrl-5) returns to dashboard focus without stopping the fixture;
-Enter reattaches to the same child. This provisional chord still needs both
-native-agent proofs. Ordinary quit visibly waits for the supervisor's confirmed
+legacy byte as Ctrl-5) returns to dashboard focus without stopping the session;
+Enter reattaches to the same child. Both recorded native versions exercised this
+chord; other keyboard protocols remain outside the proof. Ordinary quit visibly
+waits for the supervisor's confirmed
 stop. Stop sends TERM to the managed process group, escalates to KILL after
 500 ms, then confirms the leader exit and absence of executing group members.
 Verification errors or execution remaining after the two-second deadline stay
@@ -86,12 +92,12 @@ cargo run --locked -- /path/to/repository --state-dir /tmp/rat-proof-example
 
 One dashboard controls the supervisor at a time. A second dashboard reports the
 existing connection and cannot launch, type into, or stop its session. After a
-controller dies, reopen the dashboard to recover the same fixture and screen.
+controller dies, reopen the dashboard to recover the same session and screen.
 Symlink checkout aliases and paths inside a checkout adopt its canonical Git
 worktree root. A new launch while running is refused; Enter attaches to the existing
 child. The surviving supervisor retains launch-request outcomes: reconnect
 recovers the original request and its success or failure, and retrying that exact
-request does not execute again. An explicit `c` or `l` after an acknowledged outcome is
+request does not execute again. An explicit `c`, `x` or `l` after an acknowledged outcome is
 a new request. This recovery applies to dashboard loss; supervisor loss needs the
 separate crash-reconciliation work. See the [reconnect proof](docs/proofs/07-dashboard-reconnect.md).
 
@@ -104,7 +110,7 @@ Use separate private `--state-dir` directories only for isolated experiments.
 The durable-history and launch-recovery sections below describe current storage
 and recovery behavior. Cleanup of processes that escape the managed process
 group remains unproved; interrupted native execution can require verified reboot
-before replacement. Dashboard loss preserves the supervisor and fixture; reconnect and quit
+before replacement. Dashboard loss preserves the supervisor and session; reconnect and quit
 normally to clean up. Do not remove a socket for a running supervisor. The bounded
 parsed screen follows the session pane viewport (up to 200×80 cells), without
 scrollback; it is not history. The PTY and parser resize together, including

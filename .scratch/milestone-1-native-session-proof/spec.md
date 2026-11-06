@@ -304,9 +304,11 @@ failure with evidence and a proposed resolution, not a silently relaxed gate.
   architecture, and milestone documents. The existing foundation has worktree
   discovery/navigation and terminal restoration, with no supervisor, sessions,
   adapters, or persistence implemented at specification time.
-- The approved test seam was confirmed by the user before publication. This is
-  a specification task: none of the proposed native or resource checks have yet
-  been executed as part of this spec.
+- The approved test seam was confirmed by the user before publication. Native,
+  resource and recovery proofs have since been executed; see the
+  [integrated evidence](../../docs/proofs/18-milestone-evidence.md). Ticket 18
+  remains open for a discovered native foreground-subprocess Stop failure and
+  its final correction/rerun; this spec is not yet marked complete.
 - Preserve accepted ADRs 0001 (supervisor ownership), 0003 (status evidence),
   0004 (history and explicit cleanup), and 0005 (uncertain launch reconciliation).
   Resolve feasibility problems explicitly before contradicting those decisions.

@@ -642,3 +642,20 @@ storage can freeze native output while dashboard recovery/Stop remain available;
 a receipt is distinct from a visible usable native interaction. See
 [the final measurements and limits](proofs/17-session-measurements.md), including
 the independently declared fault-input supplement and preserved failed runs.
+
+### Integrated evidence boundary (ticket 18)
+
+The [final proof record](proofs/18-milestone-evidence.md) ties native observations
+to source, exact CLI versions, isolated PTYs/state, raw cell captures and required
+checks. Whole-dashboard160×40 and60×18 captures follow the reference composition,
+with unavailable reviews, one active session per worktree and the native CLI pane.
+Narrow layouts hide the sidebar; unusable viewports retain the last usable child
+geometry. Parsed-cell rasterization does not establish Terminal.app/iTerm
+compatibility.
+
+An actual Codex0.167.0 foreground command created a separate native child process
+group. The pre-fix Stop confirmed the CLI group but left that command alive, so
+the integrated milestone remains open until owned native subprocess cleanup and
+ordinary quit pass. This concrete default-native behavior is distinct from
+arbitrary processes deliberately escaping ownership. The record preserves both
+the original failure and the final fix/retest boundary when available.

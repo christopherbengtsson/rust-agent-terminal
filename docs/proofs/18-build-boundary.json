@@ -1,0 +1,10 @@
+{
+  "source_base": "4ec3a8b6d7d2dc87050ed4bba3dfdca19df8edf3",
+  "post_native_launch_delta": "only four src/codex_status.rs reason strings changed, no status/lifecycle logic; mapped supervisors launched before this rebuild",
+  "sha256": {
+    "target/debug/agent-terminal": "e3978da23df494eab95357c1e8a7663eee7af452236f10a5e708dc3ad1a93b1d",
+    "src/codex_status.rs": "d9f8465884c5a437ae62aabb7a148c91eaecba8408d42a78385047cc32c2e5ae",
+    "/Users/christopherbengtsson/.local/share/claude/versions/2.1.318": "677a2ea7bf576cedd20e191d973914ed8a41796f53a63b1923381ddc4d5b5e7d",
+    "/Users/christopherbengtsson/.codex/packages/standalone/releases/0.167.0-aarch64-apple-darwin/bin/codex": "030316ecfbb41f4e7946e584b0063ef333b7a36cd312ba349f2f6869e39b62cc"
+  }
+}
