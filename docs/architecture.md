@@ -608,14 +608,20 @@ only for their explicit task, never assigned to unrelated historical sessions.
 The supervisor separately owns registry snapshots/registration operations and its
 collection of session owners. Only explicit adoption or runtime selection changes
 the durable selected workspace; metadata saves from another running owner cannot
-replace it. Startup retains the latest session per canonical workspace plus every
+replace it. Selection keeps metadata pending until its exact private request UUID
+receives a committed selection result; an unrelated registry snapshot cannot settle
+that request. Launch-outcome lookup spans all owners, while replay still respects
+the selected owner's provisional launch reservation and never changes its control
+target or native session identity. Startup retains the latest session per canonical workspace plus every
 unresolved execution (at most 1024 saved session records, failing closed beyond
 that bound), without launching tools or allocating capture queues for history.
 Up to 32 unsettled execution/capture owners are admitted. Each stream retains
 64 queued blocks of at most 4096 bytes, one worker block and one producer block
 (270336 accepted bytes before the reader's separate finite 1 MiB Stop tail).
 The control queue stays independently bounded at 16 commands. Successful sealing
-releases that stream's queue/handle/metrics; an unfinished tail remains reserved.
+releases that stream's live queue and handles. The owner retains its finalized
+byte counters and bounded commit evidence through the seal receipt and reconnect;
+an unfinished tail remains reserved.
 Actual write/fsync syscall stalls still stall the sole writer for all streams.
 Native launch gates and Claude/Codex hook endpoints use distinct private short
 `/tmp/rat-<uid>-<nonce>` directories so simultaneous launches cannot replace one
@@ -671,6 +677,11 @@ separate passages, so duplicates, fragments and geometry artifacts remain possib
 The last page line is a provisional preview, explicitly marked in passage metadata.
 
 A readable request first receives the escaped raw page with a preparing flag.
+Repeated polls for the same owner/session/passage share that request through its
+final readable result or error. A different passage invalidates the old request.
+After completion, a same-passage refresh keeps the cached page visible while
+reading its newer committed prefix; a matching failure clears any preparing page
+and permits an explicit retry.
 The sole worker then replays at most 32 KiB per turn, interleaving capture, control,
 cleanup and flush; completion retains owner and request UUIDs so late results and
 errors cannot replace another selection. At most 16 jobs and 64 parser checkpoints

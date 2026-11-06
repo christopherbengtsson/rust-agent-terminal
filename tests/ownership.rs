@@ -1199,6 +1199,7 @@ fn stopped_history_survives_restart_and_missing_checkout_without_launching() {
     restored.send(b"h");
     restored.wait("Retained history");
     restored.wait("received: retained-context-08");
+    restored.send(b"v");
     restored.wait("\\u{1b}[?2004h");
     assert!(
         !restored
