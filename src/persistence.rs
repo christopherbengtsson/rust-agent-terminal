@@ -981,6 +981,23 @@ impl Store {
         state.stopped = false;
         state.status = crate::native_status::Status::default();
         state.metadata_pending = false;
+        if let Some(identity) = &state.session_identity {
+            // Recovered bytes are the committed prefix. Prior process-local queues
+            // and producer ownership cannot be restored or treated as pending work.
+            let durable: u64 = self.db.query_row(
+                "SELECT durable FROM sessions WHERE id=?1",
+                [&identity.session],
+                |row| row.get(0),
+            )?;
+            state.capture_loss_possible |= state.accepted_bytes > durable;
+            state.accepted_bytes = durable;
+            state.written_bytes = durable;
+            state.durable_bytes = durable;
+            state.capture_pending_bytes = 0;
+            state.producer_wait_millis = 0;
+            state.storage_wait_millis = 0;
+            state.storage_error = None;
+        }
 
         if state.execution.is_some()
             || matches!(
@@ -1653,5 +1670,87 @@ mod concurrent_tests {
             }
         }
         assert_eq!(text, "A".repeat(270336));
+    }
+    #[test]
+    fn restored_session_reports_its_committed_prefix() {
+        let root = tempfile::tempdir().unwrap();
+        let (worker, _) = Worker::start(root.path()).unwrap();
+        let id = uuid::Uuid::new_v4().to_string();
+        saved(&worker, &id);
+        let capture = worker.capture_for(&id).unwrap();
+        capture.accept(3);
+        capture
+            .send((id.clone(), b"AAA".to_vec(), Instant::now()), None)
+            .unwrap();
+        let operation = final_operation(&id);
+        worker
+            .commands
+            .send(Command::Flush(operation.clone()))
+            .unwrap();
+        committed(&worker, &operation);
+        drop(capture);
+        drop(worker);
+        let (_restored_worker, restored) = Worker::start(root.path()).unwrap();
+        assert_eq!(restored.state.session_identity.unwrap().session, id);
+        assert_eq!(
+            (
+                restored.state.accepted_bytes,
+                restored.state.written_bytes,
+                restored.state.durable_bytes,
+                restored.state.capture_pending_bytes
+            ),
+            (3, 3, 3, 0)
+        );
+    }
+    #[test]
+    fn live_capture_admission_is_finite_and_seal_releases_the_reservation() {
+        let root = tempfile::tempdir().unwrap();
+        let (worker, _) = Worker::start(root.path()).unwrap();
+        let mut sessions = Vec::new();
+        for _ in 0..32 {
+            let id = uuid::Uuid::new_v4().to_string();
+            saved(&worker, &id);
+            let capture = worker.capture_for(&id).unwrap();
+            sessions.push((id, capture));
+        }
+        let next = uuid::Uuid::new_v4().to_string();
+        saved(&worker, &next);
+        assert!(worker.capture_for(&next).is_err());
+        let operation = final_operation(&sessions[0].0);
+        worker
+            .commands
+            .send(Command::Flush(operation.clone()))
+            .unwrap();
+        committed(&worker, &operation);
+        let operation = Operation {
+            purpose: Purpose::Seal,
+            ..final_operation(&sessions[0].0)
+        };
+        worker
+            .commands
+            .send(Command::Seal(operation.clone()))
+            .unwrap();
+        committed(&worker, &operation);
+        let capture = worker.capture_for(&next).unwrap();
+        capture.accept(3);
+        capture
+            .send((next.clone(), b"new".to_vec(), Instant::now()), None)
+            .unwrap();
+        let operation = final_operation(&next);
+        worker
+            .commands
+            .send(Command::Flush(operation.clone()))
+            .unwrap();
+        committed(&worker, &operation);
+        assert_eq!(worker.progress_for(Some(&next)).durable, 3);
+        assert!(
+            sessions[0]
+                .1
+                .send(
+                    (sessions[0].0.clone(), b"late".to_vec(), Instant::now()),
+                    None
+                )
+                .is_err()
+        );
     }
 }
