@@ -204,3 +204,50 @@ before: FAILED — live OSC parser retained payload-sized memory
 fixed:  OSC13 supervisor RSS before/after: 6368/6528 KiB, captured8MiB control
 fixed:  oversized_osc_is_captured_without_growing_live_screen_history ... ok
 ```
+
+## Final combined verification
+
+[Final bounded-parser raw record](13-resource-bounded-parser.jsonl) identifies
+clean combined source `be1b40bfaa08484b6d96505b7c6ff2e2ba9b1921`: ticket 12's
+Codex status, ticket 16's native recovery, and ticket 13's bounded OSC/parser,
+frame cursor, capture telemetry and harness cleanup. The integration head
+`0c8e1b82553716d667a7be10eac17dae6046ca28` was merged before this run.
+
+All required checks passed on that combined source:
+
+```text
+cargo build --locked: passed
+cargo fmt --all -- --check: passed
+cargo clippy --locked --all-targets -- -D warnings: passed
+cargo test --locked --all-targets -- --nocapture:
+  unit: 22 passed; 1 ignored subprocess probe covered by restoration driver
+  ownership/history/recovery: 33 passed; 197.55s
+  scripted interaction/status: 1 passed; 14.50s
+  screen/resize: 1 passed; 8.18s
+  maximum 200x80 styled snapshot: 359026 encoded bytes
+  OSC13 RSS before/after: 6288/6496 KiB; 8388638 bytes captured exactly
+```
+
+The final four-mode scenario passed in 140.34s with all 131072 numbered records
+continuous and unique. Pending raw capture returned to zero; its high-water was
+67584 bytes, with 257 full-queue waits totalling 2.666302s. The subscriber frame
+high-water was 359034 bytes, and parsed/acknowledged raw prefixes both reached
+17381130 bytes. These count/byte caps remained fixed while history grew.
+
+Individual sampled RSS ranges were dashboard 6128–6688KiB (18 samples), supervisor
+6288–8848KiB (766 samples), and child 2448–3024KiB (53 samples). The dashboard was
+absent for detached/slow-subscriber intervals and the child exited before history
+pagination. Sampler median/max cost was 78.810/128.845ms, plus its 100ms sleep.
+These short sampled observations retain the preliminary limitations above.
+
+Eight final navigation injections occurred during actual production and measured
+4.135–8.007ms to a new parsed selection (median 5.919ms); two earlier injections
+were excluded. Busy attach's focus frame was 7.798ms, but usable nonce ACK was
+1.482781s, again a one-second-target miss. Injection to fixture parse took
+1.411855s; parse to visible ACK took 70.942ms. Fixture parsing occurred only 11µs
+after its burst finished. This confirms the fixture's synchronous input-loop
+delay while retaining the actual miss and the separate terminal-delivery tail.
+Ticket 17's sustained workload, concurrent-input fixture, distributions and
+physical-terminal presentation checks remain open. Ticket 14's storage-fault
+work is also separate. No new native CLI support claim is derived from these
+scripted resource checks.
