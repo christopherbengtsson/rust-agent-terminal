@@ -619,3 +619,26 @@ pending bytes, a write/sync fault or possible-loss context. Test faults are debu
 files under the explicit isolated state directory, extending ticket 14 with
 available-capacity injection and delete intent/unlink/directory-sync/completion
 boundaries; production ignores them. See `docs/proofs/15-explicit-history-cleanup.md`.
+
+### Sustained measurement boundary (ticket 17)
+
+The storage worker retains a bounded 1024-entry ring of data-bearing durability
+completions: sequence, committed raw prefix, worker-relative completion time,
+actual transcript sync plus SQLite commit duration, and oldest accepted age.
+Sequence gaps reveal overwritten observations; polling only the last completion
+cannot establish a full interval distribution. A failed append does not mark the
+active file dirty or mint unchanged-prefix completions. The oldest pending
+accepted time survives until a successful append/commit. Metadata excludes this
+transient ring.
+
+The developer proof uses one paced scripted producer alongside bounded stdin
+collection, short stdout locks and explicit input receipts before ACK output.
+Ordinary stdin bytes do not flush/acquire stdout; one complete ACK can still wait
+behind real output backpressure. Its bounded continuous outer-terminal parser
+measures actual injection-to-parsed-visible feedback. The proof records source
+and binary boundaries, same-session handoffs, RSS by process, actual queue
+saturation, disk growth, complete commit sequences and retained prefixes. Full
+storage can freeze native output while dashboard recovery/Stop remain available;
+a receipt is distinct from a visible usable native interaction. See
+[the final measurements and limits](proofs/17-session-measurements.md), including
+the independently declared fault-input supplement and preserved failed runs.

@@ -262,3 +262,25 @@ covers the most recent managed conversation, without history search or arbitrary
 resume selection. See [both original-conversation proofs](docs/proofs/16-native-recovery.md)
 for exact versions, marker recall, supervisor restart and separate injected
 reboot-style checks; no physical reboot is claimed.
+
+## Development measurement proof
+
+The [paced measurement record](docs/proofs/17-session-measurements.md) includes
+exact source/binary revisions, standalone raw artifacts, command logs, measured
+limits and preserved failures. It uses isolated real Git repositories,
+dashboards/supervisors and a scripted PTY; it does not establish native CLI
+compatibility or the full release workload. Debug builds enable the explicit
+storage-fault markers.
+
+```sh
+RAT_MEASURE17_DIR=/private/tmp/unique-main cargo test --locked --test ownership paced_session_measurement17 -- --exact --ignored --nocapture
+python3 docs/proofs/17-analyze.py /private/tmp/unique-main
+RAT_FAULT17_DIR=/private/tmp/unique-fault cargo test --locked --test ownership full_storage_input_receipt_measurement17 -- --exact --ignored --nocapture
+python3 docs/proofs/17-analyze.py /private/tmp/unique-fault
+```
+
+Use a new output directory each time. `RAT_MEASURE17_QUICK=1` selects a short
+preflight; it cannot replace the sustained resource/latency proof. Terminal-parsed
+visible timings are not physical monitor timestamps. Full storage can block
+native ACK output until repair even when input receipt and dashboard navigation
+remain responsive.
