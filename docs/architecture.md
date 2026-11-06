@@ -474,3 +474,25 @@ Connection loss keeps the last identity/lifecycle, labels process state unknown
 and revokes semantic status. `d` exits locally even after transport loss; reopen
 resynchronizes without launching. `q` still requires confirmed stop and flush.
 See [caps and preliminary resource proof](proofs/13-slow-subscribers.md).
+
+
+### Codex semantic observations (ticket 12)
+
+`codex_status` uses the shared semantic State/Status vocabulary through a bounded
+passive invocation-local hook channel. A token, validated native session UUID,
+submitted turn UUID and pending tool IDs bind receipts to the managed invocation.
+PreModelRequest/PostModelRequest bound working evidence; correlated question or
+permission intervals plus the current 0.167.0 native modal establish attention.
+Native Interrupt acknowledges active-turn cancellation. Stop alone does not
+prove completion: a later output boundary, a new native done marker and the idle
+composer/footer must agree. New input/requests, expired or invalid receipts,
+ambiguous attribution and changed modal screens revoke confidence to unknown.
+No terminal prose, silence, intermediate command failure or live process invents
+semantic outcomes. Every native state is independent of process lifecycle,
+connection and task archival, and expires conservatively (five seconds for model
+requests, 30 otherwise). Native hooks retain existing policy and require native
+trust; monitoring failure does not prevent launch. The execution gate wraps the
+fully configured native argv. Detached monitoring refreshes the parsed screen
+only when its output boundary changes. See the [exact version/scenario proof](proofs/12-codex-status.md)
+for five demonstrated signals, Stop-continuation and stale/delayed/quoted-text
+negative checks, and unsupported layouts/version limits.

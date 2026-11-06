@@ -2145,6 +2145,7 @@ fn prior_boot_native_record_stays_interrupted_until_explicit_reconcile_then_resu
     dashboard.send(b"v");
     dashboard.wait("native-recovery-args:<--resume><11111111-2222-4333-8444-555555555555>");
     dashboard.wait("fixture>");
+
     dashboard.send(&[0x1d]);
     dashboard.send(b"q");
 }

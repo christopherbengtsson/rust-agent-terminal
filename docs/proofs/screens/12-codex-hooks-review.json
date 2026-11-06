@@ -1,0 +1,15 @@
+{
+  "lifecycle": "Running",
+  "status": {
+    "state": "Unknown",
+    "evidence": null,
+    "reason": "Codex evidence unavailable",
+    "recent": []
+  },
+  "screen": " \n  Hooks need review\n  12 hooks are new or changed.\n  Hooks can run outside the sandbox after you trust them.\n \n \n› 1. Review hooks                                                                                       \n  2. Trust all and continue\n  3. Continue without trusting (hooks won't run)\n \n  enter confirm · esc skip                                                                              \n \n \n \n \n \n \n \n \n \n \n \n \n \n \n \n \n \n \n \n \n ",
+  "identity": "task=93a1c122-2643-43d1-b113-12f531c8cf90 session=edb9095d-770d-480e-a709-dac73ee98232 request=c20f82f2-3c2d-43e1-a2ce-5a373da109ab",
+  "agent": "Codex CLI",
+  "rows": 32,
+  "cols": 104,
+  "output_bytes": 4815
+}

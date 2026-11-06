@@ -1004,12 +1004,17 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     codex_monitor = None;
                     state.status = crate::native_status::Status::default();
                     if codex {
-                        let mut status_monitor = crate::codex_status::Monitor::start(directory)?;
-                        if resume { status_monitor.expect_session(state.native_conversation.as_ref().unwrap()); }
-                        status_monitor.configure(&mut command)?;
-                        codex_monitor = Some(status_monitor);
+                        match crate::codex_status::Monitor::start(directory) {
+                            Ok(mut status_monitor) => {
+                                if resume { status_monitor.expect_session(state.native_conversation.as_ref().unwrap()); }
+                                if status_monitor.configure(&mut command).is_ok() { codex_monitor = Some(status_monitor); }
+                                else { state.status.reason = "Codex status monitor unavailable".into(); }
+                            }
+                            Err(_) => state.status.reason = "Codex status monitor unavailable".into(),
+                        }
                     } else {
                         match crate::native_status::Monitor::start(directory, !claude, if resume { state.native_conversation.as_deref() } else { None }) {
+
                             Ok(mut status_monitor) => {
                                 status_monitor.native_executable(claude_executable.as_deref());
                                 status_monitor.configure(&mut command, resume);

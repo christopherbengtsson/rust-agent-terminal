@@ -158,7 +158,7 @@ impl Monitor {
                         || (receipt.event != "SessionStart" && receipt.at < self.barrier)
                         || receipt.at > now
                         || now.saturating_sub(receipt.at) > 30_000
-                        || receipt.session.is_empty()
+                        || uuid::Uuid::parse_str(&receipt.session).is_err()
                     {
                         self.unknown("invalid or unattributed Codex evidence");
                         continue;
@@ -170,7 +170,9 @@ impl Monitor {
                         self.unknown("invalid or unattributed Codex evidence");
                         continue;
                     }
-                    if receipt.event == "UserPromptSubmit" && !receipt.turn.is_empty() {
+                    if receipt.event == "UserPromptSubmit"
+                        && uuid::Uuid::parse_str(&receipt.turn).is_ok()
+                    {
                         self.turn = Some(receipt.turn.clone());
                         self.baseline_marker =
                             done_marker(screen).map(|(_, marker)| marker.to_owned());
@@ -178,7 +180,8 @@ impl Monitor {
                         self.pending.clear();
                     } else if receipt.event != "SessionStart"
                         && receipt.event != "SessionEnd"
-                        && (receipt.turn.is_empty() || self.turn.as_deref() != Some(&receipt.turn))
+                        && (uuid::Uuid::parse_str(&receipt.turn).is_err()
+                            || self.turn.as_deref() != Some(&receipt.turn))
                     {
                         self.unknown("invalid or unattributed Codex evidence");
                         continue;
@@ -284,6 +287,13 @@ impl Monitor {
                 .is_some_and(|at| at.elapsed() > Duration::from_secs(5))
         {
             self.unknown("Codex model evidence stale");
+        }
+        if matches!(
+            self.status.state,
+            State::Input | State::Approval | State::Completed
+        ) {
+            self.status.state = State::Unknown;
+            self.status.reason = "current Codex screen no longer corroborates evidence".into();
         }
         // A hook interval and native modal structure must agree. Printed phrases alone
         // are deliberately insufficient. Input clears the interval before PTY delivery.
