@@ -251,3 +251,20 @@ Ticket 17's sustained workload, concurrent-input fixture, distributions and
 physical-terminal presentation checks remain open. Ticket 14's storage-fault
 work is also separate. No new native CLI support claim is derived from these
 scripted resource checks.
+
+
+## Harness correction discovered during ticket 14
+
+The earlier paragraph claiming an eight-block outer-output channel is not a
+valid description of the source used for the recorded ticket-13 resource runs.
+The final merged helper used `mpsc::channel()` (unbounded); the eight-block
+change had been lost during helper integration. The existing raw artifacts,
+revision/hash fields and measured values above are preserved, not rewritten.
+Their separately sampled product-PID RSS remains a product-process observation,
+but they do not prove a bounded harness backlog or a complete memory plateau.
+Ticket 14 restores `sync_channel(8)` and keeps draining it during owned-dashboard
+cleanup. Its supervisor cleanup now reads full bounded greeting/response frames,
+waits for explicit shutdown completion and endpoint/peer exit, releases only its
+own injected storage faults, and uses the socket-authenticated exact peer for
+exceptional recovery cleanup rather than matching process command substrings.
+Ticket 17 must use this bounded harness for final sustained measurements.
