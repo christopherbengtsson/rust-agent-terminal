@@ -518,6 +518,122 @@ fn saturated_native_input_does_not_block_stop_control() {
     );
 }
 
+struct Controller {
+    stream: std::os::unix::net::UnixStream,
+    reader: std::io::BufReader<std::os::unix::net::UnixStream>,
+    greeting: serde_json::Value,
+}
+impl Controller {
+    fn connect(fixture: &Fixture) -> Self {
+        use std::io::BufRead;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let stream =
+                std::os::unix::net::UnixStream::connect(fixture.state().join("supervisor.sock"))
+                    .unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            let greeting: serde_json::Value = serde_json::from_str(&line).unwrap();
+            if greeting["control_denied"] == false {
+                return Self {
+                    stream,
+                    reader,
+                    greeting,
+                };
+            }
+            assert!(Instant::now() < deadline, "dead controller not released");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+    fn send(&mut self, value: serde_json::Value) {
+        serde_json::to_writer(&mut self.stream, &value).unwrap();
+        self.stream.write_all(b"\n").unwrap();
+    }
+    fn request(&mut self, value: serde_json::Value) -> serde_json::Value {
+        use std::io::BufRead;
+        self.send(value);
+        let mut line = String::new();
+        self.reader.read_line(&mut line).unwrap();
+        serde_json::from_str(&line).unwrap()
+    }
+}
+
+#[test]
+fn lost_launch_acknowledgement_recovers_original_request_and_child() {
+    let fixture = Fixture::new();
+    let mut dashboard = fixture.open();
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted");
+    dashboard.kill();
+    let mut first = Controller::connect(&fixture);
+    let request = first.greeting["launch_request"]
+        .as_str()
+        .expect("supervisor provides stable intent before launch")
+        .to_owned();
+    first.send(serde_json::json!({"Launch":request}));
+    // Discard the acknowledgement; the process can die immediately after sending.
+    drop(first);
+    let mut recovered = Controller::connect(&fixture);
+    let result = recovered.request(serde_json::json!({"QueryLaunch":request}));
+    assert_eq!(result["launch_result"]["request"], request);
+    assert!(result["launch_result"]["error"].is_null());
+    let identity = result["identity"].clone();
+    assert!(identity.as_str().unwrap().contains(&request));
+    let retried = recovered.request(serde_json::json!({"Launch":request}));
+    assert_eq!(retried["identity"], identity);
+    assert!(
+        retried["error"].is_null(),
+        "same request returns success, not duplicate refusal"
+    );
+    fixture.assert_one_owner_and_child();
+    drop(recovered);
+    let mut reopened = fixture.open();
+    reopened.wait("fixture>");
+    reopened.send(b"identity\r");
+    reopened.wait("same-child pid=");
+    reopened.send(&[0x1d]);
+    reopened.wait("Focus: dashboard");
+    reopened.send(b"q");
+}
+
+#[test]
+fn lost_failed_launch_result_is_recovered_without_executing_after_adoption() {
+    let fixture = Fixture::new();
+    let mut dashboard = fixture.open();
+    dashboard.wait("Discovery complete");
+    dashboard.kill();
+    let mut first = Controller::connect(&fixture);
+    let request = first.greeting["launch_request"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    first.send(serde_json::json!({"Launch":request}));
+    drop(first);
+    let mut recovered = Controller::connect(&fixture);
+    let failed = recovered.request(serde_json::json!({"QueryLaunch":request}));
+    assert_eq!(
+        failed["launch_result"]["error"],
+        "Adopt a checkout before launch"
+    );
+    let adopted = recovered
+        .request(serde_json::json!({"Adopt":fixture.repository.as_os_str().as_encoded_bytes()}));
+    assert!(adopted["error"].is_null());
+    let retry = recovered.request(serde_json::json!({"Launch":request}));
+    assert_eq!(retry["launch_result"], failed["launch_result"]);
+    assert_eq!(retry["error"], "Adopt a checkout before launch");
+    assert!(
+        retry["identity"].is_null(),
+        "failed retry never creates a child"
+    );
+    assert_eq!(retry["lifecycle"], "Idle");
+    recovered.request(serde_json::json!("Shutdown"));
+}
+
 #[test]
 fn stopped_history_survives_restart_and_missing_checkout_without_launching() {
     let fixture = Fixture::new();

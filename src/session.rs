@@ -2,6 +2,7 @@
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::HashMap,
     fs::{self, File, OpenOptions},
     io::{self, BufRead, BufReader, Read, Write},
     os::unix::{
@@ -29,6 +30,7 @@ const MAX_FRAME: usize = 4 * 1024 * 1024;
 pub enum Request {
     Adopt(Vec<u8>),
     Launch(String),
+    QueryLaunch(String),
     Input(Vec<u8>),
     Key(crossterm::event::KeyEvent),
     Paste(String),
@@ -47,8 +49,18 @@ pub enum Lifecycle {
     Stopped,
     StopFailed,
 }
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct LaunchResult {
+    pub request: String,
+    pub identity: Option<String>,
+    pub error: Option<String>,
+}
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Observation {
+    #[serde(default)]
+    pub launch_request: String,
+    #[serde(default)]
+    pub launch_result: Option<LaunchResult>,
     pub adopted: Option<String>,
     pub identity: Option<String>,
     pub screen: String,
@@ -147,12 +159,12 @@ fn transport(
             Err(mpsc::RecvTimeoutError::Timeout) => Request::Screen,
             Err(_) => return Ok(()),
         };
-        let shutdown = matches!(request, Request::Shutdown);
+        let reliable = !matches!(request, Request::Screen);
         serde_json::to_writer(&mut stream, &request)?;
         stream.write_all(b"\n")?;
         let mut observation: Observation = serde_json::from_slice(&read_frame(&mut reader)?)?;
         decode_screen(&mut observation);
-        if shutdown || observation.stopped {
+        if reliable || observation.stopped {
             let stopped = observation.stopped;
             events.send(observation)?;
             if stopped {
@@ -285,7 +297,13 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let listener = UnixListener::bind(&socket)?;
     fs::set_permissions(&socket, fs::Permissions::from_mode(0o600))?;
     listener.set_nonblocking(true)?;
-    let mut state = Observation::default();
+    let mut state = Observation {
+        launch_request: uuid::Uuid::new_v4().to_string(),
+        ..Observation::default()
+    };
+    // Retain every result for this owner lifetime. Exhaustion fails closed rather
+    // than evicting an outcome and making a retry execute twice.
+    let mut launches: HashMap<String, LaunchResult> = HashMap::new();
     let mut checkout = None;
     let mut task_identity = uuid::Uuid::new_v4().to_string();
     let mut child: Option<Box<dyn portable_pty::Child + Send + Sync>> = None;
@@ -412,7 +430,20 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
         if !matches!(request, Request::Screen) {
             state.error = None;
         }
+        let launch_request = match &request {
+            Request::Launch(id) => Some(id.clone()),
+            _ => None,
+        };
+        let recorded = match &request {
+            Request::Launch(id) | Request::QueryLaunch(id) => launches.get(id).cloned(),
+            _ => None,
+        };
         let result = (|| -> Result<(), Box<dyn std::error::Error>> {
+            if let Some(recorded) = &recorded {
+                state.launch_result = Some(recorded.clone());
+                state.error = recorded.error.clone();
+                return Ok(());
+            }
             match request {
                 Request::Adopt(bytes) => {
                     let path =
@@ -441,7 +472,15 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     state.adopted = Some(path.display().to_string());
                     checkout = Some(path);
                 }
+                Request::QueryLaunch(_) => return Err("Launch request unknown to this supervisor; do not replay uncertain activity after supervisor loss".into()),
                 Request::Launch(request) => {
+                    if request.is_empty() || request.len() > 128 {
+                        return Err("Launch request must contain 1–128 bytes".into());
+                    }
+                    if launches.len() >= 1024 {
+                        return Err("Launch request capacity reached; stop and restart the supervisor explicitly".into());
+                    }
+                    state.launch_request = request.clone();
                     if child.is_some() || stopping.is_some() {
                         return Err("A session already exists; attach to it".into());
                     }
@@ -573,6 +612,24 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
         })();
         if let Err(error) = result {
             state.error = Some(error.to_string());
+        }
+        if let Some(request) = launch_request
+            && recorded.is_none()
+            && request.len() <= 128
+            && !request.is_empty()
+            && launches.len() < 1024
+        {
+            let result = LaunchResult {
+                request: request.clone(),
+                identity: if state.error.is_none() {
+                    state.identity.clone()
+                } else {
+                    None
+                },
+                error: state.error.clone(),
+            };
+            launches.insert(request, result.clone());
+            state.launch_result = Some(result);
         }
         screen.lock().unwrap().snapshot(&mut state);
         if send_observation(stream, &state).is_err() {
