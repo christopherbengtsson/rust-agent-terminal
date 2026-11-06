@@ -1,5 +1,9 @@
 # Paced session measurements — ticket 17
 
+The final owned-child tracker source was independently revalidated with the full
+workload: see [final tracker measurements](17-tracker-revalidation.md) for the
+exact final revision, raw archives and updated latency/resource/storage results.
+
 The scoped macOS proof passed: **200/200 active navigation samples were below
 100ms; 100/100 active attaches reached a unique visible input ACK in under one
 second.** Healthy durable completion intervals and oldest accepted ages stayed
