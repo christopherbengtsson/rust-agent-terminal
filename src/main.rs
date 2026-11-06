@@ -3,6 +3,7 @@ mod events;
 mod git;
 mod lifecycle;
 mod native_input;
+mod native_status;
 mod session;
 mod terminal;
 mod ui;
@@ -39,6 +40,18 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     if first.as_deref() == Some(std::ffi::OsStr::new("--scripted-child")) {
         return Ok(session::scripted_child()?);
+    }
+    if first.as_deref() == Some(std::ffi::OsStr::new("--status-hook")) {
+        if let (Some(path), Some(token), Some(session)) =
+            (arguments.next(), arguments.next(), arguments.next())
+        {
+            native_status::hook(
+                &PathBuf::from(path),
+                token.to_string_lossy().into_owned(),
+                session.to_string_lossy().into_owned(),
+            );
+        }
+        return Ok(());
     }
     let repository = match first {
         Some(argument) if argument == "--help" || argument == "-h" => {

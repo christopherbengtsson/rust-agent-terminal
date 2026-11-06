@@ -218,6 +218,42 @@ mod tests {
     }
 
     #[test]
+    fn semantic_evidence_is_separate_from_process_and_terminal_prose() {
+        let mut app = App::new("repo".into());
+        app.observe_session(Observation {
+            lifecycle: crate::session::Lifecycle::Running,
+            screen: "Completed · Approve action? · Interrupted · What should Claude do instead?"
+                .into(),
+            ..Observation::default()
+        });
+        assert_eq!(
+            app.session.status.state,
+            crate::native_status::State::Unknown
+        );
+        app.observe_session(Observation {
+            lifecycle: crate::session::Lifecycle::Running,
+            status: crate::native_status::Status {
+                state: crate::native_status::State::Working,
+                ..crate::native_status::Status::default()
+            },
+            screen: "test result: FAILED; agent continues".into(),
+            ..Observation::default()
+        });
+        assert_eq!(
+            app.session.status.state,
+            crate::native_status::State::Working
+        );
+        app.observe_session(Observation {
+            lifecycle: crate::session::Lifecycle::Exited,
+            ..Observation::default()
+        });
+        assert_eq!(
+            app.session.status.state,
+            crate::native_status::State::Unknown
+        );
+    }
+
+    #[test]
     fn claude_is_an_explicit_launch_choice_separate_from_fixture() {
         let mut app = App::new("repo".into());
         assert!(
