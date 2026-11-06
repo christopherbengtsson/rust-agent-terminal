@@ -97,7 +97,7 @@ fn transport(
     let mut greeting: Observation = serde_json::from_slice(&read_frame(&mut reader)?)?;
     decode_screen(&mut greeting);
     if greeting.control_denied {
-        if greeting.diff_protocol != 1
+        if greeting.diff_protocol != 2
             || greeting.git_jobs_protocol != 1
             || greeting.registry_protocol != 1
             || greeting.sessions_protocol != 1
@@ -135,14 +135,14 @@ fn transport(
         }
         return Ok(());
     }
-    if greeting.diff_protocol != 1
+    if greeting.diff_protocol != 2
         || greeting.git_jobs_protocol != 1
         || greeting.registry_protocol != 1
         || greeting.sessions_protocol != 1
         || greeting.prompt_naming_protocol != 1
     {
         greeting.control_denied = true;
-        greeting.error = Some("Existing supervisor does not support this dashboard's worktree, registry or session protocol. Use its compatible dashboard to stop activity before upgrading; d detaches locally.".into());
+        greeting.error = Some("Existing supervisor does not support this dashboard's worktree, registry, session or comparison protocol. Use its compatible dashboard to stop activity before upgrading; d detaches locally.".into());
         events.send(greeting)?;
         return Ok(());
     }
@@ -304,6 +304,7 @@ struct Sessions {
     entries: Vec<(String, agent_session::AgentSession)>,
     selected: usize,
     directory: PathBuf,
+    selection_pending: Option<uuid::Uuid>,
 }
 impl std::ops::Deref for Sessions {
     type Target = agent_session::AgentSession;
@@ -375,15 +376,23 @@ impl Sessions {
             let target = owner.observation().control_target;
             entries.push((target, owner));
         }
-        if entries[0].1.checkout().is_some() {
+        let selection_pending = if entries[0].1.checkout().is_some() {
+            let operation = uuid::Uuid::new_v4();
             storage
                 .commands
-                .try_send(crate::persistence::Command::SelectWorkspace(selected_task))?;
-        }
+                .try_send(crate::persistence::Command::SelectWorkspace(
+                    operation,
+                    selected_task,
+                ))?;
+            Some(operation)
+        } else {
+            None
+        };
         Ok(Self {
             entries,
             selected: 0,
             directory: directory.to_owned(),
+            selection_pending,
         })
     }
 
@@ -392,6 +401,18 @@ impl Sessions {
         event: crate::persistence::Completion,
         storage: &crate::persistence::Worker,
     ) {
+        if let crate::persistence::Completion::Selected(operation, result) = event {
+            if self.selection_pending != Some(operation) {
+                return;
+            }
+            self.selection_pending = None;
+            if let Err(error) = result {
+                self.report_error(format!(
+                    "Workspace selection not saved: {error}; retry selection"
+                ));
+            }
+            return;
+        }
         // Attributed completions are ignored by owners without the matching
         // obligation. Projection replies belong to the selected owner only.
         if matches!(
@@ -431,12 +452,15 @@ impl Sessions {
         state.sessions_protocol = 1;
         state.control_target = self.entries[self.selected].0.clone();
         state.sessions = summaries;
+        state.metadata_pending |= self.selection_pending.is_some();
         state
     }
     fn all_stopped(&mut self) -> bool {
-        self.entries
-            .iter_mut()
-            .all(|(_, owner)| owner.observation().stopped)
+        self.selection_pending.is_none()
+            && self
+                .entries
+                .iter_mut()
+                .all(|(_, owner)| owner.observation().stopped)
     }
     fn adopt_checkout(
         &mut self,
@@ -464,12 +488,16 @@ impl Sessions {
             self.entries[index]
                 .1
                 .adopt(identity, true, task.clone(), storage);
+            let operation = uuid::Uuid::new_v4();
             storage
                 .commands
-                .try_send(crate::persistence::Command::SelectWorkspace(task))
+                .try_send(crate::persistence::Command::SelectWorkspace(
+                    operation, task,
+                ))
                 .map_err(|error| {
                     format!("Workspace selection not saved: {error}; retry selection")
                 })?;
+            self.selection_pending = Some(operation);
             return Ok(());
         }
         if self.entries.len() >= 1024 {
@@ -485,10 +513,14 @@ impl Sessions {
         let mut owner = agent_session::AgentSession::restore(&self.directory, restored, storage)
             .map_err(|e| e.to_string())?;
         owner.adopt(identity, false, task.clone(), storage);
+        let operation = uuid::Uuid::new_v4();
         storage
             .commands
-            .try_send(crate::persistence::Command::SelectWorkspace(task))
+            .try_send(crate::persistence::Command::SelectWorkspace(
+                operation, task,
+            ))
             .map_err(|error| format!("Workspace selection not saved: {error}; retry selection"))?;
+        self.selection_pending = Some(operation);
         let target = owner.observation().control_target;
         self.entries.push((target, owner));
         self.selected = self.entries.len() - 1;
@@ -537,16 +569,20 @@ impl Sessions {
             Request::SelectSession(target) => {
                 if let Some(index) = self.entries.iter().position(|(id, _)| *id == target) {
                     self.selected = index;
+                    let operation = uuid::Uuid::new_v4();
                     if let Err(error) =
                         storage
                             .commands
                             .try_send(crate::persistence::Command::SelectWorkspace(
+                                operation,
                                 self.entries[index].1.task().to_owned(),
                             ))
                     {
                         self.report_error(format!(
                             "Workspace selection not saved: {error}; retry selection"
                         ));
+                    } else {
+                        self.selection_pending = Some(operation);
                     }
                 } else {
                     self.report_error("Session target no longer exists".into());
@@ -561,6 +597,36 @@ impl Sessions {
             }
             request => (self.selected, request),
         };
+        let launch_request = match &request {
+            Request::Launch(id)
+            | Request::LaunchClaude(id)
+            | Request::LaunchCodex(id)
+            | Request::Resume(id)
+            | Request::QueryLaunch(id)
+            | Request::LaunchNative { request: id, .. } => Some(id),
+            _ => None,
+        };
+        if let Some(id) = launch_request
+            && self
+                .entries
+                .iter()
+                .enumerate()
+                .any(|(other, (_, owner))| other != index && owner.pending_launch_request(id))
+        {
+            self.entries[index].1.report_error("This launch request still has an unsettled result in another session; wait for its durable outcome before retrying".into());
+            return;
+        }
+        if let Some(id) = launch_request
+            && let Some(result) = self
+                .entries
+                .iter()
+                .find_map(|(_, owner)| owner.recorded_launch(id))
+        {
+            self.entries[index]
+                .1
+                .handle_recorded(request, result, storage, adopting);
+            return;
+        }
         if matches!(
             request,
             Request::LaunchNative { .. }
@@ -661,6 +727,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let mut discovery_result = None;
     let mut diff_job: Option<crate::working_diff::Job> = None;
     let mut diff_result = None;
+    let mut diff_save: Option<(uuid::Uuid, crate::working_diff::Response)> = None;
     let mut adoption_pending = false;
     let mut quitting = false;
     let mut subscriber_frame_high_water = 0;
@@ -670,8 +737,30 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
     loop {
         if diff_job.as_ref().is_some_and(|job| job.is_finished())
             && let Some(job) = diff_job.take()
+            && let Ok(mut response) = job.result.try_recv()
         {
-            diff_result = job.result.try_recv().ok();
+            if let Ok(snapshot) = &mut response.result
+                && let Some(base) = snapshot.save_base.take()
+            {
+                let operation = uuid::Uuid::new_v4();
+                match storage
+                    .commands
+                    .try_send(crate::persistence::Command::ComparisonBase(
+                        operation,
+                        response.workspace.clone(),
+                        base,
+                    )) {
+                    Ok(()) => diff_save = Some((operation, response)),
+                    Err(error) => {
+                        response.result = Err(format!(
+                            "Comparison base not saved: {error}; retry base selection"
+                        ));
+                        diff_result = Some(response);
+                    }
+                }
+            } else {
+                diff_result = Some(response);
+            }
         }
         if adoption
             .as_ref()
@@ -744,7 +833,29 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
         while let Ok(event) = storage.events.try_recv() {
             match event {
                 crate::persistence::Completion::Registry(snapshot) => registry = snapshot,
+                crate::persistence::Completion::Selected(operation, result) => {
+                    session.complete(
+                        crate::persistence::Completion::Selected(operation, result.clone()),
+                        &storage,
+                    );
+                    if let Ok(snapshot) = result {
+                        registry = snapshot;
+                    }
+                }
                 crate::persistence::Completion::Registered(operation, result) => {
+                    if diff_save.as_ref().is_some_and(|(id, _)| *id == operation) {
+                        let (_, mut response) = diff_save.take().unwrap();
+                        match result {
+                            Ok(snapshot) => registry = snapshot,
+                            Err(error) => {
+                                response.result = Err(format!(
+                                    "Comparison base not saved: {error}; retry base selection"
+                                ))
+                            }
+                        }
+                        diff_result = Some(response);
+                        continue;
+                    }
                     if registry_operation != Some(operation) {
                         continue;
                     }
@@ -764,7 +875,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
         session.advance(&storage, adoption.is_some());
         let mut state = session.observation();
         state.subscriber_frame_high_water = subscriber_frame_high_water;
-        state.diff_protocol = 1;
+        state.diff_protocol = 2;
         state.working_diff = diff_result.clone();
         state.git_jobs_protocol = 1;
         state.registry_protocol = 1;
@@ -779,6 +890,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             && adoption.is_none()
             && discovery.is_none()
             && diff_job.is_none()
+            && diff_save.is_none()
             && registry_operation.is_none();
         if state.stopped && controller.is_none() {
             fs::remove_file(&socket)?;
@@ -791,7 +903,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     incoming.set_nonblocking(true)?;
                     if controller.is_some() {
                         let refusal = Observation {
-                            diff_protocol: 1,
+                            diff_protocol: 2,
                             git_jobs_protocol: 1,
                             registry_protocol: 1,
                             sessions_protocol: 1,
@@ -884,12 +996,17 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
         }
         match request {
             Request::InspectWorking {
+                whole,
+                base,
                 request,
                 workspace,
                 selected,
             } => {
                 let result = (|| -> Result<(), String> {
-                    if request.len() > 128
+                    if base
+                        .as_ref()
+                        .is_some_and(|base| base.len() > 32768 || base.contains(&0))
+                        || request.len() > 128
                         || workspace.len() > 256
                         || selected
                             .as_ref()
@@ -897,7 +1014,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     {
                         return Err("Invalid or oversized comparison identity/path".into());
                     }
-                    if diff_job.is_some() {
+                    if diff_job.is_some() || diff_save.is_some() {
                         return Err("Comparison job busy; retry refresh".into());
                     }
                     let known = registry
@@ -907,11 +1024,14 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                         .ok_or("Workspace unavailable; refresh registry")?;
                     let checkout = known.checkout.as_ref().ok_or("Checkout identity unavailable; explicitly adopt an existing checkout first")?;
                     diff_job = Some(
-                        crate::working_diff::Job::start(
+                        crate::working_diff::Job::start_comparison(
                             checkout.clone(),
                             workspace.clone(),
                             request.clone(),
                             selected,
+                            whole,
+                            registry.comparison_bases.get(&workspace).cloned(),
+                            base,
                         )
                         .map_err(|error| error.to_string())?,
                     );
@@ -992,6 +1112,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     ))?);
                     registering = true;
                     adoption_pending = true;
+                    session.clear_error();
                     Ok(())
                 })();
                 if let Err(error) = result {
@@ -1011,6 +1132,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                         std::ffi::OsString::from_vec(bytes),
                     ))?);
                     adoption_pending = true;
+                    session.clear_error();
                     Ok(())
                 })();
                 if let Err(error) = result {
@@ -1043,7 +1165,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
         }
         let mut state = session.observation();
         state.subscriber_frame_high_water = subscriber_frame_high_water;
-        state.diff_protocol = 1;
+        state.diff_protocol = 2;
         state.working_diff = diff_result.clone();
         state.git_jobs_protocol = 1;
         state.registry_protocol = 1;
@@ -1058,6 +1180,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             && adoption.is_none()
             && discovery.is_none()
             && diff_job.is_none()
+            && diff_save.is_none()
             && registry_operation.is_none();
         if controller.is_some() {
             delivery = Some(Delivery::new(&mut state)?);

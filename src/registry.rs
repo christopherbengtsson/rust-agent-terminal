@@ -6,6 +6,8 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Registry {
+    #[serde(default)]
+    pub comparison_bases: std::collections::BTreeMap<String, crate::working_diff::Base>,
     pub projects: Vec<Project>,
     pub workspaces: Vec<Workspace>,
     pub selected: Option<String>,
@@ -257,7 +259,20 @@ pub(crate) fn snapshot(db: &Connection, selected_task: Option<&str>) -> Result<R
         })
         .transpose()?
         .flatten();
+    let comparison_bases = db
+        .prepare("SELECT workspace,reference,base_commit FROM workspace_comparison_bases")?
+        .query_map([], |row| {
+            Ok((
+                row.get(0)?,
+                crate::working_diff::Base {
+                    reference: row.get(1)?,
+                    commit: row.get(2)?,
+                },
+            ))
+        })?
+        .collect::<std::result::Result<_, _>>()?;
     Ok(Registry {
+        comparison_bases,
         projects,
         workspaces,
         selected,
