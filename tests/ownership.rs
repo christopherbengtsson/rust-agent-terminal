@@ -540,6 +540,73 @@ fn unsafe_state_directory_is_explained_without_changing_discovery() {
 }
 
 #[test]
+fn stop_and_quit_terminate_quiet_foreground_tool_in_separate_process_group() {
+    for quit in [false, true] {
+        let fixture = Fixture::new();
+        let mut sentinel = Command::new("sleep").arg("10").spawn().unwrap();
+        let mut dashboard = fixture.open();
+        dashboard.wait("Discovery complete");
+        dashboard.send(b"a");
+        dashboard.wait("Adopted");
+        dashboard.send(b"l");
+        dashboard.wait("fixture>");
+        dashboard.send(b"tool-child\r");
+        let heartbeat = fixture.repository.join("tool-child.heartbeat");
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while std::fs::metadata(&heartbeat).map(|m| m.len()).unwrap_or(0) < 20 {
+            assert!(Instant::now() < deadline, "tool child must start");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let pid = std::fs::read_to_string(fixture.repository.join("tool-child.pid")).unwrap();
+        dashboard.send(&[0x1d]);
+        dashboard.wait("Focus: dashboard");
+        dashboard.send(if quit { b"q" } else { b"s" });
+        if quit {
+            let deadline = Instant::now() + Duration::from_secs(3);
+            while dashboard.child.try_wait().unwrap().is_none() {
+                assert!(
+                    Instant::now() < deadline,
+                    "ordinary quit must terminate managed activity"
+                );
+                while let Ok(bytes) = dashboard.output.try_recv() {
+                    dashboard.screen.process(&bytes);
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        } else {
+            dashboard.wait("Process: Stopped");
+        }
+        let stopped = std::fs::read(&heartbeat).unwrap();
+        std::thread::sleep(Duration::from_millis(150));
+        assert_eq!(
+            std::fs::read(&heartbeat).unwrap(),
+            stopped,
+            "confirmed Stop/quit must stop tool execution"
+        );
+        let status = Command::new("/bin/ps")
+            .args(["-p", pid.trim(), "-o", "stat="])
+            .output()
+            .unwrap();
+        assert!(
+            status.stdout.is_empty()
+                || String::from_utf8_lossy(&status.stdout)
+                    .trim()
+                    .starts_with('Z'),
+            "owned foreground tool cannot execute"
+        );
+        assert!(
+            sentinel.try_wait().unwrap().is_none(),
+            "unrelated process must remain running"
+        );
+        sentinel.kill().unwrap();
+        sentinel.wait().unwrap();
+        if !quit {
+            dashboard.send(b"q");
+        }
+    }
+}
+
+#[test]
 fn native_exit_retains_context_and_explicit_stop_cleans_refusing_descendant() {
     let fixture = Fixture::new();
     let sentinel = fixture.repository.join("working change");
