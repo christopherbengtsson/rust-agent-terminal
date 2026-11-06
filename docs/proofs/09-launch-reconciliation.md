@@ -1,7 +1,7 @@
 # Ticket 09: durable launch intent and conservative reconciliation
 
-2026-11-06; macOS 26.2 (25C56) arm64, stable rustc 1.99.1, debug build. The external seam uses
-real dashboards in 160×40 PTYs, real supervisor/helper/scripted-child processes,
+2026-11-06; macOS 26.2 (25C56) arm64, stable rustc 1.99.1, debug build.
+The external seam uses real dashboards in 160×40 PTYs, real supervisor/helper/scripted-child processes,
 temporary Git repositories and private state directories. No native Claude/Codex
 interaction compatibility is claimed by these fixture runs; their integrated
 native retest remains ticket 18. The temporary helper execs the selected native
@@ -13,11 +13,11 @@ The existing single SQLite worker commits metadata transactions using FULL
 synchronization. `Prepare` durably reserves task/session/request identity before
 spawn. `Authorize` durably records boot/PID/start evidence before a release byte
 can reach the gate. The gate's private socket includes a per-launch nonce and
-closes on successful exec; exec failure sends an error receipt. The gate wrapper prefixes the existing native command's argv in place, preserving
-its executable, every lossless argument, environment and cwd. A real executable
+closes on successful exec; exec failure sends an error receipt. The gate wrapper
+prefixes the existing native command's argv in place, preserving its executable,
+every lossless argument, environment and cwd. A real executable
 stub verifies Codex `--no-daemon`, TERM and checkout through the dashboard.
-The supervisor
-checks live process-start identity on a successful receipt, then durably saves
+The supervisor checks live process-start identity on a successful receipt, then durably saves
 that result before replying. A missing receipt or vanished identity is uncertain,
 not a successful native launch inferred from helper creation.
 
@@ -120,7 +120,21 @@ check; 23 ownership/history/native-choice/recovery scenarios; one scripted sessi
 and one styled-screen integration. Its four crash rows printed zero owned coding
 children on restoration. The screen's maximum encoded snapshot was 358707 bytes.
 Locked build and formatting passed. Warnings-denied Clippy initially found two
-collapsible-if lints; those were corrected and all-target Clippy passed. The final repeat additionally covers the legacy recovery anchor and bounded gate handshake; its result is recorded at the end of this document.
+collapsible-if lints; those were corrected and all-target Clippy passed. The
+final repeat additionally covers the legacy recovery anchor and bounded gate
+handshake; its result is recorded at the end of this document.
 That handshake change exposed inherited nonblocking accepted sockets on macOS;
 the worker now explicitly restores blocking mode before timed nonce/exec reads,
 so incomplete readiness is never mistaken for a native exec failure.
+
+Final exact-source validation after merging integration `ac3ea5a` into ticket
+revision `42b9541`: locked build, formatting and all-target warnings-denied Clippy
+passed. All-target tests passed: 20 unit checks (plus one ignored subprocess
+probe driven by terminal restoration), 25 ownership/history/native-choice/recovery
+scenarios, one scripted-session scenario and one screen integration. The four
+crash windows again restored Interrupted with zero automatically owned coding
+children. The maximum encoded 200×80 snapshot was 358817 bytes. The final native
+monitor integration preserves Claude's canonical executable, invocation session
+ID and settings arguments before wrapping the native command. These are fixture
+and integration checks; native-tool compatibility revalidation and physical
+reboot remain unverified by this ticket.
