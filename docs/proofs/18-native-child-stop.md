@@ -96,3 +96,9 @@ utilization**. Background sampling was reduced from 20 ms to 100 ms; explicit
 Stop performs its own fresh freeze/inventory closure independently of that
 background interval. Full resource/latency revalidation belongs to the final
 tracker measurement run.
+
+Final child-stop source 6263726: locked build passed. Focused scripted-session
+integration passed (29.09 seconds), followed by the styled-screen/resize/focus/
+reconnect integration (8.91 seconds). The child-stop branch is clean; subsequent
+native receipts, final resource measurement and union all-target run are owned
+by ticket 18 and the integration coordinator.
