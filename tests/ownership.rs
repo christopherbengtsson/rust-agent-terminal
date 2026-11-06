@@ -8735,3 +8735,150 @@ fn configured_setup_flood_keeps_unrelated_session_capture_and_input_owned() {
     );
     f.finish();
 }
+
+#[test]
+fn keyboard_retained_search_opens_exact_passage_in_normal_and_small_ptys() {
+    for (cols, rows) in [(160, 40), (60, 18)] {
+        let fixture = Fixture::new();
+        let mut dashboard = Dashboard::open_geometry(
+            &fixture.repository,
+            &fixture.state(),
+            None,
+            None,
+            rows,
+            cols,
+        );
+        dashboard.wait("Discovery complete");
+        dashboard.send(b"a");
+        dashboard.wait("Adopted");
+        dashboard.send(b"l");
+        dashboard.wait("fixture>");
+        dashboard.send(b"keyboardneedle11\r");
+        dashboard.wait("received: keyboardneedle11");
+        dashboard.send(b"exit\r");
+        dashboard.wait_any(&["Process: Exited", "Exited · Scripted"]);
+        dashboard.send(b"S");
+        dashboard.wait("History:");
+        dashboard.send(b"keyboardneedle11\r");
+        dashboard.wait("exact words");
+        dashboard.wait("keyboardneedle11");
+        dashboard.send(b"\r");
+        let screen = dashboard.wait("Committed passage v1");
+        assert!(screen.contains("keyboardneedle11"), "{screen}");
+        if let Some(directory) = std::env::var_os("RAT_SEARCH_EVIDENCE") {
+            let directory = PathBuf::from(directory);
+            std::fs::create_dir_all(&directory).unwrap();
+            std::fs::write(
+                directory.join(format!("11-keyboard-passage-{cols}x{rows}.txt")),
+                &screen,
+            )
+            .unwrap();
+        }
+        assert!(!screen.contains("Focus: session"));
+        dashboard.send(b"\x1b");
+        dashboard.wait("exact words");
+        dashboard.send(b"\x1b");
+        dashboard.wait_any(&["Process: Exited", "Exited · Scripted"]);
+        dashboard.send(b"B");
+        dashboard.wait("Sessions:");
+        dashboard.wait("history retained");
+        dashboard.send(b"\r");
+        dashboard.wait("Retained history");
+        dashboard.send(b"h");
+        dashboard.wait_any(&["Process: Exited", "Exited · Scripted"]);
+        dashboard.send(b"/");
+        dashboard.wait("Workspaces:");
+        dashboard.send(b"doesnotexist11\r");
+        dashboard.wait("No results");
+        dashboard.send(b"\x1b");
+        dashboard.wait("Focus: dashboard");
+        dashboard.send(b"q");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while dashboard.child.try_wait().unwrap().is_none() {
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+}
+
+#[test]
+fn active_capture_flushes_while_retained_search_replaces_and_cancels_queries() {
+    let fixture = Fixture::new();
+    let mut dashboard = fixture.open();
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted");
+    dashboard.send(b"l");
+    dashboard.wait("fixture>");
+    dashboard.kill();
+    let mut control = Controller::connect(&fixture);
+    let target = control.greeting["control_target"].clone();
+    let session = control.greeting["session_identity"]["session"].clone();
+    let expected = control.greeting["output_bytes"].as_u64().unwrap() + 3 * (200 * 14 + 9);
+    control.request(serde_json::json!({"Input":b"stream\rstream\rstream\r".to_vec()}));
+    let started = Instant::now();
+    let mut commits = std::collections::BTreeMap::new();
+    let mut searches = 0;
+    let mut max_search_ms = 0;
+    let mut saw_hit = false;
+    loop {
+        let request = uuid::Uuid::new_v4().to_string();
+        let sent = Instant::now();
+        let mut state=control.request(serde_json::json!({"Browse":{"request":request,"mode":"History","text":"stream","after":0,"workspace":null,"passage":null,"cancel":false}}));
+        loop {
+            if let Some(values) = state["durable_commits"].as_array() {
+                for value in values {
+                    commits.insert(value["sequence"].as_u64().unwrap(), value.clone());
+                }
+            }
+            assert_eq!(state["control_target"], target);
+            assert_eq!(state["session_identity"]["session"], session);
+            if state["browse"]["request"] == request && state["browse"]["preparing"] == false {
+                break;
+            }
+            assert!(sent.elapsed() < Duration::from_secs(2));
+            state = control.request(serde_json::json!("Screen"));
+        }
+        max_search_ms = max_search_ms.max(sent.elapsed().as_millis());
+        searches += 1;
+        saw_hit |= state["browse"]["rows"]
+            .as_array()
+            .is_some_and(|rows| !rows.is_empty());
+        // Closing a browser has its own identity and cannot publish an old hit afterwards.
+        let cancel = uuid::Uuid::new_v4().to_string();
+        state=control.request(serde_json::json!({"Browse":{"request":cancel,"mode":"History","text":"","after":0,"workspace":null,"passage":null,"cancel":true}}));
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while state["browse"]["request"] != cancel {
+            assert!(Instant::now() < deadline);
+            state = control.request(serde_json::json!("Screen"));
+        }
+        assert!(state["browse"]["rows"].as_array().unwrap().is_empty());
+        if state["output_bytes"].as_u64() == Some(expected)
+            && state["durable_bytes"].as_u64() == Some(expected)
+        {
+            break;
+        }
+        assert!(started.elapsed() < Duration::from_secs(12));
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(saw_hit);
+    assert!(searches >= 20);
+    assert!(commits.len() >= 8);
+    let mut previous = None;
+    let mut max_age = 0;
+    for (sequence, commit) in &commits {
+        if let Some(previous) = previous {
+            assert_eq!(*sequence, previous + 1, "missing durable receipt");
+        }
+        previous = Some(*sequence);
+        let age = commit["oldest_accepted_micros"].as_u64().unwrap();
+        max_age = max_age.max(age);
+        assert!(age < 1_000_000, "{commit}");
+    }
+    eprintln!(
+        "ticket11 fixture: searches={searches}, max_search_ms={max_search_ms}, durable_receipts={}, max_accepted_to_durable_us={max_age}, elapsed_ms={}",
+        commits.len(),
+        started.elapsed().as_millis()
+    );
+    control.request(serde_json::json!("Shutdown"));
+}

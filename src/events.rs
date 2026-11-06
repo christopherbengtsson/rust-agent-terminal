@@ -56,6 +56,7 @@ pub enum NativeAgent {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Request {
+    Browse(crate::persistence::search::Query),
     EditorSource {
         request: String,
         workspace: String,
@@ -175,6 +176,12 @@ pub struct Observation {
     pub setup_protocol: u32,
     #[serde(default)]
     pub setup: crate::setup::View,
+    #[serde(default)]
+    pub browse_protocol: u32,
+    #[serde(default)]
+    pub history_revision: u64,
+    #[serde(default)]
+    pub browse: Option<crate::persistence::search::Response>,
     #[serde(default)]
     pub creation_protocol: u32,
     #[serde(default)]

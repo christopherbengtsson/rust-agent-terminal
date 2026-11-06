@@ -25,6 +25,7 @@ struct Viewport {
 
 /// Dashboard navigation retained across a deliberate external-editor handoff.
 pub struct EditorContext {
+    history_revision: u64,
     repository: PathBuf,
     selected: Option<usize>,
     workspace_selected: Option<String>,
@@ -39,10 +40,12 @@ pub struct EditorContext {
     history_session: Option<String>,
     history_offset: u64,
     history: Option<crate::persistence::HistoryPage>,
+    browser: Option<crate::browser::Browser>,
 }
 
 pub struct App {
     pub setup_input: Option<(String, String)>,
+    pub browser: Option<crate::browser::Browser>,
     pub create_form: Option<CreateForm>,
     pub creation_open: bool,
     pub creation_selected: Option<String>,
@@ -86,6 +89,7 @@ impl App {
     pub fn new(repository: PathBuf) -> Self {
         Self {
             setup_input: None,
+            browser: None,
             create_form: None,
             creation_open: false,
             creation_selected: None,
@@ -128,6 +132,7 @@ impl App {
 
     pub fn editor_context(&self) -> EditorContext {
         EditorContext {
+            history_revision: self.session.history_revision,
             repository: self.repository.clone(),
             selected: self.selected,
             workspace_selected: self.workspace_selected.clone(),
@@ -146,6 +151,7 @@ impl App {
             history_session: self.history_session.clone(),
             history_offset: self.history_offset,
             history: self.session.history.clone(),
+            browser: self.browser.clone(),
         }
     }
 
@@ -162,13 +168,15 @@ impl App {
         self.workspace_selected = context.workspace_selected;
         self.workspaces_open = context.workspaces_open;
         self.selected_target = context.selected_target;
+        let history_valid = context.history_revision == self.session.history_revision;
+        self.browser = if history_valid { context.browser } else { None };
         self.history_open = context.history_open;
         self.history_raw = context.history_raw;
         self.history_scroll = context.history_scroll;
         self.history_index = context.history_index;
         self.history_session = context.history_session;
         self.history_offset = context.history_offset;
-        if self.history_open {
+        if self.history_open && history_valid {
             self.session.history = context.history;
         }
     }
@@ -224,7 +232,8 @@ impl App {
         if self.selected_target.is_empty()
             || matches!(
                 request,
-                Request::Shutdown
+                Request::Browse(_)
+                    | Request::Shutdown
                     | Request::Adopt(_)
                     | Request::Register(_)
                     | Request::PreviewCreation { .. }
@@ -391,6 +400,14 @@ impl App {
         {
             self.workspace_selected = observation.registry.selected.clone();
         }
+        if let Some(browser) = &mut self.browser {
+            if observation.history_revision != self.session.history_revision {
+                browser.opened = None;
+                browser.response = None;
+            }
+            browser.observe(observation.browse.as_ref());
+            self.attached = false;
+        }
         self.session = observation;
     }
 
@@ -436,84 +453,6 @@ impl App {
                 }
                 _ => {}
             }
-            return None;
-        }
-        if self.create_form.is_none()
-            && self.project_input.is_none()
-            && self.first_prompt.is_none()
-            && self.rename_workspace.is_none()
-            && !self.diff.as_ref().is_some_and(|v| v.base_entry.is_some())
-            && key.code == KeyCode::Char('U')
-            && !key
-                .modifiers
-                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER)
-        {
-            let project = self
-                .workspace_selected
-                .as_ref()
-                .or(self.session.registry.selected.as_ref())
-                .and_then(|id| {
-                    self.session
-                        .registry
-                        .workspaces
-                        .iter()
-                        .find(|w| &w.id == id)
-                })
-                .and_then(|w| w.project.as_ref())
-                .and_then(|id| self.session.registry.projects.iter().find(|p| &p.id == id))
-                .or_else(|| self.session.registry.projects.first());
-            if let Some(project) = project {
-                self.setup_input = Some((
-                    project.id.clone(),
-                    project.setup_command.clone().unwrap_or_default(),
-                ));
-            }
-            return None;
-        }
-        if self.creation_open
-            && self.create_form.is_none()
-            && matches!(key.code, KeyCode::Char('T' | 'I' | 'Y'))
-        {
-            if let Some(record) = self.setup_record() {
-                return Some(Effect::Session(Request::RecoverSetup {
-                    attempt: record.attempt.clone(),
-                    retry: key.code != KeyCode::Char('Y'),
-                    informed: matches!(key.code, KeyCode::Char('I' | 'Y')),
-                }));
-            }
-            return None;
-        }
-        if self.creation_open
-            && self.create_form.is_none()
-            && matches!(key.code, KeyCode::Char('[' | ']'))
-            && key.modifiers.is_empty()
-        {
-            let records = &self.session.creation.records;
-            if !records.is_empty() {
-                let index = records
-                    .iter()
-                    .position(|r| Some(&r.intent.request) == self.creation_selected.as_ref())
-                    .unwrap_or(records.len() - 1);
-                let index = if key.code == KeyCode::Char(']') {
-                    (index + 1) % records.len()
-                } else {
-                    (index + records.len() - 1) % records.len()
-                };
-                self.creation_selected = Some(records[index].intent.request.clone());
-            }
-            return None;
-        }
-        if self.create_form.is_none() && self.creation_open && key.code == KeyCode::Esc {
-            self.creation_open = false;
-            return None;
-        }
-        if key.code == KeyCode::Char('O')
-            && self.create_form.is_none()
-            && !key
-                .modifiers
-                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER)
-        {
-            self.creation_open = !self.creation_open;
             return None;
         }
         if let Some(form) = &mut self.create_form {
@@ -576,6 +515,263 @@ impl App {
                     }
                 }
             }
+            return None;
+        }
+        if self.first_prompt.is_some() || self.rename_workspace.is_some() {
+            match key.code {
+                KeyCode::Esc => {
+                    self.first_prompt = None;
+                    self.prompt_target = None;
+                    self.rename_workspace = None;
+                }
+                KeyCode::Enter => {
+                    if let Some((agent, prompt)) = self.first_prompt.take() {
+                        let Effect::Session(_) = self.launch_intent(Request::Launch) else {
+                            unreachable!()
+                        };
+                        let command = Request::LaunchNative {
+                            request: self.launch_request.clone(),
+                            agent,
+                            prompt: (!prompt.is_empty()).then_some(prompt),
+                        };
+                        let effect = match self.prompt_target.take() {
+                            Some((target, session)) if !target.is_empty() => {
+                                Effect::Session(Request::Session {
+                                    target,
+                                    session,
+                                    command: Box::new(command),
+                                })
+                            }
+                            _ => self.session_effect(command),
+                        };
+                        return Some(effect);
+                    }
+                    if let Some((workspace, name)) = self.rename_workspace.take() {
+                        return Some(Effect::Session(Request::RenameWorkspace {
+                            workspace,
+                            name,
+                        }));
+                    }
+                }
+                KeyCode::Char('u') if key.modifiers == KeyModifiers::CONTROL => {
+                    if let Some((_, text)) = self.first_prompt.as_mut() {
+                        text.clear();
+                    } else if let Some((_, text)) = self.rename_workspace.as_mut() {
+                        text.clear();
+                    }
+                }
+                KeyCode::Backspace => {
+                    if let Some((_, text)) = self.first_prompt.as_mut() {
+                        text.pop();
+                    } else if let Some((_, text)) = self.rename_workspace.as_mut() {
+                        text.pop();
+                    }
+                }
+                KeyCode::Char(c)
+                    if !key.modifiers.intersects(
+                        KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER,
+                    ) =>
+                {
+                    let limit = if self.first_prompt.is_some() {
+                        4084
+                    } else {
+                        240
+                    };
+                    let text = if let Some((_, text)) = self.first_prompt.as_mut() {
+                        text
+                    } else {
+                        &mut self.rename_workspace.as_mut().unwrap().1
+                    };
+                    if text.len() + c.len_utf8() <= limit {
+                        text.push(c);
+                    }
+                }
+                _ => {}
+            }
+            return None;
+        }
+        if let Some(path) = self.project_input.as_mut() {
+            match key.code {
+                KeyCode::Esc => self.project_input = None,
+                KeyCode::Enter => {
+                    let path = self.project_input.take().unwrap();
+                    if path.is_empty() {
+                        self.error = Some("Enter an existing local repository path".into());
+                        return None;
+                    }
+                    self.workspaces_open = true;
+                    return Some(self.session_effect(Request::Register(path.into_bytes())));
+                }
+                KeyCode::Backspace => {
+                    path.pop();
+                }
+                KeyCode::Char(character)
+                    if !key.modifiers.intersects(
+                        KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER,
+                    ) && path.len() < 32768 =>
+                {
+                    path.push(character);
+                }
+                _ => {}
+            }
+            return None;
+        }
+        if let Some(view) = &mut self.diff
+            && let Some(entry) = &mut view.base_entry
+        {
+            match key.code {
+                KeyCode::Esc => view.base_entry = None,
+                KeyCode::Enter => {
+                    view.base_selection = Some(entry.as_bytes().to_vec());
+                    view.base_entry = None;
+                    view.whole = true;
+                    view.snapshot = None;
+                    view.scroll = 0;
+                    return Some(Effect::Session(view.refresh()));
+                }
+                KeyCode::Backspace => {
+                    entry.pop();
+                }
+                KeyCode::Char('u') if key.modifiers == KeyModifiers::CONTROL => entry.clear(),
+                KeyCode::Char(c)
+                    if !key
+                        .modifiers
+                        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+                        && entry.len() + c.len_utf8() <= 32768
+                        && !c.is_control() =>
+                {
+                    entry.push(c)
+                }
+                _ => {}
+            }
+            return None;
+        }
+        if self.browser.is_some() {
+            if key.code == KeyCode::Esc {
+                let browser = self.browser.as_mut().unwrap();
+                if browser.opened.take().is_some() {
+                    return Some(browser.query(0));
+                }
+                let mut query = crate::persistence::search::Query::new(browser.mode, "");
+                query.cancel = true;
+                self.browser = None;
+                return Some(Effect::Session(Request::Browse(query)));
+            }
+            let effect = self.browser.as_mut().unwrap().key(key);
+            if let Some(Effect::Session(Request::HistorySession { session, offset })) = &effect {
+                self.history_session = Some(session.clone());
+                self.history_offset = *offset;
+                self.history_open = true;
+                self.history_raw = false;
+                self.history_scroll = 0;
+                self.session.history = None;
+                self.browser = None;
+            }
+            return effect;
+        }
+        if key.code == KeyCode::Char('U')
+            && !key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER)
+        {
+            let project = self
+                .workspace_selected
+                .as_ref()
+                .or(self.session.registry.selected.as_ref())
+                .and_then(|id| {
+                    self.session
+                        .registry
+                        .workspaces
+                        .iter()
+                        .find(|w| &w.id == id)
+                })
+                .and_then(|w| w.project.as_ref())
+                .and_then(|id| self.session.registry.projects.iter().find(|p| &p.id == id))
+                .or_else(|| self.session.registry.projects.first());
+            if let Some(project) = project {
+                self.setup_input = Some((
+                    project.id.clone(),
+                    project.setup_command.clone().unwrap_or_default(),
+                ));
+            }
+            return None;
+        }
+        if self.creation_open
+            && self.create_form.is_none()
+            && matches!(key.code, KeyCode::Char('T' | 'I' | 'Y'))
+        {
+            if let Some(record) = self.setup_record() {
+                return Some(Effect::Session(Request::RecoverSetup {
+                    attempt: record.attempt.clone(),
+                    retry: key.code != KeyCode::Char('Y'),
+                    informed: matches!(key.code, KeyCode::Char('I' | 'Y')),
+                }));
+            }
+            return None;
+        }
+        if matches!(key.code, KeyCode::Char('/' | 'S' | 'B'))
+            && (key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT)
+            && !self.history_open
+        {
+            if self.session.browse_protocol < 1 {
+                self.error = Some(
+                    "Retained search requires a current supervisor; stop and restart the dashboard"
+                        .into(),
+                );
+                return None;
+            }
+            let mode = match key.code {
+                KeyCode::Char('/') => crate::persistence::search::Mode::Workspaces,
+                KeyCode::Char('S') => crate::persistence::search::Mode::History,
+                _ => crate::persistence::search::Mode::Sessions,
+            };
+            let workspace =
+                if self.workspaces_open && mode == crate::persistence::search::Mode::Sessions {
+                    self.workspace_selected.clone()
+                } else {
+                    None
+                };
+            let mut browser = crate::browser::Browser::new(mode, workspace);
+            let effect = if mode == crate::persistence::search::Mode::History {
+                None
+            } else {
+                Some(browser.query(0))
+            };
+            self.browser = Some(browser);
+            self.history_open = false;
+            self.cleanup_open = false;
+            return effect;
+        }
+        if self.creation_open
+            && self.create_form.is_none()
+            && matches!(key.code, KeyCode::Char('[' | ']'))
+            && key.modifiers.is_empty()
+        {
+            let records = &self.session.creation.records;
+            if !records.is_empty() {
+                let index = records
+                    .iter()
+                    .position(|r| Some(&r.intent.request) == self.creation_selected.as_ref())
+                    .unwrap_or(records.len() - 1);
+                let index = if key.code == KeyCode::Char(']') {
+                    (index + 1) % records.len()
+                } else {
+                    (index + records.len() - 1) % records.len()
+                };
+                self.creation_selected = Some(records[index].intent.request.clone());
+            }
+            return None;
+        }
+        if self.create_form.is_none() && self.creation_open && key.code == KeyCode::Esc {
+            self.creation_open = false;
+            return None;
+        }
+        if key.code == KeyCode::Char('O')
+            && !key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER)
+        {
+            self.creation_open = !self.creation_open;
             return None;
         }
         if key.code == KeyCode::Char('N')
@@ -696,34 +892,6 @@ impl App {
             return None;
         }
         if let Some(view) = &mut self.diff {
-            if let Some(entry) = &mut view.base_entry {
-                match key.code {
-                    KeyCode::Esc => view.base_entry = None,
-                    KeyCode::Enter => {
-                        view.base_selection = Some(entry.as_bytes().to_vec());
-                        view.base_entry = None;
-                        view.whole = true;
-                        view.snapshot = None;
-                        view.scroll = 0;
-                        return Some(Effect::Session(view.refresh()));
-                    }
-                    KeyCode::Backspace => {
-                        entry.pop();
-                    }
-                    KeyCode::Char('u') if key.modifiers == KeyModifiers::CONTROL => entry.clear(),
-                    KeyCode::Char(c)
-                        if !key
-                            .modifiers
-                            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
-                            && entry.len() + c.len_utf8() <= 32768
-                            && !c.is_control() =>
-                    {
-                        entry.push(c)
-                    }
-                    _ => {}
-                }
-                return None;
-            }
             if key.modifiers.is_empty() {
                 match key.code {
                     KeyCode::Esc | KeyCode::Char('f') => {
@@ -840,105 +1008,6 @@ impl App {
             self.history_open = false;
             self.cleanup_open = false;
             return Some(Effect::Session(request));
-        }
-        if self.first_prompt.is_some() || self.rename_workspace.is_some() {
-            match key.code {
-                KeyCode::Esc => {
-                    self.first_prompt = None;
-                    self.prompt_target = None;
-                    self.rename_workspace = None;
-                }
-                KeyCode::Enter => {
-                    if let Some((agent, prompt)) = self.first_prompt.take() {
-                        let Effect::Session(_) = self.launch_intent(Request::Launch) else {
-                            unreachable!()
-                        };
-                        let command = Request::LaunchNative {
-                            request: self.launch_request.clone(),
-                            agent,
-                            prompt: (!prompt.is_empty()).then_some(prompt),
-                        };
-                        let effect = match self.prompt_target.take() {
-                            Some((target, session)) if !target.is_empty() => {
-                                Effect::Session(Request::Session {
-                                    target,
-                                    session,
-                                    command: Box::new(command),
-                                })
-                            }
-                            _ => self.session_effect(command),
-                        };
-                        return Some(effect);
-                    }
-                    if let Some((workspace, name)) = self.rename_workspace.take() {
-                        return Some(Effect::Session(Request::RenameWorkspace {
-                            workspace,
-                            name,
-                        }));
-                    }
-                }
-                KeyCode::Char('u') if key.modifiers == KeyModifiers::CONTROL => {
-                    if let Some((_, text)) = self.first_prompt.as_mut() {
-                        text.clear();
-                    } else if let Some((_, text)) = self.rename_workspace.as_mut() {
-                        text.clear();
-                    }
-                }
-                KeyCode::Backspace => {
-                    if let Some((_, text)) = self.first_prompt.as_mut() {
-                        text.pop();
-                    } else if let Some((_, text)) = self.rename_workspace.as_mut() {
-                        text.pop();
-                    }
-                }
-                KeyCode::Char(c)
-                    if !key.modifiers.intersects(
-                        KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER,
-                    ) =>
-                {
-                    let limit = if self.first_prompt.is_some() {
-                        4084
-                    } else {
-                        240
-                    };
-                    let text = if let Some((_, text)) = self.first_prompt.as_mut() {
-                        text
-                    } else {
-                        &mut self.rename_workspace.as_mut().unwrap().1
-                    };
-                    if text.len() + c.len_utf8() <= limit {
-                        text.push(c);
-                    }
-                }
-                _ => {}
-            }
-            return None;
-        }
-        if let Some(path) = self.project_input.as_mut() {
-            match key.code {
-                KeyCode::Esc => self.project_input = None,
-                KeyCode::Enter => {
-                    let path = self.project_input.take().unwrap();
-                    if path.is_empty() {
-                        self.error = Some("Enter an existing local repository path".into());
-                        return None;
-                    }
-                    self.workspaces_open = true;
-                    return Some(self.session_effect(Request::Register(path.into_bytes())));
-                }
-                KeyCode::Backspace => {
-                    path.pop();
-                }
-                KeyCode::Char(character)
-                    if !key.modifiers.intersects(
-                        KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER,
-                    ) && path.len() < 32768 =>
-                {
-                    path.push(character);
-                }
-                _ => {}
-            }
-            return None;
         }
         if !key
             .modifiers
@@ -1106,6 +1175,18 @@ impl App {
             }
             return None;
         }
+        if self.history_open
+            && key.modifiers.is_empty()
+            && matches!(key.code, KeyCode::Char('n' | 'p'))
+            && self.history_session.is_some()
+        {
+            let mut browser =
+                crate::browser::Browser::new(crate::persistence::search::Mode::Sessions, None);
+            let effect = browser.query(0);
+            self.browser = Some(browser);
+            self.history_open = false;
+            return Some(effect);
+        }
         if self.history_open && key.modifiers.is_empty() && key.code == KeyCode::Char('v') {
             self.history_raw = !self.history_raw;
             self.history_scroll = 0;
@@ -1209,6 +1290,11 @@ impl App {
                     return None;
                 }
                 KeyCode::Char('h') => {
+                    self.history_session = self
+                        .session
+                        .session_identity
+                        .as_ref()
+                        .map(|identity| identity.session.clone());
                     self.history_open = !self.history_open;
                     self.history_index = self.session.history_index;
                     self.history_offset = 0;
@@ -1389,7 +1475,7 @@ impl App {
         } else if self.session.lifecycle == crate::session::Lifecycle::Interrupted {
             "u reconcile · v resume · g cleanup · h history · d detach · q quit/stop · j/k select · r refresh"
         } else {
-            "q quit/stop · s stop · h history · Enter attach · x new Codex · v resume · N create · O receipt · U setup · E LIVE · f diff · w workspaces · a adopt · d detach"
+            "q quit/stop  s stop  h history  Enter attach  x new Codex  v resume  / find  S text  B chats  N create  O receipt  U setup  E LIVE  f diff  w workspaces  d detach"
         }
     }
 
@@ -1397,6 +1483,15 @@ impl App {
         if let Some((_, command)) = &mut self.setup_input {
             if command.len() + text.len() <= 4096 && !text.contains('\0') {
                 command.push_str(&text);
+            }
+            return None;
+        }
+        if let Some(browser) = &mut self.browser {
+            if browser.text.len() + text.len() <= 256 {
+                browser
+                    .text
+                    .push_str(&crate::persistence::search::visible(&text));
+                return Some(browser.changed());
             }
             return None;
         }
@@ -1533,6 +1628,150 @@ mod tests {
         }
     }
 
+    #[test]
+    fn focused_text_fields_keep_mixed_case_and_search_punctuation_literal() {
+        let text = "ECXRNOU/SBcamelCase";
+        for mode in 0..5 {
+            let mut app = App::new("/project".into());
+            app.session.browse_protocol = 1;
+            match mode {
+                0 => app.project_input = Some(String::new()),
+                1 => app.first_prompt = Some((crate::events::NativeAgent::Claude, String::new())),
+                2 => app.rename_workspace = Some(("workspace".into(), String::new())),
+                3 => {
+                    let mut view =
+                        crate::working_diff::View::new("workspace".into(), "name".into());
+                    view.base_entry = Some(String::new());
+                    app.diff = Some(view);
+                }
+                _ => {
+                    app.browser = Some(crate::browser::Browser::new(
+                        crate::persistence::search::Mode::History,
+                        None,
+                    ));
+                }
+            }
+            for c in text.chars() {
+                let effect = app.input(KeyEvent::new(
+                    KeyCode::Char(c),
+                    if c.is_uppercase() {
+                        KeyModifiers::SHIFT
+                    } else {
+                        KeyModifiers::NONE
+                    },
+                ));
+                assert!(
+                    effect.is_none() || matches!(effect, Some(Effect::Session(Request::Browse(_)))),
+                    "text triggered a product action"
+                );
+            }
+            let actual = match mode {
+                0 => app.project_input.unwrap(),
+                1 => app.first_prompt.unwrap().1,
+                2 => app.rename_workspace.unwrap().1,
+                3 => app.diff.unwrap().base_entry.unwrap(),
+                _ => app.browser.unwrap().text,
+            };
+            assert_eq!(actual, text);
+        }
+    }
+    #[test]
+    fn retained_session_selection_survives_reordering_and_never_opens_deleted_neighbour() {
+        let mut app = App::new("/project".into());
+        app.session.browse_protocol = 1;
+        app.input(KeyEvent::new(KeyCode::Char('B'), KeyModifiers::NONE));
+        let request = app.browser.as_ref().unwrap().request.clone();
+        let row = |id: &str| crate::persistence::search::Row {
+            key: id.into(),
+            workspace: "workspace".into(),
+            session: Some(id.into()),
+            label: id.into(),
+            snippet: String::new(),
+            passage: None,
+        };
+        let observation = |rows| Observation {
+            browse_protocol: 1,
+            browse: Some(crate::persistence::search::Response {
+                request: request.clone(),
+                rows,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        app.observe_session(observation(vec![row("first"), row("selected")]));
+        app.input(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        app.observe_session(observation(vec![row("selected"), row("first")]));
+        assert_eq!(
+            app.browser.as_ref().unwrap().selected.as_deref(),
+            Some("selected")
+        );
+        app.observe_session(observation(vec![row("first")]));
+        assert!(
+            app.input(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+                .is_none()
+        );
+        app.observe_session(observation(vec![row("selected"), row("first")]));
+        assert!(
+            matches!(app.input(KeyEvent::new(KeyCode::Enter,KeyModifiers::NONE)),Some(Effect::Session(Request::HistorySession {session,..})) if session=="selected")
+        );
+        assert_eq!(app.history_session.as_deref(), Some("selected"));
+        assert!(!app.attached);
+    }
+    #[test]
+    fn editing_or_switching_search_rejects_previous_query_and_preserves_runtime() {
+        let mut app = App::new("/project".into());
+        app.session.browse_protocol = 1;
+        app.session.control_target = "runtime".into();
+        app.selected_target = "runtime".into();
+        app.input(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
+        let request = app.browser.as_ref().unwrap().request.clone();
+        app.paste("new query".into());
+        app.observe_session(Observation {
+            control_target: "runtime".into(),
+            browse_protocol: 1,
+            browse: Some(crate::persistence::search::Response {
+                request,
+                rows: vec![crate::persistence::search::Row {
+                    key: "stale".into(),
+                    workspace: "wrong".into(),
+                    session: None,
+                    label: "old results".into(),
+                    snippet: String::new(),
+                    passage: None,
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        assert!(
+            app.browser
+                .as_ref()
+                .unwrap()
+                .response
+                .as_ref()
+                .is_none_or(|r| r.rows.is_empty())
+        );
+        assert_eq!(app.selected_target, "runtime");
+        assert!(!app.attached);
+    }
+    #[test]
+    fn editor_return_cannot_restore_search_text_deleted_during_handoff() {
+        let mut app = App::new("/project".into());
+        let mut browser =
+            crate::browser::Browser::new(crate::persistence::search::Mode::History, None);
+        browser.opened = Some(crate::history::ReadablePage {
+            text: "deleted private text".into(),
+            ..Default::default()
+        });
+        app.browser = Some(browser);
+        let context = app.editor_context();
+        app.observe_session(Observation {
+            history_revision: 1,
+            ..Default::default()
+        });
+        app.editor_returned(context);
+        assert!(app.browser.is_none());
+    }
     #[test]
     fn editor_return_keeps_selected_history_passage_and_diff_context_after_observation() {
         let mut app = App::new("/original/project".into());
