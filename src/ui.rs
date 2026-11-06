@@ -75,10 +75,14 @@ impl Ui {
                 .and_then(|id| id.split("session=").nth(1))
                 .map(|id| id.chars().take(8).collect::<String>())
                 .unwrap_or_else(|| "unlaunched".into());
-            format!(" Fixture {tag} · Focus: {focus} ")
+            format!(
+                " {} {tag} · Focus: {focus} ",
+                app.session.agent.as_deref().unwrap_or("Session")
+            )
         } else {
             format!(
-                " Scripted PTY · Focus: {focus} · Process: {:?} · semantic status: unknown ",
+                " {} · Focus: {focus} · Process: {:?} · semantic status: unknown ",
+                app.session.agent.as_deref().unwrap_or("Session"),
                 app.session.lifecycle
             )
         };
@@ -115,7 +119,7 @@ impl Ui {
             draw_screen(frame, viewport, screen, app.attached);
         } else {
             frame.render_widget(
-                Paragraph::new("Adopt a checkout (a), then launch the fixture (l)."),
+                Paragraph::new("Adopt (a), then c Claude Code / l scripted fixture."),
                 viewport,
             );
         }
@@ -153,9 +157,9 @@ impl Ui {
                     == Some(worktree.path.display().to_string().as_str())
                 {
                     lines.push(Line::from(if app.session.identity.is_some() {
-                        "  └ scripted session · status unknown"
+                        "  └ managed session · status unknown"
                     } else {
-                        "  └ adopted · ready for fixture"
+                        "  └ adopted · c Claude / l fixture"
                     }));
                 }
                 ListItem::new(lines)
@@ -229,7 +233,7 @@ impl Ui {
                     app.session
                         .identity
                         .as_deref()
-                        .unwrap_or("ready to launch scripted fixture")
+                        .unwrap_or("ready: c Claude / l fixture")
                 ),
                 Color::Cyan,
             )
@@ -285,7 +289,7 @@ impl Ui {
                 &compact_help
             } else {
                 compact_help = format!(
-                    "a adopt · l fixture · Enter attach · s stop · d detach\nq quit/stop · Process: {:?} · status: unknown",
+                    "a adopt · c Claude · l fixture · Enter attach · s stop · d detach\nq quit/stop · Process: {:?} · status: unknown",
                     app.session.lifecycle
                 );
                 &compact_help

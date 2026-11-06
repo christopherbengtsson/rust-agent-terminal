@@ -58,13 +58,16 @@ impl Dashboard {
         self.writer.write_all(bytes).unwrap();
     }
     fn wait(&mut self, needle: &str) -> String {
+        self.wait_any(&[needle])
+    }
+    fn wait_any(&mut self, needles: &[&str]) -> String {
         let deadline = Instant::now() + Duration::from_secs(8);
         loop {
             let screen = self.screen.screen().contents();
-            if screen.contains(needle) {
+            if needles.iter().any(|needle| screen.contains(needle)) {
                 return screen;
             }
-            assert!(Instant::now() < deadline, "missing {needle}: {screen}");
+            assert!(Instant::now() < deadline, "missing {needles:?}: {screen}");
             if let Ok(bytes) = self.output.recv_timeout(Duration::from_millis(40)) {
                 self.screen.process(&bytes);
             }
@@ -141,6 +144,19 @@ impl Fixture {
             children, 1,
             "exactly one active fixture child belongs to the owner"
         );
+    }
+    fn reopen_after_release(&self, needle: &str) -> Dashboard {
+        let deadline = Instant::now() + Duration::from_secs(8);
+        loop {
+            let mut dashboard = self.open();
+            let screen =
+                dashboard.wait_any(&[needle, "Another dashboard controls this supervisor"]);
+            if screen.contains(needle) {
+                return dashboard;
+            }
+            dashboard.kill();
+            assert!(Instant::now() < deadline, "controller EOF was not released");
+        }
     }
     fn open(&self) -> Dashboard {
         Dashboard::open(&self.repository, &self.state())
@@ -520,6 +536,32 @@ fn saturated_native_input_does_not_block_stop_control() {
     );
 }
 
+#[test]
+fn missing_claude_keeps_adopted_checkout_and_allows_fixture_launch() {
+    let fixture = Fixture::new();
+    let tools = fixture.temp.path().join("tools");
+    std::fs::create_dir(&tools).unwrap();
+    for (name, target) in [("git", "/usr/bin/git"), ("ps", "/bin/ps")] {
+        std::os::unix::fs::symlink(target, tools.join(name)).unwrap();
+    }
+    let mut dashboard = Dashboard::open_with_path(
+        &fixture.repository,
+        &fixture.state(),
+        Some(tools.as_os_str()),
+    );
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted");
+    dashboard.send(b"c");
+    dashboard.wait("Claude Code launch failed:");
+    dashboard.wait("adopted checkout retained");
+    dashboard.send(b"l");
+    dashboard.wait("fixture>");
+    fixture.assert_one_owner_and_child();
+    dashboard.send(&[0x1d]);
+    dashboard.send(b"q");
+}
+
 struct Controller {
     stream: std::os::unix::net::UnixStream,
     reader: std::io::BufReader<std::os::unix::net::UnixStream>,
@@ -594,7 +636,8 @@ fn lost_launch_acknowledgement_recovers_original_request_and_child() {
     );
     fixture.assert_one_owner_and_child();
     drop(recovered);
-    let mut reopened = fixture.open();
+    // Client EOF is observed asynchronously; retry only after explicit refusal.
+    let mut reopened = fixture.reopen_after_release("fixture>");
     reopened.wait("fixture>");
     reopened.send(b"identity\r");
     reopened.wait("same-child pid=");
@@ -605,35 +648,119 @@ fn lost_launch_acknowledgement_recovers_original_request_and_child() {
 
 #[test]
 fn lost_failed_launch_result_is_recovered_without_executing_after_adoption() {
+    for launch in ["Launch", "LaunchClaude"] {
+        let fixture = Fixture::new();
+        let mut dashboard = fixture.open();
+        dashboard.wait("Discovery complete");
+        dashboard.kill();
+        let mut first = Controller::connect(&fixture);
+        let request = first.greeting["launch_request"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        first.send(serde_json::json!({(launch):request}));
+        drop(first);
+        let mut recovered = Controller::connect(&fixture);
+        let failed = recovered.request(serde_json::json!({"QueryLaunch":request}));
+        assert_eq!(
+            failed["launch_result"]["error"],
+            "Adopt a checkout before launch"
+        );
+        let adopted = recovered.request(
+            serde_json::json!({"Adopt":fixture.repository.as_os_str().as_encoded_bytes()}),
+        );
+        assert!(adopted["error"].is_null());
+        let retry = recovered.request(serde_json::json!({(launch):request}));
+        assert_eq!(retry["launch_result"], failed["launch_result"]);
+        assert_eq!(retry["error"], "Adopt a checkout before launch");
+        assert!(
+            retry["identity"].is_null(),
+            "failed retry never creates a child"
+        );
+        assert_eq!(retry["lifecycle"], "Idle");
+        recovered.request(serde_json::json!("Shutdown"));
+    }
+}
+
+#[test]
+fn streaming_child_keeps_screen_sequence_identity_and_resize_after_dashboard_death() {
     let fixture = Fixture::new();
     let mut dashboard = fixture.open();
     dashboard.wait("Discovery complete");
-    dashboard.kill();
-    let mut first = Controller::connect(&fixture);
-    let request = first.greeting["launch_request"]
-        .as_str()
+    dashboard.send(b"a");
+    dashboard.wait("Adopted");
+    dashboard.send(b"l");
+    let original = dashboard.wait("fixture>");
+    let pid = original
+        .split("pid=")
+        .nth(1)
+        .unwrap()
+        .split_whitespace()
+        .next()
         .unwrap()
         .to_owned();
-    first.send(serde_json::json!({"Launch":request}));
-    drop(first);
+    dashboard.send(b"stream\r");
+    dashboard.wait("stream: 0");
+    dashboard.kill();
     let mut recovered = Controller::connect(&fixture);
-    let failed = recovered.request(serde_json::json!({"QueryLaunch":request}));
-    assert_eq!(
-        failed["launch_result"]["error"],
-        "Adopt a checkout before launch"
-    );
-    let adopted = recovered
-        .request(serde_json::json!({"Adopt":fixture.repository.as_os_str().as_encoded_bytes()}));
-    assert!(adopted["error"].is_null());
-    let retry = recovered.request(serde_json::json!({"Launch":request}));
-    assert_eq!(retry["launch_result"], failed["launch_result"]);
-    assert_eq!(retry["error"], "Adopt a checkout before launch");
+    let identity = recovered.greeting["identity"].clone();
+    let mut previous = recovered.greeting["output_bytes"].as_u64().unwrap();
+    let start = previous;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let snapshot = recovered.request(serde_json::json!("Screen"));
+        let sequence = snapshot["output_bytes"].as_u64().unwrap();
+        assert!(sequence >= previous, "snapshots cannot go backwards");
+        assert_eq!(snapshot["identity"], identity);
+        previous = sequence;
+        if snapshot["screen"]
+            .as_str()
+            .unwrap()
+            .contains("stream: 0199")
+        {
+            assert_eq!(
+                snapshot["screen"]
+                    .as_str()
+                    .unwrap()
+                    .matches("stream: 0199")
+                    .count(),
+                1
+            );
+            break;
+        }
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(20));
+    }
     assert!(
-        retry["identity"].is_null(),
-        "failed retry never creates a child"
+        previous > start,
+        "child must continue producing after takeover"
     );
-    assert_eq!(retry["lifecycle"], "Idle");
-    recovered.request(serde_json::json!("Shutdown"));
+    let resized = recovered.request(serde_json::json!({"Resize":{"rows":18,"cols":64}}));
+    assert_eq!(
+        (resized["rows"].as_u64(), resized["cols"].as_u64()),
+        (Some(18), Some(64))
+    );
+    recovered.request(serde_json::json!({"Input":b"size\r"}));
+    loop {
+        let snapshot = recovered.request(serde_json::json!("Screen"));
+        if snapshot["screen"].as_str().unwrap().contains("size: 64x18") {
+            break;
+        }
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    fixture.assert_one_owner_and_child();
+    drop(recovered);
+    // Client EOF is observed asynchronously; retry only after explicit refusal.
+    let mut reopened = fixture.reopen_after_release("stream: 0199");
+    reopened.wait("stream: 0199");
+    reopened.send(b"identity\r");
+    reopened.wait(&format!("same-child pid={pid}"));
+    reopened.send(&[0x1d]);
+    reopened.wait("Focus: dashboard");
+    reopened.send(b"r");
+    reopened.wait("Project / worktrees (1)");
+    reopened.send(b"q");
 }
 
 #[test]

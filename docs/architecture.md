@@ -206,6 +206,9 @@ resource measurements alongside responsiveness results.
 
 ## Scripted PTY prototype (ticket 01)
 
+This section records ticket 01; the subsequent ticket sections describe the
+current extensions to launch, rendering, lifecycle and recovery.
+
 `session` now contains the fixture runtime, supervisor mode, private Unix-socket
 protocol, and dashboard transport worker. `App::input` owns focus and returns
 explicit refresh/session effects. The event loop dispatches without waiting;
@@ -309,3 +312,36 @@ never writes raw child controls to the outer terminal. One queued snapshot
 resynchronizes lagging dashboards; this is ephemeral screen state rather than
 retained history. Framed transport is capped at 4 MiB for bounded styled snapshots.
 See [the proof and visual comparison](proofs/04-session-screen.md).
+
+### Experimental Claude launch (ticket 05)
+
+Dashboard `c` explicitly starts `claude` from the supervisor's inherited PATH,
+with the PTY working directory set directly to the adopted canonical checkout.
+`l` remains the safe scripted fixture choice. Native credentials and prompts stay
+with Claude; the product has no credential store and makes no global/repository
+configuration edits. Startup errors explain installation/login and explicit retry,
+while discovery and adoption remain available. A live child refuses either launch
+choice. The observation labels the launched tool independently of process lifecycle;
+semantic status remains unknown. See [native proof](proofs/05-claude-native.md)
+for versioned results and unresolved compatibility gates.
+
+
+## Dashboard recovery (ticket 07)
+
+The supervisor issues a launch-request identity before any launch and includes it
+in greetings and observations. App restores it after reopening. Every accepted
+launch request retains its original success or failure in a lifetime result map;
+`QueryLaunch` and same-ID launch retries recover that result without executing.
+An explicit launch after an acknowledged outcome creates a fresh request. The map
+has 1024 entries, request IDs have a 128-byte bound, and capacity exhaustion fails
+closed without evicting outcomes. These are owner-lifetime records pending ticket
+08 durability; they make no cross-supervisor execution guarantee. Unknown request
+queries explain uncertainty rather than automatically replaying a launch.
+
+Control-command observations use reliable bounded delivery; only periodic screen
+snapshots may coalesce. Reconnection synchronizes ticket 04's bounded styled screen
+and output-byte boundary, then resumes polling while the same child keeps draining.
+Client death releases the controlling connection without stopping children. A live
+controller continues to exclude every competing dashboard. See the
+[reconnect proof](proofs/07-dashboard-reconnect.md). Supervisor failure, uncertain
+survivors and launch reconciliation belong to ticket 09.

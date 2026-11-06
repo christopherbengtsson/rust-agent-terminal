@@ -30,6 +30,7 @@ const MAX_FRAME: usize = 4 * 1024 * 1024;
 pub enum Request {
     Adopt(Vec<u8>),
     Launch(String),
+    LaunchClaude(String),
     QueryLaunch(String),
     History { index: usize, offset: u64 },
     Input(Vec<u8>),
@@ -80,6 +81,8 @@ pub struct Observation {
     #[serde(default)]
     pub launch_result: Option<LaunchResult>,
     pub adopted: Option<String>,
+    #[serde(default)]
+    pub agent: Option<String>,
     pub identity: Option<String>,
     pub screen: String,
     pub formatted: String,
@@ -541,14 +544,21 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
         let save = save_history
             || matches!(
                 request,
-                Request::Adopt(_) | Request::Launch(_) | Request::Stop | Request::Shutdown
+                Request::Adopt(_)
+                    | Request::Launch(_)
+                    | Request::LaunchClaude(_)
+                    | Request::Stop
+                    | Request::Shutdown
             );
+        let claude = matches!(&request, Request::LaunchClaude(_));
         let launch_request = match &request {
-            Request::Launch(id) => Some(id.clone()),
+            Request::Launch(id) | Request::LaunchClaude(id) => Some(id.clone()),
             _ => None,
         };
         let recorded = match &request {
-            Request::Launch(id) | Request::QueryLaunch(id) => launches.get(id).cloned(),
+            Request::Launch(id) | Request::LaunchClaude(id) | Request::QueryLaunch(id) => {
+                launches.get(id).cloned()
+            }
             _ => None,
         };
         let result = (|| -> Result<(), Box<dyn std::error::Error>> {
@@ -591,9 +601,8 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     checkout = Some(path);
                 }
                 Request::QueryLaunch(_) => return Err("Launch request unknown to this supervisor; do not replay uncertain activity after supervisor loss".into()),
-                Request::Launch(request) => {
+                Request::Launch(request) | Request::LaunchClaude(request) => {
                     if state.lifecycle == Lifecycle::Interrupted { return Err("Interrupted execution is uncertain; inspect history, do not replace until reconciled".into()); }
-
                     if request.is_empty() || request.len() > 128 {
                         return Err("Launch request must contain 1–128 bytes".into());
                     }
@@ -612,10 +621,30 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                         pixel_width: 0,
                         pixel_height: 0,
                     })?;
-                    let mut command = CommandBuilder::new(std::env::current_exe()?);
-                    command.arg("--scripted-child");
+                    let mut command = if claude {
+                        CommandBuilder::new("claude")
+                    } else {
+                        let mut fixture = CommandBuilder::new(std::env::current_exe()?);
+                        fixture.arg("--scripted-child");
+                        fixture
+                    };
+                    command.env("TERM", "xterm-256color");
                     command.cwd(path);
-                    let launched = pty.slave.spawn_command(command)?;
+                    let launched = pty.slave.spawn_command(command).map_err(|error| {
+                        if claude {
+                            format!("Claude Code launch failed: {error}. Install claude on PATH, run claude auth login in your usual terminal, then explicitly retry c; adopted checkout retained")
+                        } else {
+                            format!("Fixture launch failed: {error}; retry l")
+                        }
+                    })?;
+                    state.agent = Some(
+                        if claude {
+                            "Claude Code"
+                        } else {
+                            "Scripted PTY"
+                        }
+                        .into(),
+                    );
                     drop(pty.slave);
                     process_group = launched
                         .process_id()

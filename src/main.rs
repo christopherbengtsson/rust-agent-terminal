@@ -44,7 +44,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let repository = match first {
         Some(argument) if argument == "--help" || argument == "-h" => {
             println!(
-                "Usage: agent-terminal [repository-path]\n\nLists Git worktrees in a keyboard-driven dashboard. Defaults to the current directory.\n\nj/k or arrows: select · r: refresh · q/Esc/Ctrl-C: quit\na adopt · l launch scripted PTY · Enter attach · Ctrl-] dashboard\ns stop session · d detach preserving execution · q quit and stop managed activity\nPrototype fixture only; native CLI support is unverified."
+                "Usage: agent-terminal [repository-path]\n\nLists Git worktrees in a keyboard-driven dashboard. Defaults to the current directory.\n\nj/k or arrows: select · r: refresh · q/Esc/Ctrl-C: quit\na adopt · c launch Claude Code · l launch scripted PTY · Enter attach · Ctrl-] dashboard\ns stop session · d detach preserving execution · q quit and stop managed activity\nNative Claude launch is experimental; compatibility proof remains open. Authentication prompts stay in the native CLI; run claude auth login in your usual terminal if needed."
             );
             return Ok(());
         }
