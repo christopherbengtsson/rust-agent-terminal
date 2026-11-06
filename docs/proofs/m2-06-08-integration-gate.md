@@ -114,3 +114,12 @@ build. The source-fixed aggregate result
 remains failed. The corrected full aggregate and final integration review are
 still required; no new native-tool or milestone-completion claim follows from
 these fixture and state checks.
+
+Before the corrected aggregate, the four failed readable cases were rerun through
+their original PTY seam. Abrupt-prefix recovery, Codex history/native identity and
+final-storage retry passed (6.08, 3.84 and 2.63 seconds). Stopped-history recovery
+then reached its later escaped bracketed-paste assertion, which correctly failed
+in the default readable view. The test now verifies retained readable text first,
+explicitly selects `v` escaped raw, and keeps that exact escape assertion. The
+corrected stopped-history test passed in 2.55 seconds. This preserves both view
+contracts; no raw content assertion was removed or weakened.
