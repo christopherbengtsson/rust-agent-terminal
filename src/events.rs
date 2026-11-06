@@ -48,28 +48,59 @@ pub enum Effect {
     Session(Request),
 }
 
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+pub enum NativeAgent {
+    Claude,
+    Codex,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Request {
-    Discover { request: u64, repository: Vec<u8> },
+    Discover {
+        request: u64,
+        repository: Vec<u8>,
+    },
     Adopt(Vec<u8>),
     Register(Vec<u8>),
     Launch(String),
     LaunchClaude(String),
     LaunchCodex(String),
+    LaunchNative {
+        request: String,
+        agent: NativeAgent,
+        prompt: Option<String>,
+    },
+    RenameWorkspace {
+        workspace: String,
+        name: String,
+    },
     Resume(String),
     QueryLaunch(String),
     Reconcile,
-    History { index: usize, offset: u64 },
-    HistorySession { session: String, offset: u64 },
+    History {
+        index: usize,
+        offset: u64,
+    },
+    HistorySession {
+        session: String,
+        offset: u64,
+    },
     Input(Vec<u8>),
     Key(crossterm::event::KeyEvent),
     Paste(String),
     Screen,
     Stop,
     RetryStorage,
-    Cleanup { page: usize },
-    DeleteHistory { id: String },
-    Resize { rows: u16, cols: u16 },
+    Cleanup {
+        page: usize,
+    },
+    DeleteHistory {
+        id: String,
+    },
+    Resize {
+        rows: u16,
+        cols: u16,
+    },
     Shutdown,
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -94,6 +125,8 @@ pub struct LaunchResult {
 pub struct Observation {
     #[serde(default)]
     pub registry_protocol: u32,
+    #[serde(default)]
+    pub prompt_naming_protocol: u32,
     #[serde(default)]
     pub registry_pending: bool,
     #[serde(default)]

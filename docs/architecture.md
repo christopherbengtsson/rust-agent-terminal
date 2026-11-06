@@ -983,3 +983,19 @@ incompatible message to send to a live Milestone 1 owner. Later changes that add
 requests or migrate records must detect incompatible live owners before using
 those capabilities; unchanged wire compatibility does not establish that future
 handshake. See [the ticket evidence](proofs/m2-01-durable-session-operations.md).
+
+### Prompt-led native launch and local workspace labels (Milestone 2 ticket 07)
+
+The explicit optional-first-prompt action sends `LaunchNative` through the same
+prepare/authorize/exec-receipt/result boundary as existing native launches. Its
+prompt survives only the live pending/creating request, becomes one positional
+native argv argument after `--`, and is never a restoration/reconciliation replay.
+Resume does not supply a prompt. Workspace labels are local metadata: schema 5
+records generated fallback, first-prompt, manual and retained provenance so later
+conversations cannot overwrite a manual or earlier meaningful name. Preparation
+commits a prompt-derived default atomically; explicit rename uses the sole storage
+worker and announces only its committed registry snapshot. Names do not change
+folder, branch or workspace/native-session identity. No native title is guessed
+from screen text and no extra naming turn/provider is used. See the
+[versioned first-prompt/naming proof](proofs/m2-07-prompt-naming.md) for actual
+Claude 2.1.319 / Codex 0.167.0 results and remaining qualification boundaries.

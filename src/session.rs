@@ -97,7 +97,10 @@ fn transport(
     let mut greeting: Observation = serde_json::from_slice(&read_frame(&mut reader)?)?;
     decode_screen(&mut greeting);
     if greeting.control_denied {
-        if greeting.git_jobs_protocol != 1 || greeting.registry_protocol != 1 {
+        if greeting.git_jobs_protocol != 1
+            || greeting.registry_protocol != 1
+            || greeting.prompt_naming_protocol != 1
+        {
             events.send(greeting)?;
             return Ok(());
         }
@@ -130,7 +133,10 @@ fn transport(
         }
         return Ok(());
     }
-    if greeting.git_jobs_protocol != 1 || greeting.registry_protocol != 1 {
+    if greeting.git_jobs_protocol != 1
+        || greeting.registry_protocol != 1
+        || greeting.prompt_naming_protocol != 1
+    {
         greeting.control_denied = true;
         greeting.error = Some("Existing supervisor does not support this dashboard's worktree protocol or registry protocol. Use its compatible dashboard to stop activity before upgrading; d detaches locally.".into());
         events.send(greeting)?;
@@ -398,7 +404,9 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     {
                         Ok(()) => registry_operation = Some(operation),
                         Err(error) => {
-                            registry_error = Some(format!("Project not registered: {error}; retry"))
+                            registry_error = Some(format!(
+                                "Project not registered / workspace name not saved: {error}; retry"
+                            ))
                         }
                     },
                     Err(error) => registry_error = Some(error),
@@ -437,7 +445,9 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     match result {
                         Ok(snapshot) => registry = snapshot,
                         Err(error) => {
-                            registry_error = Some(format!("Project not registered: {error}; retry"))
+                            registry_error = Some(format!(
+                                "Project not registered / workspace name not saved: {error}; retry"
+                            ))
                         }
                     }
                 }
@@ -449,6 +459,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
         state.subscriber_frame_high_water = subscriber_frame_high_water;
         state.git_jobs_protocol = 1;
         state.registry_protocol = 1;
+        state.prompt_naming_protocol = 1;
         state.registry_pending = registering || registry_operation.is_some();
         state.registry = registry.clone();
         state.error = state.error.or_else(|| registry_error.clone());
@@ -469,6 +480,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                         let refusal = Observation {
                             git_jobs_protocol: 1,
                             registry_protocol: 1,
+                            prompt_naming_protocol: 1,
                             control_denied: true,
                             error: Some("Another dashboard controls this supervisor; close it before reconnecting".into()),
                             ..Observation::default()
@@ -583,6 +595,26 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     session.report_error(error.to_string());
                 }
             }
+            Request::RenameWorkspace { workspace, name } => {
+                registry_error = None;
+                if registry_operation.is_some() || adoption.is_some() {
+                    registry_error =
+                        Some("Workspace operation pending; wait before renaming".into());
+                } else {
+                    let operation = uuid::Uuid::new_v4();
+                    match storage
+                        .commands
+                        .try_send(crate::persistence::Command::Rename(
+                            operation, workspace, name,
+                        )) {
+                        Ok(()) => registry_operation = Some(operation),
+                        Err(error) => {
+                            registry_error =
+                                Some(format!("Workspace name not saved: {error}; retry"))
+                        }
+                    }
+                }
+            }
             Request::Register(bytes) => {
                 registry_error = None;
                 let result = (|| -> Result<(), Box<dyn std::error::Error>> {
@@ -648,6 +680,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
         state.subscriber_frame_high_water = subscriber_frame_high_water;
         state.git_jobs_protocol = 1;
         state.registry_protocol = 1;
+        state.prompt_naming_protocol = 1;
         state.registry_pending = registering || registry_operation.is_some();
         state.registry = registry.clone();
         state.error = state.error.or_else(|| registry_error.clone());

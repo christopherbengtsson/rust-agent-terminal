@@ -79,7 +79,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let repository = match first {
         Some(argument) if argument == "--help" || argument == "-h" => {
             println!(
-                "Usage: agent-terminal [repository-path]\n\nLists Git worktrees in a keyboard-driven dashboard. Defaults to the current directory.\n\nj/k or arrows: select · r: refresh · q/Esc/Ctrl-C: quit\na adopt · c launch Claude Code · x launch Codex CLI · l launch scripted PTY · Enter attach · Ctrl-] dashboard\ns stop session · u reconcile interrupted execution · d detach preserving execution · q quit and stop managed activity\nNative Claude/Codex launch is experimental; compatibility proof remains open. Authentication prompts stay in the native CLI; run claude auth login or codex login in your usual terminal if needed."
+                "Usage: agent-terminal [repository-path]\n\nLists Git worktrees in a keyboard-driven dashboard. Defaults to the current directory.\n\nj/k or arrows: select · r: refresh · q/Esc/Ctrl-C: quit\na adopt · c launch Claude Code · x launch Codex CLI · C/X optional first prompt then start · R rename workspace · l launch scripted PTY · Enter attach · Ctrl-] dashboard\ns stop session · u reconcile interrupted execution · d detach preserving execution · q quit and stop managed activity\nNative Claude/Codex launch is experimental; compatibility proof remains open. Authentication prompts stay in the native CLI; run claude auth login or codex login in your usual terminal if needed."
             );
             return Ok(());
         }

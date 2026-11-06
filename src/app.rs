@@ -12,6 +12,8 @@ pub struct App {
     pub workspaces_open: bool,
     pub workspace_selected: Option<String>,
     pub project_input: Option<String>,
+    pub first_prompt: Option<(crate::events::NativeAgent, String)>,
+    pub rename_workspace: Option<(String, String)>,
     pub session: Observation,
     pub attached: bool,
     pub history_open: bool,
@@ -41,6 +43,8 @@ impl App {
             workspaces_open: false,
             workspace_selected: None,
             project_input: None,
+            first_prompt: None,
+            rename_workspace: None,
             sent_viewport: None,
             pending_viewport: None,
             session: Default::default(),
@@ -176,6 +180,67 @@ impl App {
             }
             return Some(Effect::Session(Request::Key(key)));
         }
+        if self.first_prompt.is_some() || self.rename_workspace.is_some() {
+            match key.code {
+                KeyCode::Esc => {
+                    self.first_prompt = None;
+                    self.rename_workspace = None;
+                }
+                KeyCode::Enter => {
+                    if let Some((agent, prompt)) = self.first_prompt.take() {
+                        let Effect::Session(_) = self.launch_intent(Request::Launch) else {
+                            unreachable!()
+                        };
+                        return Some(Effect::Session(Request::LaunchNative {
+                            request: self.launch_request.clone(),
+                            agent,
+                            prompt: (!prompt.is_empty()).then_some(prompt),
+                        }));
+                    }
+                    if let Some((workspace, name)) = self.rename_workspace.take() {
+                        return Some(Effect::Session(Request::RenameWorkspace {
+                            workspace,
+                            name,
+                        }));
+                    }
+                }
+                KeyCode::Char('u') if key.modifiers == KeyModifiers::CONTROL => {
+                    if let Some((_, text)) = self.first_prompt.as_mut() {
+                        text.clear();
+                    } else if let Some((_, text)) = self.rename_workspace.as_mut() {
+                        text.clear();
+                    }
+                }
+                KeyCode::Backspace => {
+                    if let Some((_, text)) = self.first_prompt.as_mut() {
+                        text.pop();
+                    } else if let Some((_, text)) = self.rename_workspace.as_mut() {
+                        text.pop();
+                    }
+                }
+                KeyCode::Char(c)
+                    if !key.modifiers.intersects(
+                        KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER,
+                    ) =>
+                {
+                    let limit = if self.first_prompt.is_some() {
+                        4084
+                    } else {
+                        240
+                    };
+                    let text = if let Some((_, text)) = self.first_prompt.as_mut() {
+                        text
+                    } else {
+                        &mut self.rename_workspace.as_mut().unwrap().1
+                    };
+                    if text.len() + c.len_utf8() <= limit {
+                        text.push(c);
+                    }
+                }
+                _ => {}
+            }
+            return None;
+        }
         if let Some(path) = self.project_input.as_mut() {
             match key.code {
                 KeyCode::Esc => self.project_input = None,
@@ -201,6 +266,40 @@ impl App {
                 _ => {}
             }
             return None;
+        }
+        if !key
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER)
+        {
+            if matches!(key.code, KeyCode::Char('C' | 'X')) && !self.workspaces_open {
+                if self.workspace_selected.is_some()
+                    && self.workspace_selected != self.session.registry.selected
+                {
+                    self.error = Some("Adopt the selected workspace before starting".into());
+                    return None;
+                }
+                self.first_prompt = Some((
+                    if key.code == KeyCode::Char('C') {
+                        crate::events::NativeAgent::Claude
+                    } else {
+                        crate::events::NativeAgent::Codex
+                    },
+                    String::new(),
+                ));
+                return None;
+            }
+            if key.code == KeyCode::Char('R') {
+                if let Some(workspace) = self
+                    .session
+                    .registry
+                    .workspaces
+                    .iter()
+                    .find(|workspace| Some(&workspace.id) == self.workspace_selected.as_ref())
+                {
+                    self.rename_workspace = Some((workspace.id.clone(), workspace.name.clone()));
+                }
+                return None;
+            }
         }
         if key.code == KeyCode::Char('A')
             && !key
@@ -511,10 +610,14 @@ impl App {
     }
 
     pub fn keyboard_help(&self) -> &'static str {
-        if self.project_input.is_some() {
+        if self.first_prompt.is_some() {
+            "First prompt (optional): Enter starts native agent · Esc cancels without launch"
+        } else if self.rename_workspace.is_some() {
+            "Workspace name: Enter saves · Ctrl-U clears · Esc cancels · no folder or conversation changes"
+        } else if self.project_input.is_some() {
             "Add project: existing local path · Enter register without launch · Esc cancel"
         } else if self.workspaces_open {
-            "Workspaces: j/k select · [/] project · Enter discover · a adopt · h latest history · A add project · w/Esc back · d detach · q quit"
+            "Workspaces: j/k select · [/] project · Enter discover · a adopt · R rename · h latest history · A add project · w/Esc back · d detach · q quit"
         } else if self.attached {
             "Native input · Ctrl-C interrupt · Ctrl-] / Ctrl-5 dashboard (keeps session running)"
         } else if self.cleanup_open {
@@ -524,11 +627,29 @@ impl App {
         } else if self.history_open {
             "q quit/stop/retry · s stop · y retry history · g cleanup · h live · n/p session · [/] page · j/k scroll · d detach"
         } else {
-            "w workspaces · A add · Enter attach · x new Codex · v resume · q quit/stop · a adopt · c Claude · h history · g cleanup · y retry · s stop · d detach · j/k · r refresh"
+            "w workspaces · A add · Enter attach · x new Codex · v resume · q quit/stop · a adopt · c Claude · C/X prompt and start · R rename · h history · g cleanup · y retry · s stop · d detach · j/k · r refresh"
         }
     }
 
     pub fn paste(&mut self, text: String) -> Option<Effect> {
+        if self.first_prompt.is_some() || self.rename_workspace.is_some() {
+            let limit = if self.first_prompt.is_some() {
+                4084
+            } else {
+                240
+            };
+            let entry = if let Some((_, entry)) = self.first_prompt.as_mut() {
+                entry
+            } else {
+                &mut self.rename_workspace.as_mut().unwrap().1
+            };
+            if entry.len() + text.len() <= limit && !text.contains('\0') {
+                entry.push_str(&text);
+            } else {
+                self.error = Some(format!("Input exceeds {limit}-byte limit or contains NUL"));
+            }
+            return None;
+        }
         if let Some(path) = self.project_input.as_mut() {
             if path.len() + text.len() <= 32768 {
                 path.push_str(&text);
@@ -615,6 +736,30 @@ mod tests {
             path: PathBuf::from(path),
             ..Worktree::default()
         }
+    }
+
+    #[test]
+    fn first_prompt_requires_explicit_submit_and_can_be_cancelled() {
+        let mut app = App::new(PathBuf::from("/repo"));
+        assert!(
+            app.input(KeyEvent::new(KeyCode::Char('C'), KeyModifiers::SHIFT))
+                .is_none()
+        );
+        assert!(app.paste("Fix the unicode λ search".into()).is_none());
+        assert!(
+            app.input(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+                .is_none()
+        );
+        assert!(app.first_prompt.is_none());
+        assert!(
+            app.input(KeyEvent::new(KeyCode::Char('X'), KeyModifiers::SHIFT))
+                .is_none()
+        );
+        app.paste("Fix the unicode λ search".into());
+        assert!(
+            matches!(app.input(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+            Some(Effect::Session(Request::LaunchNative { agent: crate::events::NativeAgent::Codex, prompt: Some(prompt), .. })) if prompt == "Fix the unicode λ search")
+        );
     }
 
     #[test]
