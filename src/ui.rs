@@ -284,8 +284,9 @@ impl Ui {
                 Block::bordered()
                     .border_style(Style::default().fg(Color::Cyan))
                     .title(format!(
-                        " Status · semantic status: {} ",
-                        app.session.status.state.label()
+                        " Status · semantic status: {} · {} ",
+                        app.session.status.state.label(),
+                        app.session.status.reason
                     )),
             )
             .wrap(Wrap { trim: false }),

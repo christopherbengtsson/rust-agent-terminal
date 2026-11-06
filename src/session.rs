@@ -669,8 +669,15 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                         pixel_width: 0,
                         pixel_height: 0,
                     })?;
+                    let claude_executable = if claude {
+                        std::env::var_os("PATH").and_then(|paths| std::env::split_paths(&paths).find_map(|directory| {
+                            let directory = if directory.is_absolute() { directory } else { path.join(directory) };
+                            let candidate = directory.join("claude");
+                            candidate.is_file().then(|| candidate.canonicalize().ok()).flatten()
+                        }))
+                    } else { None };
                     let mut command = if claude {
-                        CommandBuilder::new("claude")
+                        CommandBuilder::new(claude_executable.as_deref().unwrap_or_else(|| Path::new("claude")))
                     } else if codex {
                         let mut command = CommandBuilder::new("codex");
                         command.arg("--no-daemon");
@@ -683,9 +690,14 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     monitor = None;
                     state.status = crate::native_status::Status::default();
                     if !codex {
-                        let status_monitor = crate::native_status::Monitor::start(directory, !claude)?;
-                        status_monitor.configure(&mut command);
-                        monitor = Some(status_monitor);
+                        match crate::native_status::Monitor::start(directory, !claude) {
+                            Ok(mut status_monitor) => {
+                                status_monitor.native_executable(claude_executable.as_deref());
+                                status_monitor.configure(&mut command);
+                                monitor = Some(status_monitor);
+                            }
+                            Err(_) => state.status.reason = "status monitor unavailable".into(),
+                        }
                     }
                     command.env("TERM", "xterm-256color");
                     command.cwd(path);
@@ -875,6 +887,13 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         screen.lock().unwrap().snapshot(&mut state);
+        if let Some(monitor) = monitor.as_mut() {
+            state.status = monitor.poll(
+                state.lifecycle == Lifecycle::Running,
+                &state.screen,
+                state.output_bytes,
+            );
+        }
         if send_observation(stream, &state).is_err() {
             controller = None;
             pending.clear();
@@ -937,6 +956,16 @@ pub fn scripted_child() -> io::Result<()> {
                     print!("size: {cols}x{rows}\r\nfixture> ");
                 } else if line == b"fixture-failed-test" {
                     println!("test result: FAILED; agent continues\r");
+                } else if line == b"status-native-post" {
+                    crate::native_status::fixture("PostToolUse");
+                    println!("question answered; old dialog text is retained\r");
+                } else if line == b"status-native-approval" {
+                    crate::native_status::fixture("PostToolUse");
+                    crate::native_status::fixture("FixtureNativeBashPre");
+                    crate::native_status::fixture("FixtureNativeBashPermission");
+                    print!(
+                        "\x1b[2J\x1b[H────────────────────────────────────────\r\n Bash command\r\n Do you want to proceed?\r\n ❯ 1. Yes\r\n   2. No\r\n Esc to cancel · Tab to amend"
+                    );
                 } else if line == b"status-native-question" {
                     crate::native_status::fixture("PreToolUse");
                     print!(
