@@ -6310,3 +6310,61 @@ fn stopped_pending_first_prompt_is_never_submitted_after_storage_recovers() {
     );
     controller.request(serde_json::json!("Shutdown"));
 }
+
+#[test]
+fn prompt_editor_and_manual_rename_are_usable_in_normal_and_small_dashboard_ptys() {
+    for (cols, rows) in [(160, 40), (60, 18)] {
+        let fixture = Fixture::new();
+        let mut dashboard = Dashboard::open_geometry(
+            &fixture.repository,
+            &fixture.state(),
+            None,
+            None,
+            rows,
+            cols,
+        );
+        dashboard.wait("Discovery complete");
+        dashboard.send(b"a");
+        dashboard.wait("Adopted:");
+        dashboard.send(b"X");
+        dashboard.wait("First prompt");
+        dashboard.send(b"\x1b[200~Fix a local workspace name\x1b[201~");
+        dashboard.wait("Fix a local workspace name");
+        if let Some(directory) = std::env::var_os("RAT_PROMPT_NAMING_EVIDENCE") {
+            let directory = PathBuf::from(directory);
+            std::fs::create_dir_all(&directory).unwrap();
+            std::fs::write(
+                directory.join(format!("prompt-editor-{cols}.txt")),
+                dashboard.screen.screen().contents(),
+            )
+            .unwrap();
+        }
+        dashboard.send(b"\x1b");
+        std::thread::sleep(Duration::from_millis(100));
+        dashboard.send(b"R");
+        dashboard.wait("Workspace name");
+        dashboard.send(b"\x15");
+        dashboard.send(b"\x1b[200~My local workspace\x1b[201~");
+        dashboard.wait("My local workspace");
+        if let Some(directory) = std::env::var_os("RAT_PROMPT_NAMING_EVIDENCE") {
+            std::fs::write(
+                PathBuf::from(directory).join(format!("rename-editor-{cols}.txt")),
+                dashboard.screen.screen().contents(),
+            )
+            .unwrap();
+        }
+        dashboard.send(b"\r");
+        std::thread::sleep(Duration::from_millis(100));
+        dashboard.kill();
+        let mut control = Controller::connect(&fixture);
+        assert!(
+            control.greeting["identity"].is_null(),
+            "cancelled prompt editor never starts coding"
+        );
+        assert_eq!(
+            control.greeting["registry"]["workspaces"][0]["name"],
+            "My local workspace"
+        );
+        control.request(serde_json::json!("Shutdown"));
+    }
+}
