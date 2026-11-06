@@ -36,7 +36,7 @@ use std::{
     fs::{self, OpenOptions},
     io::{self, Read, Write},
     os::unix::{
-        fs::{OpenOptionsExt, PermissionsExt},
+        fs::{FileTypeExt, OpenOptionsExt, PermissionsExt},
         net::UnixDatagram,
     },
     path::{Path, PathBuf},
@@ -79,6 +79,7 @@ pub struct Monitor {
     received: Option<Instant>,
     pending: Vec<PendingTool>,
     supported_screen: bool,
+    supported_executable: bool,
     started: bool,
     input_boundary: Option<u64>,
 }
@@ -88,7 +89,10 @@ impl Monitor {
         let session = uuid::Uuid::new_v4().to_string();
         // Short name stays below macOS's 104-byte Unix address bound in default state dir.
         let path = directory.join("status.sock");
-        if path.exists() {
+        if let Ok(metadata) = fs::symlink_metadata(&path) {
+            if !metadata.file_type().is_socket() {
+                return Err(io::Error::other("Status endpoint is not a socket"));
+            }
             fs::remove_file(&path)?;
         }
         let socket = UnixDatagram::bind(&path)?;
@@ -131,6 +135,7 @@ impl Monitor {
             .truncate(true)
             .write(true)
             .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW)
             .open(&settings)?;
         file.write_all(&serde_json::to_vec(&serde_json::json!({"hooks":hooks}))?)?;
         Ok(Self {
@@ -144,9 +149,14 @@ impl Monitor {
             received: None,
             pending: Vec::new(),
             supported_screen: false,
+            supported_executable: false,
             started: fixture,
             input_boundary: None,
         })
+    }
+    pub fn native_executable(&mut self, executable: Option<&Path>) {
+        self.supported_executable =
+            executable.is_some_and(|path| path.file_name().is_some_and(|name| name == "2.1.318"));
     }
     pub fn configure(&self, command: &mut portable_pty::CommandBuilder) {
         if self.fixture {
@@ -177,7 +187,27 @@ impl Monitor {
                             if n <= MAX_RECEIPT
                                 && receipt.token == self.token
                                 && receipt.session == self.session
-                                && receipt.main_agent =>
+                                && receipt.main_agent
+                                && matches!(
+                                    receipt.event.as_str(),
+                                    "SessionStart"
+                                        | "SessionEnd"
+                                        | "UserPromptSubmit"
+                                        | "PreToolUse"
+                                        | "PermissionRequest"
+                                        | "PostToolUse"
+                                        | "PostToolUseFailure"
+                                        | "PostToolBatch"
+                                        | "Notification"
+                                        | "Stop"
+                                        | "StopFailure"
+                                        | "ConfigChange"
+                                        | "FixtureWorking"
+                                        | "FixtureInput"
+                                        | "FixtureApproval"
+                                        | "FixtureCompleted"
+                                        | "FixtureInterrupted"
+                                ) =>
                         {
                             self.received = Some(Instant::now());
                             match receipt.event.as_str() {
@@ -294,12 +324,14 @@ impl Monitor {
                         }
                     }
                     if count == 31 {
+                        self.pending.clear();
                         self.status.state = State::Unknown;
                         self.status.reason = "evidence backlog; ordering uncertain".into();
                     }
                 }
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
                 Err(_) => {
+                    self.pending.clear();
                     self.status.state = State::Unknown;
                     self.status.reason = "evidence channel unavailable".into();
                     break;
@@ -342,16 +374,15 @@ impl Monitor {
                 .iter()
                 .filter(|line| line.starts_with("────────────────────"))
                 .count()
-                >= 2;
+                >= 1;
             let current_output = self.input_boundary.is_none_or(|input| boundary > input);
-            if (self.fixture || self.supported_screen)
+            if (self.fixture || (self.supported_screen && self.supported_executable))
                 && current_output
                 && fresh.len() == 1
                 && modal_border
             {
                 let tool = fresh[0];
                 if tool.tool == "AskUserQuestion"
-                    && !tool.permission
                     && footer == "Enter to select · ↑/↓ to navigate · Esc to cancel"
                     && lines.iter().any(|line| line.starts_with("☐ "))
                     && lines.iter().any(|line| line.starts_with("❯ 1."))
@@ -359,6 +390,20 @@ impl Monitor {
                     self.status.state = State::Input;
                     self.status.evidence =
                         Some("open question tool + current Claude 2.1.318 modal".into());
+                    self.status.reason =
+                        "30s bounded evidence; native support gate remains open".into();
+                }
+                if tool.tool == "Bash"
+                    && tool.permission
+                    && footer == "Esc to cancel · Tab to amend"
+                    && lines.contains(&"Bash command")
+                    && lines.contains(&"Do you want to proceed?")
+                    && lines.contains(&"❯ 1. Yes")
+                {
+                    self.status.state = State::Approval;
+                    self.status.evidence = Some(
+                        "matched permission request + current Claude 2.1.318 Bash modal".into(),
+                    );
                     self.status.reason =
                         "30s bounded evidence; native support gate remains open".into();
                 }
@@ -384,10 +429,11 @@ pub fn hook(path: &Path, token: String, session: String) {
     let _ = (|| -> io::Result<()> {
         let mut input = Vec::new();
         io::stdin().take(65537).read_to_end(&mut input)?;
-        if input.len() > 65536 {
-            return Ok(());
-        }
-        let json: serde_json::Value = serde_json::from_slice(&input)?;
+        let json: serde_json::Value = if input.len() <= 65536 {
+            serde_json::from_slice(&input).unwrap_or(serde_json::Value::Null)
+        } else {
+            serde_json::Value::Null
+        };
         let actual = json
             .get("session_id")
             .and_then(|v| v.as_str())
@@ -452,7 +498,9 @@ pub fn fixture(event: &str) {
     };
     let receipt = Receipt {
         token,
-        tool_id: if event == "PreToolUse" || event == "PostToolUse" {
+        tool_id: if event == "FixtureNativeBashPre" {
+            "fixture-bash".into()
+        } else if event == "PreToolUse" || event == "PostToolUse" {
             "fixture-tool".into()
         } else {
             String::new()
@@ -463,8 +511,15 @@ pub fn fixture(event: &str) {
         } else {
             session
         },
-        event: event.into(),
-        tool: if event == "PreToolUse" || event == "PostToolUse" {
+        event: match event {
+            "FixtureNativeBashPre" => "PreToolUse",
+            "FixtureNativeBashPermission" => "PermissionRequest",
+            _ => event,
+        }
+        .into(),
+        tool: if event.starts_with("FixtureNativeBash") {
+            "Bash".into()
+        } else if event == "PreToolUse" || event == "PostToolUse" {
             "AskUserQuestion".into()
         } else {
             String::new()

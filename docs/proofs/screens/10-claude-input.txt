@@ -1,0 +1,41 @@
+{
+  "state": "Input",
+  "evidence": "open question tool + current Claude 2.1.318 modal",
+  "reason": "30s bounded evidence; native support gate remains open",
+  "recent": [
+    "SessionStart::",
+    "UserPromptSubmit::",
+    "PreToolUse:AskUserQuestion:toolu_01K2mzjPX8wmzASAy4aQt7am",
+    "PermissionRequest:AskUserQuestion:",
+    "Notification::"
+  ]
+}
+
+
+ ▐▛███▛█   Claude Code v2.1.318
+▝▜██████▀  Haiku 5.5 with medium effort · API Usage Billing
+ ▝▝   ▝▝   /private/tmp/rat-claude-proof-checkout
+
+
+❯ Use AskUserQuestion to ask whether the proof marker should be alpha or beta. Do not write files or
+  run commands.
+────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ☐ Marker
+
+Should the proof marker be alpha or beta?
+
+❯ 1. Alpha
+     Use alpha as the proof marker value.
+  2. Beta
+     Use beta as the proof marker value.
+  3. Type something.
+────────────────────────────────────────────────────────────────────────────────────────────────────────
+  4. Chat about this
+
+Enter to select · ↑/↓ to navigate · Esc to cancel
+
+
+
+
+
+                                                                

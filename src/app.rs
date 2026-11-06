@@ -50,7 +50,7 @@ impl App {
         }
     }
 
-    pub fn observe_session(&mut self, observation: Observation) {
+    pub fn observe_session(&mut self, mut observation: Observation) {
         if !observation.launch_request.is_empty() {
             self.launch_request = observation.launch_request.clone();
         }
@@ -64,6 +64,7 @@ impl App {
             self.shutdown_pending = false;
         }
         if observation.lifecycle != crate::session::Lifecycle::Running {
+            observation.status.state = crate::native_status::State::Unknown;
             self.attached = false;
         }
         self.session = observation;
