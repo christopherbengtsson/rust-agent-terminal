@@ -288,11 +288,24 @@ allows explicit retry. Final shutdown observations use reliable event delivery
 rather than the coalescible screen-only path. Detach exits through the normal
 terminal guard without sending Shutdown. Client EOF merely releases control.
 
-A termination worker owns the child while stopping, sends process-group TERM,
-escalates after 500 ms and polls leader exit plus `ps` group execution evidence.
-The deadline is two seconds with a 500 ms timeout on each verification subprocess.
-Inspection failures never count as confirmed absence. Zombies cannot execute;
-processes that deliberately escape the managed group are outside this proof.
+A termination worker owns the child while stopping. The live supervisor captures
+the gated helper's UID/start identity before authorization and tracks verified
+descendants across process groups on a worker (20 ms sampling, 1024 retained
+identities). Before termination it freezes the leader and each verified child
+generation, requires stopped-state evidence and a second inventory adding no new
+members. TERM remains pending while frozen; KILL follows after 500 ms, without
+reopening a fork/reparent gap. Stop is forceful: native shutdown hooks and native
+conversation buffers need not flush. Native `/exit` is the separate graceful
+path; managed captured history still needs EOF and durable tail completion.
+
+Inventories cap at 8192 processes, 1 MiB and 500 ms; closure has a 500 ms budget
+within the two-second lifecycle deadline. Every signal checks UID and OS start
+identity. Inspection errors and exceeded bounds retain StopFailed/authority for
+retry; stopped records drop tracking. Restored records never reconstruct signal
+authority. Zombies cannot execute. Unrelated daemons outside the live ancestry
+are excluded. Deliberate double-fork/reparent escape between samples and the OS
+inspection/signal interval remain limits; no kernel sandbox is claimed. See
+[the actual native failure and correction](proofs/18-native-child-stop.md).
 No launch or adoption replacement is allowed while termination is pending or
 unconfirmed. PTY input uses a separate worker with 32 bounded 4096-byte slots;
 queue saturation reports retry, and a blocked writer cannot block stop commands.

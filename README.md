@@ -57,12 +57,22 @@ legacy byte as Ctrl-5) returns to dashboard focus without stopping the session;
 Enter reattaches to the same child. Both recorded native versions exercised this
 chord; other keyboard protocols remain outside the proof. Ordinary quit visibly
 waits for the supervisor's confirmed
-stop. Stop sends TERM to the managed process group, escalates to KILL after
-500 ms, then confirms the leader exit and absence of executing group members.
-Verification errors or execution remaining after the two-second deadline stay
-visible; retry `s` or `q` after addressing the error. A verification subprocess
-has its own 500 ms timeout. These are fixture-tested process-group boundaries;
-processes that deliberately leave that group are outside this cleanup guarantee.
+stop. Stop is forceful: a worker verifies live descendant identities across
+process groups, freezes that owned scope to a stable closure, leaves TERM pending
+while frozen and sends KILL after 500 ms. It confirms leader exit and absence of
+executing owned members within two seconds. Native shutdown hooks and native
+conversation buffers are not guaranteed to flush; use the native CLI's `/exit`
+for graceful native shutdown. Managed captured history still has its separate
+EOF/durable-flush boundary. Inventory, identity or bound failures remain visible
+and retryable with `s`/`q`; they never count as confirmed cleanup.
+
+Live ancestry is sampled every 20 ms, with at most 1024 retained identities per
+session. Inventories cap at 8192 processes, 1 MiB and 500 ms; closure has a 500 ms
+budget inside the existing two-second deadline. Unrelated processes outside that
+ancestry are excluded. Deliberate double-fork/reparent escape between samples is
+outside this proof; no kernel sandbox or elimination of the OS check/signal race
+is claimed. Restored uncertain records never gain signal authority from saved
+PIDs. See [the native child correction](docs/proofs/18-native-child-stop.md).
 Native `exit` retains the latest screen and task/session attribution and returns
 to dashboard focus. A subsequent explicit launch creates a new session.
 Neither native exit nor stop deletes working files. Detach restores the terminal
@@ -108,8 +118,8 @@ endpoint is never displaced. Keep the lock file in place, including after shutdo
 Use separate private `--state-dir` directories only for isolated experiments.
 
 The durable-history and launch-recovery sections below describe current storage
-and recovery behavior. Cleanup of processes that escape the managed process
-group remains unproved; interrupted native execution can require verified reboot
+and recovery behavior. Unobserved processes that escape live ancestry
+remain outside the proof; interrupted native execution can require verified reboot
 before replacement. Dashboard loss preserves the supervisor and session; reconnect and quit
 normally to clean up. Do not remove a socket for a running supervisor. The bounded
 parsed screen follows the session pane viewport (up to 200×80 cells), without
