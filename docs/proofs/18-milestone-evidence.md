@@ -5,6 +5,29 @@
 a time, with real macOS PTYs. It does not establish C1–C9/R1–R11, the combined
 release workload, a physical reboot or graphical Terminal.app/iTerm compatibility.
 
+## Current post-review gate
+
+[Final review corrections and required checks](18-review-fixes.md) passed on
+`677d272ec37157ccc0f7b917ecc89aa29d7ad1b3`: build, formatting, warnings-denied
+all-target Clippy and the complete all-target suite. Results were 28 unit tests,
+52 ownership/storage/history scenarios (375.00 s), scripted interaction 27.82 s and
+screen integration 8.78 s. The terminal subprocess probe ran through its parent;
+the two separately measured developer workloads remain explicitly ignored here.
+The review record preserves the initial obsolete-expectation failures and exact
+final raw log/hash; both independent reviews closed all six findings.
+
+[Two focused actual-native quit cases](18-post-review-native-quit.md) separately
+passed on production-identical `65ad6bb`: real Claude 318 and Codex 167 foreground
+commands, one-time approval, typed/wire/native identity consistency across
+restart, child/group cleanup, terminal restoration, durable history and confirmed
+Shutdown. The accepted review-fix integration `afdb8961` is included; this proof
+branch has no runtime, test or Cargo-input difference from checked `677d272`.
+
+This current gate adds focused event/identity/outcome verification. The original
+Result, native matrices and resource measurements below retain their historical
+source/artifact boundaries; they are not relabeled as new measurements or a new
+complete native-matrix run.
+
 ## Result
 
 **The scoped Milestone 1 proof passed.** Both recorded native versions passed
