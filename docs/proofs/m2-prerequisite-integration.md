@@ -47,3 +47,38 @@ that unavailable path; parser and wire tests preserve its original bytes exactly
 A successful invalid-byte checkout cannot be created on this tested filesystem;
 no such successful-checkout claim is made. Existing native CLI proofs retain their
 original source/version/workload scope.
+
+## Completed post-correction checks
+
+The second serial all-target command (product source `265ca2e`, later
+documentation-only ticket resolution `bb306b3`) passed 32 unit checks with one
+intentional ignored probe. Ownership completed in 455.38 seconds: 62 passed,
+one failed, two opt-in measurements ignored. Strict ledger saturation and the
+sustained resource scenario both passed. The sole failure was now
+`healthy_output_reports_real_durable_boundaries_within_one_second` at
+`tests/ownership.rs:1360`: final snapshot durable bytes 7790 versus accepted
+output bytes 8182. All 15 observed flush samples met the one-second target
+(accepted ages 162–296 ms; successive completion intervals 268–278 ms).
+The all-target command again stopped before the two remaining integration targets.
+
+An unchanged isolated healthy-output rerun failed in 5.19 seconds at the same
+final equality: 7902 durable versus 8182 output bytes. All measured timing samples
+also met the target (accepted ages 167–292 ms). This is a reproducible final-prefix
+assertion failure requiring diagnosis; no product fix, weakened assertion or
+claim of harmless host timing is made here.
+
+The remaining `scripted_session` target passed in 30.31 seconds. An orchestration
+mistake briefly overlapped it with `session_screen`; that screen target failed
+in 7.76 seconds at `tests/session_screen.rs:305`, parsed bytes 2660 versus emitted
+2809. The unchanged screen target was then rerun alone and failed again in 7.79
+seconds, parsed 2646 versus emitted 2809. Thus overlap does not explain away the
+failure. This second reproducible final-byte equality concern also needs
+diagnosis. No capture assertions were changed.
+
+Build, formatting and warnings-denied all-target Clippy remain green for this
+union, but there is no clean complete all-target pass. Scoped ticket acceptance
+is retained as recorded above; the integration gate remains failing on these
+two explicit concerns. A fresh owner will diagnose the failures before further
+integration claims. Completed ticket 01/02/04 and fixture-fix worktrees were
+removed only after clean status and ancestry confirmation; their branches and
+unrelated worktrees were retained.
