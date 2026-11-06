@@ -6,8 +6,8 @@ publish = false
 description = "A terminal dashboard for Git worktrees and coding-agent sessions"
 
 [dependencies]
-crossterm = "0.28"
-ratatui = "0.29"
+crossterm = "0.29"
+ratatui = "0.30.2"
 
 [dev-dependencies]
 tempfile = "3"
