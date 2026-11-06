@@ -127,7 +127,114 @@ pub fn metadata(state: &Observation) -> Box<Observation> {
     saved.status = crate::native_status::Status::default();
     Box::new(saved)
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Purpose {
+    Metadata,
+    Prepare,
+    Authorize,
+    LaunchResult,
+    FinalFlush,
+    Seal,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Operation {
+    pub id: uuid::Uuid,
+    pub session: Option<String>,
+    pub request: String,
+    pub purpose: Purpose,
+}
+impl Operation {
+    pub fn new(state: &Observation, purpose: Purpose) -> Self {
+        Self {
+            id: uuid::Uuid::new_v4(),
+            session: state
+                .session_identity
+                .as_ref()
+                .map(|identity| identity.session.clone()),
+            request: if matches!(purpose, Purpose::FinalFlush | Purpose::Seal) {
+                state.session_identity.as_ref().map_or_else(
+                    || state.launch_request.clone(),
+                    |identity| identity.request.clone(),
+                )
+            } else {
+                state.launch_request.clone()
+            },
+            purpose,
+        }
+    }
+    pub fn matches(&self, state: &Observation) -> bool {
+        self.session
+            == state
+                .session_identity
+                .as_ref()
+                .map(|identity| identity.session.clone())
+            && if self.purpose == Purpose::LaunchResult {
+                state
+                    .launch_result
+                    .as_ref()
+                    .is_some_and(|result| result.request == self.request)
+            } else if matches!(self.purpose, Purpose::FinalFlush | Purpose::Seal) {
+                self.request
+                    == state
+                        .session_identity
+                        .as_ref()
+                        .map_or(state.launch_request.as_str(), |identity| {
+                            identity.request.as_str()
+                        })
+            } else {
+                self.request == state.launch_request
+            }
+    }
+}
+/// Only accepted commands create obligations. Rejected, duplicate or altered
+/// completions cannot retire another command, even for the same launch request.
+#[derive(Default)]
+pub struct Obligations {
+    pending: std::collections::HashMap<uuid::Uuid, Operation>,
+}
+impl Obligations {
+    pub fn send(
+        &mut self,
+        sender: &SyncSender<Command>,
+        mut command: Command,
+    ) -> io::Result<Operation> {
+        let operation = match &mut command {
+            Command::Prepare(snapshot) => {
+                snapshot.operation.purpose = Purpose::Prepare;
+                snapshot.operation.clone()
+            }
+            Command::Authorize(snapshot) => {
+                snapshot.operation.purpose = Purpose::Authorize;
+                snapshot.operation.clone()
+            }
+            Command::Save(snapshot) => snapshot.operation.clone(),
+            Command::Flush(operation) | Command::Seal(operation) => operation.clone(),
+            _ => unreachable!("only durable session commands create obligations"),
+        };
+        sender
+            .try_send(command)
+            .map_err(|error| io::Error::other(error.to_string()))?;
+        self.pending.insert(operation.id, operation.clone());
+        Ok(operation)
+    }
+    pub fn complete(&mut self, operation: &Operation) -> bool {
+        if self.pending.get(&operation.id) != Some(operation) {
+            return false;
+        }
+        self.pending.remove(&operation.id);
+        true
+    }
+    pub fn is_empty(&self) -> bool {
+        self.pending.is_empty()
+    }
+    pub fn metadata_pending(&self) -> bool {
+        self.pending
+            .values()
+            .any(|operation| !matches!(operation.purpose, Purpose::FinalFlush | Purpose::Seal))
+    }
+}
 pub struct Snapshot {
+    pub operation: Operation,
     pub state: Box<Observation>,
     pub checkout: Option<Vec<u8>>,
     pub task: String,
@@ -135,10 +242,19 @@ pub struct Snapshot {
 impl Snapshot {
     pub fn new(state: &Observation, checkout: Option<&Path>, task: &str) -> Self {
         Self {
+            operation: Operation::new(state, Purpose::Metadata),
             state: metadata(state),
             checkout: checkout.map(crate::session::path_bytes),
             task: task.to_owned(),
         }
+    }
+    pub fn result(state: &Observation, checkout: Option<&Path>, task: &str) -> Self {
+        let mut snapshot = Self::new(state, checkout, task);
+        snapshot.operation.purpose = Purpose::LaunchResult;
+        if let Some(result) = &state.launch_result {
+            snapshot.operation.request.clone_from(&result.request);
+        }
+        snapshot
     }
 }
 pub enum Command {
@@ -148,20 +264,18 @@ pub enum Command {
     History(usize, u64),
     Cleanup(usize),
     Delete(String),
-    Seal(String),
+    Seal(Operation),
     Retry,
-    Flush,
+    Flush(Operation),
 }
 pub enum Completion {
     Retried,
     Sealed,
     Cleanup(crate::cleanup::Page),
     Deleted(String),
-    Prepared(String),
-    Authorized(String),
-    Saved,
+    Committed(Operation),
+    Failed(Operation, String),
     History(HistoryPage),
-    Flushed,
     Error(&'static str, String),
 }
 pub struct Restored {
@@ -194,23 +308,26 @@ impl Worker {
             let restored = store.restore().map_err(|e| e.to_string());
             if ready_tx.send(restored).is_err() { return; }
             let mut pending: Option<(String, Vec<u8>, Instant)> = None;
+            #[cfg(debug_assertions)]
+            let mut last_operation: Option<Operation> = None;
             let mut since = Instant::now();
             let mut capacity_since = Instant::now() - Duration::from_secs(1);
             loop {
                 // Reserve control capacity independently from capture traffic.
                 if let Ok(command) = control.try_recv() {
-                    let kind = match &command { Command::Save(..) | Command::Prepare(..) | Command::Authorize(..) => "metadata", Command::History(..) => "history", Command::Cleanup(..) | Command::Delete(..) | Command::Seal(..) => "cleanup", Command::Retry => "retry", Command::Flush => "flush" };
+                    let kind = match &command { Command::Save(..) | Command::Prepare(..) | Command::Authorize(..) => "metadata", Command::History(..) => "history", Command::Cleanup(..) | Command::Delete(..) | Command::Seal(..) => "cleanup", Command::Retry => "retry", Command::Flush(..) => "flush" };
                     status.lock().unwrap().operation = Some((kind, Instant::now()));
+                    let operation = match &command { Command::Prepare(snapshot) | Command::Authorize(snapshot) | Command::Save(snapshot) => Some(snapshot.operation.clone()), Command::Flush(operation) | Command::Seal(operation) => Some(operation.clone()), _ => None };
                     let result = match command {
                         Command::Cleanup(index) => store.start_cleanup(index).map(|_| Completion::Sealed),
                         Command::Delete(id) => store.start_delete(&id).map(|_| Completion::Sealed),
-                        Command::Seal(id) => store.seal(&id).map(|_| Completion::Sealed),
+                        Command::Seal(operation) => operation.session.as_deref().ok_or_else(|| io::Error::other("Missing session for seal").into()).and_then(|id| store.seal(id)).map(|_| Completion::Committed(operation)),
                         Command::Retry => { since = Instant::now() - FLUSH; Ok(Completion::Retried) },
-                        Command::Prepare(Snapshot { state, checkout, task }) => store.fault("prepare").and_then(|_| store.save(&state, checkout, task)).map(|_| Completion::Prepared(state.launch_request.clone())),
-                        Command::Authorize(Snapshot { state, checkout, task }) => store.fault("authorize").and_then(|_| store.save(&state, checkout, task)).map(|_| Completion::Authorized(state.launch_request.clone())),
-                        Command::Save(Snapshot { state, checkout, task }) => store.fault("save").and_then(|_| store.save(&state, checkout, task)).map(|_| Completion::Saved),
+                        Command::Prepare(Snapshot { operation, state, checkout, task }) => store.fault("prepare").and_then(|_| store.save(&state, checkout, task)).map(|_| Completion::Committed(operation)),
+                        Command::Authorize(Snapshot { operation, state, checkout, task }) => store.fault("authorize").and_then(|_| store.save(&state, checkout, task)).map(|_| Completion::Committed(operation)),
+                        Command::Save(Snapshot { operation, state, checkout, task }) => store.fault("save").and_then(|_| store.save(&state, checkout, task)).map(|_| Completion::Committed(operation)),
                         Command::History(index, offset) => store.history(index, offset).map(Completion::History),
-                        Command::Flush => {
+                        Command::Flush(operation) => {
                             // Called only after PTY EOF: drain everything already transferred.
                             (|| {
                                 loop {
@@ -222,13 +339,39 @@ impl Worker {
                                     if bytes.is_empty() { pending = None; }
                                 }
                                 store.flush()?;
-                                Ok(Completion::Flushed)
+                                Ok(Completion::Committed(operation))
                             })()
                         }
                     };
                     status.lock().unwrap().operation = None;
                     store.publish(&mut status.lock().unwrap());
-                    let event = result.unwrap_or_else(|e: Box<dyn std::error::Error + Send + Sync>| Completion::Error(kind, e.to_string()));
+                    let event = result.unwrap_or_else(|e: Box<dyn std::error::Error + Send + Sync>| match operation { Some(operation) => Completion::Failed(operation, e.to_string()), None => Completion::Error(kind, e.to_string()) });
+                    #[cfg(debug_assertions)]
+                    if let Completion::Committed(operation) = &event {
+                        let marker = store.directory.join("proof-storage-completion");
+                        let expected = match operation.purpose { Purpose::Prepare => "prepare", Purpose::Authorize => "authorize", Purpose::LaunchResult => "result", Purpose::Metadata => "metadata", Purpose::FinalFlush => "flush", Purpose::Seal => "seal" };
+                        if std::fs::read_to_string(&marker).is_ok_and(|value| value.trim() == expected) {
+                            // Exercise the real completion channel while holding the exact
+                            // commit receipt. No second storage writer or product command.
+                            for field in 0..4 {
+                                let mut altered = operation.clone();
+                                match field { 0 => altered.id = uuid::Uuid::new_v4(), 1 => altered.session = Some("another-session".into()), 2 => altered.request = "another-request".into(), _ => altered.purpose = if altered.purpose == Purpose::Metadata { Purpose::LaunchResult } else { Purpose::Metadata } }
+                                let _ = tx.send(Completion::Committed(altered.clone()));
+                                let _ = tx.send(Completion::Failed(altered, "stale completion".into()));
+                            }
+                            let _ = std::fs::write(marker.with_extension("ready"), expected);
+                            while marker.exists() { thread::sleep(Duration::from_millis(10)); }
+                        }
+                    }
+                    #[cfg(debug_assertions)]
+                    if let Completion::Committed(operation) = &event {
+                        if store.directory.join("proof-storage-replay").exists()
+                            && let Some(previous) = last_operation.take() {
+                            let _ = tx.send(Completion::Committed(previous.clone()));
+                            let _ = tx.send(Completion::Failed(previous, "duplicate stale failure".into()));
+                        }
+                        last_operation = Some(operation.clone());
+                    }
                     if tx.send(event).is_err() { break; }
                 }
                 if capacity_since.elapsed() >= Duration::from_secs(1) {
