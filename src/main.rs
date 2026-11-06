@@ -4,6 +4,7 @@ mod cleanup;
 mod codex_status;
 mod events;
 mod git;
+mod history;
 mod lifecycle;
 mod native_input;
 mod native_status;

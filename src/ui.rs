@@ -70,7 +70,14 @@ impl Ui {
         } else if app.cleanup_open {
             " History cleanup · oldest sealed stopped sessions first ".to_owned()
         } else if app.history_open {
-            " Retained history · controls escaped · n/p session · [/] page ".to_owned()
+            format!(
+                " History · {} · v raw/readable · [/] page ",
+                if app.history_raw {
+                    "escaped raw"
+                } else {
+                    "readable"
+                }
+            )
         } else if frame.area().width < 80 || frame.area().height < 22 {
             let tag = app
                 .session
@@ -243,7 +250,15 @@ impl Ui {
                                 visible(&outcome.reason())
                             )),
                         page.offset,
-                        page.text
+                        if app.history_raw {
+                            page.text.as_str()
+                        } else if let Some(readable) = &page.readable {
+                            readable.text.as_str()
+                        } else if page.projection_preparing {
+                            "Preparing readable history in bounded background steps…"
+                        } else {
+                            "Readable projection unavailable; v shows escaped raw bytes"
+                        }
                     )
                 })
                 .unwrap_or_else(|| "Loading retained history…".into());
@@ -790,6 +805,66 @@ fn visible(text: &str) -> String {
 mod tests {
     use super::*;
     use ratatui::{Terminal, backend::TestBackend};
+
+    #[test]
+    fn readable_history_and_explicit_raw_toggle_render_without_launching_resume() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let mut app = App::new("missing-checkout".into());
+        app.history_open = true;
+        app.session.history = Some(crate::persistence::HistoryPage {
+            text: "RAW\\u{1b}[32mAnswer".into(),
+            readable: Some(crate::history::ReadablePage {
+                text: "Prompt café\nAnswer\ncommand output\n".into(),
+                version: 1,
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        for (cols, rows) in [(160, 40), (60, 18)] {
+            for raw in [false, true] {
+                app.history_raw = raw;
+                let mut terminal = Terminal::new(TestBackend::new(cols, rows)).unwrap();
+                terminal
+                    .draw(|frame| Ui::default().draw(frame, &app))
+                    .unwrap();
+                let text = terminal
+                    .backend()
+                    .buffer()
+                    .content
+                    .iter()
+                    .map(|cell| cell.symbol())
+                    .collect::<String>();
+                assert!(
+                    text.contains(if raw {
+                        "RAW\\u{1b}[32mAnswer"
+                    } else {
+                        "Prompt café"
+                    }),
+                    "{text}"
+                );
+                if let Some(directory) = std::env::var_os("RAT_HISTORY_EVIDENCE") {
+                    std::fs::create_dir_all(&directory).unwrap();
+                    std::fs::write(
+                        std::path::PathBuf::from(directory)
+                            .join(format!("08-history-{cols}-{raw}.txt")),
+                        &text,
+                    )
+                    .unwrap();
+                }
+            }
+        }
+        let effect = app.input(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE));
+        assert!(
+            effect.is_none(),
+            "history v must never request native resume"
+        );
+        assert!(!app.history_raw);
+        assert!(
+            app.error.is_none(),
+            "history toggle fell through into resume: {:?}",
+            app.error
+        );
+    }
 
     #[test]
     fn workspace_picker_preserves_independent_lifecycle_and_semantic_status() {

@@ -224,11 +224,22 @@ scenarios and conservative limits.
 
 Readable history is independent of a live child, native resume, and the checkout.
 In dashboard focus press `h` to open/close retained history, `n`/`p` for older/newer
-sessions, `[`/`]` for byte pages, and `j`/`k` to scroll the current page. History
-shows chronological captured output; carriage returns and escape controls appear
-as printable escapes, including text erased by redraws or alternate screens.
+sessions, `[`/`]` for raw byte ranges, and `j`/`k` to scroll the current page.
+The default readable view decodes UTF-8 across pages, removes terminal styles and
+hidden control strings, and follows bounded line edits and horizontal cursor
+movement. Replay runs in background batches; a cold distant page can show
+Preparing readable history while capture and controls continue. Press `v` inside
+history to toggle the escaped raw view. Outside history, `v` remains native Resume.
+
+This is captured terminal output, not reconstructed chat messages. Full-screen
+redraws can repeat text, leave fragments or spacing artifacts, and the last line
+is provisional until later output finishes it. Exact raw bytes remain retained
+independently; only committed bytes are shown. Passage locations use the stable
+session UUID, projection version and raw byte ranges rather than screen rows.
 Input keys/paste are not separately recorded, so hidden password input is not
-copied into history. Output itself can contain sensitive text.
+copied into history. Output itself can contain sensitive text. See the
+[readable-history proof](docs/proofs/m2-08-readable-history.md) for current native
+examples, bounds and limitations.
 
 The supervisor stores SQLite metadata and 64 KiB transcript chunks under
 `~/Library/Application Support/rat/proof` (or the explicit isolated `--state-dir`).
