@@ -84,9 +84,11 @@ pub struct Monitor {
     input_boundary: Option<u64>,
 }
 impl Monitor {
-    pub fn start(directory: &Path, fixture: bool) -> io::Result<Self> {
+    pub fn start(directory: &Path, fixture: bool, resume: Option<&str>) -> io::Result<Self> {
         let token = uuid::Uuid::new_v4().to_string();
-        let session = uuid::Uuid::new_v4().to_string();
+        let session = resume
+            .map(str::to_owned)
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         // Short name stays below macOS's 104-byte Unix address bound in default state dir.
         let path = directory.join("status.sock");
         if let Ok(metadata) = fs::symlink_metadata(&path) {
@@ -158,14 +160,20 @@ impl Monitor {
         self.supported_executable =
             executable.is_some_and(|path| path.file_name().is_some_and(|name| name == "2.1.318"));
     }
-    pub fn configure(&self, command: &mut portable_pty::CommandBuilder) {
+    pub fn native_session(&self) -> &str {
+        &self.session
+    }
+
+    pub fn configure(&self, command: &mut portable_pty::CommandBuilder, resume: bool) {
         if self.fixture {
             command.env("RAT_STATUS_CHANNEL", &self.path);
             command.env("RAT_STATUS_TOKEN", &self.token);
             command.env("RAT_STATUS_SESSION", &self.session);
         } else {
-            command.arg("--session-id");
-            command.arg(&self.session);
+            if !resume {
+                command.arg("--session-id");
+                command.arg(&self.session);
+            }
             command.arg("--settings");
             command.arg(&self.settings);
         }

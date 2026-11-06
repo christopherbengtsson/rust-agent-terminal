@@ -1,0 +1,36 @@
+Native conversation: 4d99aebe-62cb-49bb-993d-8819bb13edc2
+Managed identity: task=71af9058-94ec-4c41-9a2f-31f15b331b91 session=23624514-2930-49c7-8732-020364d4b2ac request=99c0ee85-cf35-461c-aa48-6044b9cd6e4a
+Native child PID: 30763
+
+
+ ▐▛███▛█   Claude Code v2.1.318
+▝▜██████▀  Haiku 5.5 with medium effort · API Usage Billing
+ ▝▝   ▝▝   /private/tmp/rat16-claude-checkout
+
+
+❯ Remember this conversation-only token: amber-orbit-16-4f72. Reply exactly STORED. Do not use tools,
+  write files, or repeat the token.
+
+⏺ STORED
+
+✻ Worked for 2s · done 2:41 PM
+
+❯ What exact conversation-only token did I ask you to remember earlier? Reply with that token only. Do
+  not use tools or read files.
+
+⏺ amber-orbit-16-4f72
+
+✻ Worked for 2s · done 2:43 PM
+
+
+
+
+
+
+
+
+                                                                ✔ Update installed · Restart to update
+────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ auto mode on (shift+tab to cycle)

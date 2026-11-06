@@ -141,5 +141,10 @@ that test. Locked build, formatting and warnings-denied Clippy passed after that
 The next full suite passed the former history failure and the Codex regression,
 then stalled in the older bounded-PTY cleanup harness. That run and only its
 known fixture were explicitly stopped. Ticket 13 cleanup checkpoint a3841db and
-fresh integrated full checks remain pending; ticket 12 stays unresolved until
-that verification completes. See the ticket's verification comment.
+fresh integrated full checks subsequently completed on `6da639d`. The source
+tree matched the full run exactly: 21 unit tests, 29 ownership/history/resource
+scenarios (187.72 s), scripted interaction/status (14.66 s), and screen integration
+(8.65 s) passed; the ignored restoration probe was exercised by its parent test.
+Formatting, locked build, and all-target warnings-denied Clippy also passed.
+Ticket 12 is resolved for the declared native scenarios. Parser-bound hardening
+and final milestone measurements remain separate tickets.
