@@ -23,12 +23,17 @@ def distribution(values):
     return {'n': len(ordered), **{f'p{p}': ordered[min(len(ordered)-1, (len(ordered)*p+99)//100-1)] for p in (50, 90, 95, 99)}, 'min': ordered[0], 'max': ordered[-1]}
 
 runs = {}
+emission = collections.defaultdict(lambda: {'records':0,'bytes':0,'max_write_us':0,'write_us':0})
 for line in (root / 'proof-emitted17.jsonl').open():
     value = json.loads(line)
+    if 'record' in value:
+        emitted=emission[value['run']]
+        assert value['record']==emitted['records'], 'missing/duplicate producer ledger record'
+        emitted['records']+=1;emitted['bytes']+=value['bytes'];emitted['max_write_us']=max(emitted['max_write_us'],value['write_us']);emitted['write_us']+=value['write_us']
     if value.get('kind') == 'complete':
         runs[value['run']] = value
 inputs = {v['nonce']: v for v in map(json.loads, (root/'proof-input17.jsonl').open())}
-report = {'manifest': events[0], 'runs': runs, 'latency_us': {}, 'rss_KiB': {}, 'raw_continuity': []}
+report = {'manifest': events[0], 'runs': runs, 'emission':dict(emission), 'latency_us': {}, 'rss_KiB': {}, 'raw_continuity': []}
 for kind in ('navigation', 'attach'):
     for mode in sorted({e['mode'] for e in events if e['kind'] == kind}):
         samples = [e for e in events if e['kind'] == kind and e['mode'] == mode]
@@ -113,9 +118,20 @@ for session in report['raw_continuity']:
     for run, count in session['complete_records'].items():
         if run in runs:
             assert count==runs[run]['records'],f'completed run {run}: emitted/captured record mismatch'
+for session in report['raw_continuity']:
+    for run,count in session['complete_records'].items():
+        if run in emission:
+            emission[run]['completed_write_records_not_captured']=emission[run]['records']-count
+            emission[run]['completed_write_bytes_not_captured']=emission[run]['bytes']-count*1024-session['trailing_incomplete_bytes']
+# Before/after comparisons include identity, committed extents and SHA256, not
+# uncommitted file tails. No claim about emitted-but-unread kernel bytes.
 crash=root/'crash-before-restore'
 if crash.exists():
     report['crash_raw_continuity']=inspect(crash)
+    after=root/'crash-after-restore'
+    if after.exists():
+        report['after_restore_continuity']=inspect(after)
+        assert report['after_restore_continuity']==report['crash_raw_continuity'], 'durable bytes/hash changed during restore'
     observation=next(e for e in events if e['kind']=='crash')
     report['crash']=observation
     recovered=report['crash_raw_continuity'][-1]['durable']

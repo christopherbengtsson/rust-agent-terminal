@@ -3250,6 +3250,11 @@ fn paced_session_measurement17() {
     log(
         serde_json::json!({"kind":"manifest","revision":String::from_utf8(Command::new("git").args(["rev-parse","HEAD"]).output().unwrap().stdout).unwrap().trim(),"dirty":!Command::new("git").args(["diff","HEAD","--quiet"]).status().unwrap().success(),"profile":"debug","outer_terminal":"portable-pty + vt100 0.18.1; no graphical terminal/pixel latency","outer_geometry":[40,160],"healthy_duration_ms":phase_ms,"preflight_only":preflight,"healthy_rate_Bps":65536,"record_bytes":1024,"style_mix":"each record: cursor position/erase, green SGR, lambda+CJK UTF8, padded X; raw termios","navigation_samples":navigation_samples,"attach_samples":attach_samples,"rss_period_ms":1000,"lag_ms":phase_ms,"slow_write_ms":50,"fault":"debug write ENOSPC marker, not real volume exhaustion","caps":{"capture_bytes":270336,"storage_commands":16,"storage_events":16,"input_commands":32,"client_requests":32,"client_latest":1,"outer_blocks":8,"outer_block_bytes":4096,"frame_bytes":4194304,"commit_records":1024,"chunk_bytes":65536,"screen_max":[80,200],"scrollback":0},"instrumentation":"continuous latest screen parser/mutex; 1ms observation poll; fixture per-record and input JSONL; bounded commit ring; ps 1s, actual sampler durations recorded"}),
     );
+    let binary_hash = Command::new("shasum")
+        .args(["-a", "256", env!("CARGO_BIN_EXE_agent-terminal")])
+        .output()
+        .unwrap();
+    log(serde_json::json!({"kind":"binary","sha256":String::from_utf8_lossy(&binary_hash.stdout)}));
     for (command, args) in [
         ("sw_vers", vec![]),
         ("uname", vec!["-mrs"]),
@@ -3370,15 +3375,18 @@ fn paced_session_measurement17() {
                 let mut transcript_bytes = 0;
                 let mut metadata_bytes = 0;
                 let mut chunks = 0;
+                let mut allocated = 0;
                 for entry in std::fs::read_dir(&state_directory).unwrap() {
                     let entry = entry.unwrap();
-                    let size = entry.metadata().unwrap().len();
+                    let metadata = entry.metadata().unwrap();
+                    let size = metadata.len();
                     if entry
                         .path()
                         .extension()
                         .is_some_and(|ext| ext == "transcript")
                     {
                         transcript_bytes += size;
+                        allocated += std::os::unix::fs::MetadataExt::blocks(&metadata) * 512;
                         chunks += 1;
                     } else if entry
                         .file_name()
@@ -3388,7 +3396,7 @@ fn paced_session_measurement17() {
                         metadata_bytes += size;
                     }
                 }
-                writeln!(raw.lock().unwrap(),"{}",serde_json::json!({"kind":"disk","sample_ns":measurement_clock(),"transcript_bytes":transcript_bytes,"metadata_bytes":metadata_bytes,"chunks":chunks})).unwrap();
+                writeln!(raw.lock().unwrap(),"{}",serde_json::json!({"kind":"disk","sample_ns":measurement_clock(),"transcript_bytes":transcript_bytes,"metadata_bytes":metadata_bytes,"transcript_allocated_bytes":allocated,"chunks":chunks})).unwrap();
                 std::thread::sleep(Duration::from_secs(1));
             }
         })
@@ -3740,6 +3748,14 @@ fn paced_session_measurement17() {
         serde_json::json!({"kind":"crash","owner":crash_owner,"child":crash_child,"acknowledged":acknowledged,"restored":restored.greeting,"replacement":refused}),
     );
     restored.request(serde_json::json!("Shutdown"));
+    let after = evidence.join("crash-after-restore");
+    std::fs::create_dir(&after).unwrap();
+    for entry in std::fs::read_dir(fixture.state()).unwrap() {
+        let entry = entry.unwrap();
+        if entry.file_type().unwrap().is_file() {
+            std::fs::copy(entry.path(), after.join(entry.file_name())).unwrap();
+        }
+    }
     log(
         serde_json::json!({"kind":"finished","failures":failures,"identity":identity,"final":final_state}),
     );
