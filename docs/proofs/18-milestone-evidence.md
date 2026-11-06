@@ -120,6 +120,11 @@ process/status and escape/help; native content can clip and needs native
 scroll/navigation. Tiny unusable viewports preserve the last usable child size
 (the passing render test verifies no invalid resize request). Full later history
 search, archival, editor, multi-project and review workflows remain deferred.
+The current slice also uses plain terminal borders and native colors, with less
+branding and accent polish than the reference. Later UI polish can add consistent
+accents while retaining the explicit text labels and native screen. At small
+sizes, return to a wider terminal for full checkout/request metadata and long
+native approval text.
 
 ## Required checks actually run
 

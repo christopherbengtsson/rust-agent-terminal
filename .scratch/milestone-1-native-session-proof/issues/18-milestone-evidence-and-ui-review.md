@@ -15,7 +15,7 @@ Blocked by: 10, 12, 15, 16, 17
 
 ## Comments
 
-2026-11-06: [Integrated evidence](../../../../docs/proofs/18-milestone-evidence.md)
+2026-11-06: [Integrated evidence](../../../docs/proofs/18-milestone-evidence.md)
 records real Claude318/Codex167 interaction, whole-dashboard captures, active
 native supervisor failure and the passing pre-fix full all-target suite. An
 ordinary approved Codex foreground command survived a reported successful Stop
