@@ -62,8 +62,10 @@ request `prior native16 λ`, before explicit reconciliation/resume. Focused resu
 passed, 1.25 seconds. Normal/narrow rendering checks verify `Failed` and the
 original exit reason stay visible after a later control error.
 
-An initial complete run exposed three old tests expecting `Exited` after missing
-executables. Only those expectations were corrected to `Failed`; gate-exec
+An initial complete run on `65ad6bb` passed 28 unit tests and 49 ownership
+scenarios, then failed exactly three old expectations after 391.48 seconds;
+scripted/screen targets did not run because Cargo stopped at ownership failure.
+Those tests expected `Exited` after missing executables. Only those expectations were corrected to `Failed`; gate-exec
 coverage also checks the retained nonzero outcome after restart. The gate-exec
 focused check passed in 0.96 seconds; both missing-tool checks and missing-checkout
 recovery passed together in 3.69 seconds. No production code changed for these
@@ -73,10 +75,40 @@ unsandboxed macOS boundary.
 
 ## Verification and limits
 
-Build, formatting and warnings-denied all-target Clippy passed on `65ad6bb`.
-Its unit checks passed 28 tests; the intentionally ignored subprocess probe was
-exercised by the real PTY restoration parent. Final complete-suite results follow
-after the test-only missing-executable expectation corrections.
+The clean final verification checkpoint is
+`677d272ec37157ccc0f7b917ecc89aa29d7ad1b3`, with production source identical to
+`65ad6bb`. Two independent follow-up reviews closed all six findings on that
+production checkpoint; no new concrete issue remained. The required merge check
+against latest integration `ada4809c` completed “Already up to date.”
+
+All required commands passed on the final checkpoint:
+
+| Check | Result |
+| --- | --- |
+| `cargo build --locked` | Passed |
+| `cargo fmt --all -- --check` | Passed |
+| `cargo clippy --locked --all-targets -- -D warnings` | Passed |
+| `cargo test --locked --all-targets` | Passed; [unaltered raw stdout/stderr](18-review-checks.log) |
+
+Raw-log SHA256: `99faab61f32bebc088cbf194d6fa484bf417129f9bc435894965e29379786b8f`.
+The subsequent proof commit changes documentation and this log only.
+
+The complete final test run passed 28 unit checks in 0.06 seconds, 52 ownership/
+storage/history scenarios in 375.00 seconds, scripted dashboard interaction in
+27.82 seconds and resize/style/alternate-screen/focus/reconnect integration in
+8.78 seconds. The intentionally ignored unit subprocess probe was exercised by
+its real PTY restoration parent. Two separately invoked developer measurements
+remained ignored; their historical full results are linked below. The raw log
+includes two owned abrupt-fixture cleanup diagnostics about already-absent PIDs;
+all final assertions and Cargo's exit status passed.
+
+The [post-review actual-native supplement](18-post-review-native-quit.md) passed
+foreground ordinary quit for recorded Claude Code 2.1.318 and Codex CLI 0.167.0
+on clean `65ad6bb`. It checked typed identities against unchanged wire labels
+before quit and after restart, native IDs, stopped CLI/tool process groups,
+stable heartbeat files, restored terminal modes, durable equality/pending zero,
+readable History and confirmed Shutdown. This is a separate exact native proof
+boundary from the scripted exit-code/signal regression above.
 
 This new outcome regression uses real OS process/PTY/supervisor/persistence
 boundaries with a scripted native-style CLI. It does not claim an induced crash
