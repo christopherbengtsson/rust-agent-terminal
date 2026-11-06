@@ -33,3 +33,10 @@ is inferred. Ticket 17 retains those measurement gates. All accepted bytes in
 the recorded fault run became durable; 1024 completed-emitted but uncaptured
 kernel/PTY bytes did not survive explicit Stop, disclosed separately from accepted
 history. No automatic history deletion or safe-suspension claim was introduced.
+
+
+Follow-up: the extra exact-source repeat exposed an intermittent Authorize-to-exec
+receipt pending-state gap. A deterministic held-receipt regression reproduced
+it, then passed after the pending predicate included receipt/outcome phases and
+Shutdown recognized the current owned stopping worker. The proof records the
+38/39 failed repeat and the correction; no null result is accepted as durable.

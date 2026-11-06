@@ -197,3 +197,25 @@ cargo test --locked --all-targets
 # Fresh path required; never overwrite a recorded run:
 RAT_STORAGE_EVIDENCE=/private/tmp/new-storage14.jsonl cargo test --locked --test ownership storage_saturation -- --nocapture
 ```
+
+
+### Provisional receipt-gap follow-up
+
+The additional exact-source repeat passed the sustained resource workload but
+finished 38/39 ownership scenarios: lost-launch-ack recovery intermittently saw
+`launch_result=null` with `metadata_pending=false`. Authorize had committed, but
+the native exec receipt/result Save had not yet arrived. This was a real pending
+state gap, not evidence of a failed durable write. A deterministic real-process
+regression now holds the exec receipt on its existing worker through the private
+debug `proof-launch-receipt` marker. It first failed with precisely that false
+pending flag. The aggregate pending predicate now includes pending launch,
+receipt and outcome phases; shutdown also waits for them. The held-receipt
+regression passes with provisional state, Stop, cancellation, subsequent Shutdown
+and no late execution. It additionally exposed immediate Shutdown mistaking the
+current owned stopping worker for restored unknown execution; the check now
+distinguishes those cases and retains the conservative restored-state policy.
+Marker cleanup releases only this additional fixture-owned hold.
+
+Final verification of this follow-up reruns all targets except the already
+passing sustained resource scenario; the exact source/result receipt follows.
+The full union at ticket 18 remains the final integration gate.
