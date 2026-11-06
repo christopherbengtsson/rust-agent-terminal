@@ -2055,6 +2055,14 @@ fn sustained_capture_crosses_caps_while_attached_focused_detached_and_lagged() {
     {
         record(serde_json::json!({"kind":"producer","line":line}));
     }
+    for line in text
+        .lines()
+        .filter(|line| line.contains("input13-received_ns="))
+    {
+        record(
+            serde_json::json!({"kind":"fixture_input_received","line":line,"boundary":"fixture parsed nonce after reading CR; monotonic kernel clock, before writing visible ACK"}),
+        );
+    }
     record(
         serde_json::json!({"kind":"continuity","records":records.len(),"durable_bytes":final_state["durable_bytes"],"elapsed_us":origin.elapsed().as_micros()}),
     );
