@@ -7,11 +7,11 @@ release workload, a physical reboot or graphical Terminal.app/iTerm compatibilit
 
 ## Current gate
 
-**Open: actual native Codex foreground subprocess cleanup failed.** A normal
-approved command spawned a separate process group; Stop reported Stopped while
-its heartbeat continued. [Exact failed observation](18-stop-gate-failure.json).
-This cannot be waived as a deliberately escaped fixture. Ticket 18 and milestone
-completion remain open pending a fix and actual native rerun.
+**Native foreground Stop and ordinary-quit retests passed for both tools on
+`a3842906fddfc5649af11a898f987785dc0e7ece` (includes integration `a39308b`).**
+The original actual Codex failure remains [preserved](18-stop-gate-failure.json).
+Final source-followup checks and resource/latency revalidation remain open;
+Milestone 1 and ticket 18 are not yet declared complete.
 
 ## Source and native boundaries
 
@@ -83,7 +83,7 @@ child group was cleaned by graceful Claude termination in this scenario.
 Codex CLI 72113 started Python88651, PPID72113, PGID88651, native start
 17:42:00. Stop killed the CLI and reported Stopped/execution null/error null, but
 Python became PPID1 and continued: 5 records before, 13 after and still growing.
-The false successful Stop is the open gate above. No unrelated shared daemon
+This false successful Stop required the correction and fresh retests below. No unrelated shared daemon
 or user process was signaled.
 
 ## Consolidated independent evidence
@@ -200,3 +200,60 @@ dashboard frame and is excluded from whole-dashboard screenshots. The archive
 retains the raw/observation boundary; no missing cells were reconstructed from a
 different invocation. The other linked whole captures retained their initial
 frame.
+
+## Native foreground ownership correction and retests
+
+[The correction](18-native-child-stop.md) tracks live UID/start identities across
+process groups and freezes ancestry to a stable closure before forceful Stop.
+It excludes unrelated native daemons and never signals saved uncertain PIDs.
+The former ordinary native separate-group escape is covered; deliberate
+double-fork/reparent escape between observations remains outside the proof.
+The existing bounded PTY tail and independent durable-history boundary remain.
+
+The four real dashboard/native retests used fresh per-case empty Git checkouts
+with private explicit state. Each reused existing authentication, accepted normal
+folder/passive-hook trust, requested exactly the bounded heartbeat script and
+selected one-time native command approval. Discovery preserved Git status.
+A child with a separate PGID was observed before the real dashboard `s` or `q`.
+All known heartbeat PIDs then disappeared, ledgers became stable, process state
+was Stopped with execution null, pending capture zero, and written equaled durable.
+The Stop cases also had owner-lifetime accepted equal durable. After ordinary
+quit, that owner counter resets to zero on the new supervisor; it is not compared
+with the retained session prefix. Both ordinary q cases restored exact termios.
+Every verification tail obtained readable public History and confirmed Shutdown.
+
+| Actual native action | Native PID | Ordinary tool PID / PGID | Heartbeat before→after then stable | Durable bytes |
+| --- | ---: | --- | --- | ---: |
+| Claude318 Stop |9414|Python10892 / shell-group10891|4→4|10315|
+| Claude318 ordinary q |18528|Python21335 / shell-group21334|4→4|11355|
+| Codex167 ordinary q |26362|Python30909 / own-group30909|4→5|28085|
+| Codex167 Stop |67136|Python71254 / own-group71254|4→4|28018|
+
+[Exact task/session/request/native IDs and binary hashes](18-native-stop-quit-summary.json)
+are separate from the [raw observations, continuous whole-PTY streams, cells and
+drivers](18-native-stop-quit.tar.gz), with [file/archive checksums](18-native-stop-quit-manifest.json).
+Each captures source `a3842906fddfc5649af11a898f987785dc0e7ece` before launch.
+Claude Stop used binary SHA256
+`7006a3378227a95e489630347d378026e79b905fc6a90aedd536a67526fcefeb`;
+the other three used `f2b0111750f50521f0c3bb0c1e4dc87d6fef963527916551ddc2584991e1553b`.
+Cargo's all-target build relinked the same source artifact between launches.
+The receipts preserve each actual prelaunch hash; no mapped runtime is silently
+reassigned to the newly linked path. These are functional proofs, not latency
+samples: collector waits and concurrent checks are included in coarse timings.
+
+Three first collectors reached the correct native outcome but then asserted
+incorrect bookkeeping: immediate Shutdown was provisional and needed polling,
+and a restarted owner's accepted counter cannot equal a retained durable prefix.
+Their original failed-collector receipts remain unchanged. Read-only completion
+tails checked the same identities/PIDs, stable heartbeats, readable History,
+written/durable extents and eventual stopped=true. One Codex Stop collector
+aborted *before Stop* when its supervisor's transient inventory `ps` child made
+a single-child assertion invalid; it is not counted. It was cleaned through
+authenticated Shutdown. The corrected fresh Codex Stop selected only the known
+native child under its verified proof owner and completed end to end.
+
+[Foreground native working dashboard](screens/18-codex-owned-tool-running.png)
+and [Stopped dashboard](screens/18-codex-owned-tool-stopped.png) are continuous
+whole160×40 captures, visually inspected. After Stop the native pane intentionally
+retains its last screen; the Process/semantic labels identify Stopped/Unknown,
+so retained native “Working” prose is not claimed as current semantic evidence.

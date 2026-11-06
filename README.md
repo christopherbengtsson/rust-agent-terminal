@@ -14,9 +14,9 @@ evidence; GitHub workflows remain unavailable. The first release targets macOS;
 fixture tests do not establish native-agent compatibility.
 
 The [integrated Milestone 1 evidence](docs/proofs/18-milestone-evidence.md) records
-exact native versions, measured capacity and limits. A discovered default Codex
-foreground-subprocess Stop failure remains an open gate pending its fix and real
-native retest; this checkpoint is not declared complete.
+exact native versions, measured capacity and limits. The discovered default Codex foreground-subprocess Stop failure was fixed and
+real Stop/quit retests passed for both recorded tools. Final source checks and
+resource revalidation remain open; this checkpoint is not declared complete.
 
 ## Run
 

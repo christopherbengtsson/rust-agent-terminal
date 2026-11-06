@@ -668,7 +668,8 @@ compatibility.
 
 An actual Codex0.167.0 foreground command created a separate native child process
 group. The pre-fix Stop confirmed the CLI group but left that command alive, so
-the integrated milestone remains open until owned native subprocess cleanup and
-ordinary quit pass. This concrete default-native behavior is distinct from
+owned native subprocess cleanup and ordinary quit required a correction. The
+fresh native retests now pass; final source checks and resource revalidation
+remain open. This concrete default-native behavior is distinct from
 arbitrary processes deliberately escaping ownership. The record preserves both
 the original failure and the final fix/retest boundary when available.

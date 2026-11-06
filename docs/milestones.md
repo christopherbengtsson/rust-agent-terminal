@@ -69,8 +69,9 @@ Acceptance:
 
 The [integrated evidence record](proofs/18-milestone-evidence.md) tracks the
 versioned native proofs, resource measurements, visual comparison and final
-checks. Its actual native foreground-tool Stop failure remains an open gate;
-Milestone 1 is not yet declared complete.
+checks. The actual native foreground-tool Stop failure was corrected and native
+Stop/quit retests passed; final source checks and resource revalidation remain
+open. Milestone 1 is not yet declared complete.
 
 These checks resolve the highest-risk boundary; they do not claim the complete
 release workload or all coding acceptance criteria C1–C9 are satisfied. New-task

@@ -307,8 +307,9 @@ failure with evidence and a proposed resolution, not a silently relaxed gate.
 - The approved test seam was confirmed by the user before publication. Native,
   resource and recovery proofs have since been executed; see the
   [integrated evidence](../../docs/proofs/18-milestone-evidence.md). Ticket 18
-  remains open for a discovered native foreground-subprocess Stop failure and
-  its final correction/rerun; this spec is not yet marked complete.
+  records the corrected native foreground-subprocess Stop failure and passing
+  actual Stop/quit retests. Final source checks and resource revalidation remain
+  open; this spec is not yet marked complete.
 - Preserve accepted ADRs 0001 (supervisor ownership), 0003 (status evidence),
   0004 (history and explicit cleanup), and 0005 (uncertain launch reconciliation).
   Resolve feasibility problems explicitly before contradicting those decisions.

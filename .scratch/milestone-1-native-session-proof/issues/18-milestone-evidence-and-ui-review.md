@@ -5,7 +5,7 @@ Blocked by: 10, 12, 15, 16, 17
 
 **What to build:** Hand over a complete, reviewable Milestone 1 proof with native compatibility, recovery, resource and visual evidence, and instructions describing demonstrated behavior.
 
-- [ ] Exercise the integrated one-repository adopted-worktree workflow with each real native tool: launch, attach, prompt/approval, Ctrl-C, focus escape, resize, native exit, stop, detach, quit and dashboard-loss reconnect. Verify no duplicate or automatic coding restarts.
+- [x] Exercise the integrated one-repository adopted-worktree workflow with each real native tool: launch, attach, prompt/approval, Ctrl-C, focus escape, resize, native exit, stop, detach, quit and dashboard-loss reconnect. Verify no duplicate or automatic coding restarts.
 - [x] Consolidate per-tool/version native status and recovery matrices, crash-window results, durable-history evidence, explicit cleanup outcomes and measured resource/latency results. Distinguish native evidence from fixtures and list every unresolved proof failure.
 - [x] Capture normal and smaller terminal screenshots, including attached, attention, unknown and failure states. Compare against the reference image; show reviews as unavailable, one active session per worktree and the native terminal instead of a product message composer. Record material deviations, consequences and proposed alternatives.
 - [x] Verify keyboard-only use, readable identity/focus/status without color alone, actionable errors and terminal restoration. No unimplemented controls or unsupported capability claims are introduced.
@@ -22,3 +22,8 @@ ordinary approved Codex foreground command survived a reported successful Stop
 in its separate default process group. This concrete native gate remains open;
 a fresh ownership fix and real Stop plus ordinary-quit foreground-tool reruns
 are required before resolving this ticket. No milestone-complete claim is made.
+
+The correction and all four actual foreground Stop/ordinary-q retests passed on
+a3842906 (exact hashes and collector-tail corrections are in the proof). Ticket
+18 remains open for final code-followup checks, diagnosed aggregate failures and
+resource/latency revalidation after the live-ownership sampling change.
