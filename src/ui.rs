@@ -195,10 +195,7 @@ impl Ui {
                 .wrap(Wrap { trim: false }),
             status,
         );
-        frame.render_widget(
-            Paragraph::new("j/k select · r refresh · a adopt · l fixture · Enter attach · Ctrl-] dashboard · q quit/stop"),
-            help,
-        );
+        frame.render_widget(Paragraph::new(app.keyboard_help()), help);
     }
 }
 
@@ -220,6 +217,34 @@ fn visible(text: &str) -> String {
 mod tests {
     use super::*;
     use ratatui::{Terminal, backend::TestBackend};
+
+    #[test]
+    fn focus_and_available_actions_are_visible() {
+        let mut app = App::new("repo".into());
+        let mut ui = Ui::default();
+        let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+        for attached in [false, true] {
+            app.attached = attached;
+            terminal.draw(|frame| ui.draw(frame, &app)).unwrap();
+            let text: String = terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect();
+            if attached {
+                assert!(text.contains("Focus: session"));
+                assert!(text.contains("Ctrl-C interrupt"));
+                assert!(text.contains("Ctrl-] / Ctrl-5 dashboard"));
+                assert!(!text.contains("quit/stop"));
+            } else {
+                assert!(text.contains("Focus: dashboard"));
+                assert!(text.contains("Enter attach"));
+                assert!(text.contains("quit/stop"));
+            }
+        }
+    }
 
     #[test]
     fn renders_failure_and_handles_tiny_resize() {

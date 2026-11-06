@@ -50,27 +50,16 @@ impl App {
         }
         if self.attached {
             // Legacy terminals encode Ctrl-] as 0x1d, which Crossterm names Ctrl-5.
-            if key.modifiers.contains(KeyModifiers::CONTROL)
+            if key.modifiers == KeyModifiers::CONTROL
                 && matches!(key.code, KeyCode::Char(']') | KeyCode::Char('5'))
             {
                 self.attached = false;
                 return None;
             }
-            let bytes = match key.code {
-                KeyCode::Char(c) if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    vec![(c as u8) & 0x1f]
-                }
-                KeyCode::Char(c) => c.to_string().into_bytes(),
-                KeyCode::Enter => vec![b'\r'],
-                KeyCode::Backspace => vec![127],
-                KeyCode::Tab => vec![b'\t'],
-                KeyCode::Esc => vec![27],
-                _ => return None,
-            };
-            return Some(Effect::Session(Request::Input(bytes)));
+            return Some(Effect::Session(Request::Key(key)));
         }
         match key.code {
-            KeyCode::Char('a') => {
+            KeyCode::Char('a') if key.modifiers.is_empty() => {
                 let tree = self.current()?;
                 if tree.bare || tree.prunable.is_some() {
                     self.error = Some(
@@ -82,12 +71,12 @@ impl App {
                     &tree.path,
                 ))));
             }
-            KeyCode::Char('l') => {
+            KeyCode::Char('l') if key.modifiers.is_empty() => {
                 return Some(Effect::Session(Request::Launch(
                     self.launch_request.clone(),
                 )));
             }
-            KeyCode::Enter if self.session.identity.is_some() => {
+            KeyCode::Enter if key.modifiers.is_empty() && self.session.identity.is_some() => {
                 self.attached = true;
                 return None;
             }
@@ -101,6 +90,25 @@ impl App {
             None => {}
         }
         None
+    }
+
+    pub fn keyboard_help(&self) -> &'static str {
+        if self.attached {
+            "Native input · Ctrl-C interrupt · Ctrl-] / Ctrl-5 dashboard (keeps session running)"
+        } else {
+            "j/k select · r refresh · a adopt · l fixture · Enter attach · q/Esc/Ctrl-C quit/stop"
+        }
+    }
+
+    pub fn paste(&mut self, text: String) -> Option<Effect> {
+        if !self.attached {
+            return None;
+        }
+        if text.len() > 4084 {
+            self.error = Some("Paste exceeds 4084-byte limit; split it and retry".into());
+            return None;
+        }
+        Some(Effect::Session(Request::Paste(text)))
     }
 
     pub fn begin_refresh(&mut self) -> bool {
@@ -159,6 +167,58 @@ mod tests {
         Worktree {
             path: PathBuf::from(path),
             ..Worktree::default()
+        }
+    }
+
+    #[test]
+    fn dashboard_modifiers_do_not_adopt_launch_or_attach_and_paste_is_focus_sensitive() {
+        let mut app = App::new(PathBuf::from("repo"));
+        app.apply(Event::WorktreesLoaded(Ok(vec![worktree("repo")])));
+        app.session.identity = Some("existing".into());
+        for code in [KeyCode::Char('a'), KeyCode::Char('l'), KeyCode::Enter] {
+            assert!(
+                app.input(KeyEvent::new(code, KeyModifiers::CONTROL))
+                    .is_none()
+            );
+            assert!(!app.attached);
+        }
+        assert!(app.paste("q\nl".into()).is_none());
+        app.attached = true;
+        assert!(matches!(
+            app.paste("λ\ntext".into()),
+            Some(Effect::Session(Request::Paste(_)))
+        ));
+        assert!(app.paste("x".repeat(4085)).is_none());
+        assert!(app.error.as_deref().unwrap().contains("4084-byte limit"));
+    }
+
+    #[test]
+    fn native_focus_preserves_shortcuts_and_returns_without_stopping() {
+        let mut app = App::new(PathBuf::from("repo"));
+        app.attached = true;
+        for key in [
+            KeyEvent::new(KeyCode::Char('λ'), KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::ALT),
+            KeyEvent::new(KeyCode::Up, KeyModifiers::CONTROL),
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+            KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT),
+        ] {
+            assert!(
+                matches!(app.input(key), Some(Effect::Session(Request::Key(forwarded))) if forwarded == key),
+                "native input intercepted: {key:?}"
+            );
+            assert!(app.attached);
+        }
+        for alias in [']', '5'] {
+            assert!(
+                app.input(KeyEvent::new(KeyCode::Char(alias), KeyModifiers::CONTROL))
+                    .is_none()
+            );
+            assert!(!app.attached);
+            app.session.identity = Some("same session".into());
+            app.input(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+            assert!(app.attached);
+            assert_eq!(app.session.identity.as_deref(), Some("same session"));
         }
     }
 

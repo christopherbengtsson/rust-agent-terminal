@@ -27,6 +27,8 @@ pub enum Request {
     Adopt(Vec<u8>),
     Launch(String),
     Input(Vec<u8>),
+    Key(crossterm::event::KeyEvent),
+    Paste(String),
     Screen,
     Shutdown,
 }
@@ -223,6 +225,30 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                             .ok_or("No session; launch first")?
                             .write_all(&bytes)?;
                     }
+                    Request::Key(key) => {
+                        let application_cursor =
+                            screen.lock().unwrap().screen().application_cursor();
+                        let bytes = crate::native_input::encode(key, application_cursor)?;
+                        writer
+                            .as_mut()
+                            .ok_or("No session; launch first")?
+                            .write_all(&bytes)?;
+                    }
+                    Request::Paste(text) => {
+                        if text.len() > 4084 {
+                            return Err("Paste exceeds 4084-byte limit".into());
+                        }
+                        let bracketed = screen.lock().unwrap().screen().bracketed_paste();
+                        let bytes = if bracketed {
+                            format!("\x1b[200~{text}\x1b[201~").into_bytes()
+                        } else {
+                            text.replace("\r\n", "\r").replace('\n', "\r").into_bytes()
+                        };
+                        writer
+                            .as_mut()
+                            .ok_or("No session; launch first")?
+                            .write_all(&bytes)?;
+                    }
                     Request::Screen => {}
                     Request::Shutdown => {
                         if let Some(child) = child.as_mut() {
@@ -249,21 +275,71 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 pub fn scripted_child() -> io::Result<()> {
+    crossterm::terminal::enable_raw_mode()?;
+    struct RawGuard;
+    impl Drop for RawGuard {
+        fn drop(&mut self) {
+            let _ = crossterm::terminal::disable_raw_mode();
+        }
+    }
+    let _guard = RawGuard;
     println!(
         "Scripted PTY · pid={} · cwd={}\r",
         std::process::id(),
         std::env::current_dir()?.display()
     );
-    print!("fixture> ");
-    io::stdout().flush()?;
-    for line in io::stdin().lock().lines() {
-        let line = line?;
-        if line == "exit" {
-            break;
-        }
-        println!("received: {line}\r");
-        print!("fixture> ");
+    // Split both UTF-8 and a mode sequence to exercise incremental screen parsing.
+    for bytes in [b"\xce".as_slice(), b"\xbb\r\n\x1b[?20", b"04hfixture> "] {
+        io::stdout().write_all(bytes)?;
         io::stdout().flush()?;
     }
-    Ok(())
+    let mut line = Vec::new();
+    let mut approval = false;
+    for byte in io::stdin().lock().bytes() {
+        match byte? {
+            3 => {
+                line.clear();
+                println!("interrupted: 03\r");
+                print!("fixture> ");
+            }
+            b'\r' => {
+                if line == b"exit" {
+                    break;
+                }
+                if line == b"identity" {
+                    println!("same-child pid={}\r", std::process::id());
+                    print!("fixture> ");
+                } else if line == b"cursor-on" {
+                    print!("\x1b[?1hcursor application\r\nfixture> ");
+                } else if line == b"paste-off" {
+                    print!("\x1b[?2004lpaste plain\r\nfixture> ");
+                } else if approval {
+                    println!("approval: {}\r", if line == b"y" { "yes" } else { "no" });
+                    approval = false;
+                } else if line == b"approve" {
+                    print!("Approve action? [y/n] ");
+                    approval = true;
+                } else {
+                    println!(
+                        "received: {}\r",
+                        String::from_utf8_lossy(&line).escape_debug()
+                    );
+                    let hex: String = line.iter().map(|b| format!("{b:02x}")).collect();
+                    println!("bytes: {hex}\r");
+                    print!("fixture> ");
+                }
+                line.clear();
+            }
+            byte => {
+                if line.len() < 4096 {
+                    line.push(byte);
+                } else {
+                    return Err(io::Error::other("Fixture input exceeds 4096 bytes"));
+                }
+            }
+        }
+        io::stdout().flush()?;
+    }
+    print!("\x1b[?2004l");
+    io::stdout().flush()
 }

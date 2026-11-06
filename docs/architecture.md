@@ -227,7 +227,22 @@ loop. There is no transcript capture or durability claim in this slice.
 
 This is a thin first slice, not completion of the planned interaction baseline.
 Owner election, robust single-controller rejection, launch reconciliation,
-persistence, lifecycle evidence, native adapters, full input encoding, geometry,
+persistence, lifecycle evidence, native adapters, geometry,
 and stop escalation remain follow-on work. Failed shutdown remains visible and
 retryable; no confirmed stop means no successful quit. See
 [the prototype evidence](proofs/01-scripted-pty.md).
+
+
+## Input and focus proof (ticket 03)
+
+`App` interprets keys only after focus: native keys become bounded key-event
+requests; dashboard shortcuts apply only in dashboard focus. Ctrl-] and its
+legacy Ctrl-5 alias return focus without a stop request. Focus-dependent help is
+provided by the same application policy. Key encoding, paste encoding and delimiter
+selection run in the supervisor, using the parser's current input modes. The
+transport's bounded command queue reports saturation; paste is limited to 4084
+UTF-8 bytes before wrapping, and ordinary input remains limited to 4096 bytes.
+The parser supplies cursor-key mode at encoding time. Only the
+dashboard enables the outer terminal's bracketed-paste mode; its terminal guard
+restores raw mode, alternate screen, cursor visibility and bracketed paste after
+normal return, errors and panic. See [recorded evidence](proofs/03-native-input.md).
