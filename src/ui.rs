@@ -94,7 +94,12 @@ impl Ui {
                 .map(|identity| identity.session.chars().take(8).collect::<String>())
                 .unwrap_or_else(|| "unlaunched".into());
             format!(
-                " {} {tag} · Focus: {focus} ",
+                " {} · {} {tag} · Focus: {focus} ",
+                if app.session.connection_lost {
+                    "unknown".to_owned()
+                } else {
+                    format!("{:?}", app.session.lifecycle)
+                },
                 app.session.agent.as_deref().unwrap_or("Session")
             )
         } else {
@@ -568,13 +573,18 @@ Esc cancel · registration never starts an agent"
             && app.workspaces_open
             && (frame.area().width < 80 || frame.area().height < 22)
         {
-            "j/k select · [/] project · a adopt · E LIVE
+            "j/k select · [/] project · a adopt · E LIVE · R rename
 A add · h history · w/Esc back · d detach · q quit"
         } else if app.cleanup_open
             && !app.attached
             && (frame.area().width < 80 || frame.area().height < 22)
         {
             "j/k select · n/p page · Enter preview · D delete\nEsc cancel · g refresh · y retry · s stop · q quit"
+        } else if app.history_open
+            && !app.attached
+            && (frame.area().width < 80 || frame.area().height < 22)
+        {
+            "h live · v raw/readable · [/] page · j/k scroll\nq quit · s stop · y retry · g cleanup · d detach"
         } else if !app.attached
             && app.session.lifecycle == crate::session::Lifecycle::Interrupted
             && (frame.area().width < 80 || frame.area().height < 22)
@@ -594,13 +604,12 @@ A add · h history · w/Esc back · d detach · q quit"
                 &compact_help
             } else {
                 compact_help = format!(
-                    "f Working diff · w workspaces · A add · a adopt · c/x new · C/X prompt · R rename · Enter attach\nv resume · g cleanup · q quit/stop · d detach · {} {}",
-                    if app.session.connection_lost {
-                        format!("unknown (last seen {:?})", app.session.lifecycle)
+                    "q quit  s stop  h history  g cleanup  y retry  {}\nw workspaces  a adopt  c/x start  f diff  E LIVE  d detach",
+                    if app.session.lifecycle == crate::session::Lifecycle::Running {
+                        "Enter attach"
                     } else {
-                        format!("{:?}", app.session.lifecycle)
-                    },
-                    app.session.status.state.label()
+                        "v resume"
+                    }
                 );
                 &compact_help
             }
@@ -824,6 +833,90 @@ fn visible(text: &str) -> String {
 mod tests {
     use super::*;
     use ratatui::{Terminal, backend::TestBackend};
+
+    #[test]
+    fn dashboard_help_keeps_history_stop_quit_and_native_actions_visible_without_resizing() {
+        for (cols, rows, dimensions) in [(160, 40, (32, 104)), (60, 18, (11, 58))] {
+            for lifecycle in [
+                crate::events::Lifecycle::Stopped,
+                crate::events::Lifecycle::Running,
+            ] {
+                let mut app = App::new("repo".into());
+                app.session.lifecycle = lifecycle;
+                let mut terminal = Terminal::new(TestBackend::new(cols, rows)).unwrap();
+                terminal
+                    .draw(|frame| Ui::default().draw(frame, &app))
+                    .unwrap();
+                let area = Rect::new(0, 0, cols, rows);
+                assert_eq!(Ui::session_dimensions(area), Some(dimensions));
+                let help = Ui::layout(area).3;
+                let buffer = terminal.backend().buffer();
+                let footer = (help.y..help.bottom())
+                    .map(|row| {
+                        (help.x..help.right())
+                            .map(|col| {
+                                buffer.content
+                                    [usize::from(row) * usize::from(cols) + usize::from(col)]
+                                .symbol()
+                            })
+                            .collect::<String>()
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                for action in ["h history", "s stop", "q quit", "d detach", "E "] {
+                    assert!(
+                        footer.contains(action),
+                        "{cols}x{rows}: {action} missing: {footer}"
+                    );
+                }
+                let continuation = if lifecycle == crate::events::Lifecycle::Running {
+                    "Enter attach"
+                } else {
+                    "v resume"
+                };
+                assert!(
+                    footer.contains(continuation),
+                    "{cols}x{rows}: {continuation} missing: {footer}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn history_help_describes_raw_toggle_instead_of_native_resume() {
+        for (cols, rows) in [(160, 40), (60, 18)] {
+            let mut app = App::new("repo".into());
+            app.history_open = true;
+            app.session.lifecycle = crate::events::Lifecycle::Interrupted;
+            let mut terminal = Terminal::new(TestBackend::new(cols, rows)).unwrap();
+            terminal
+                .draw(|frame| Ui::default().draw(frame, &app))
+                .unwrap();
+            let help = Ui::layout(Rect::new(0, 0, cols, rows)).3;
+            let buffer = terminal.backend().buffer();
+            let footer = (help.y..help.bottom())
+                .map(|row| {
+                    (help.x..help.right())
+                        .map(|col| {
+                            buffer.content[usize::from(row) * usize::from(cols) + usize::from(col)]
+                                .symbol()
+                        })
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            for action in ["h live", "v raw/readable", "q quit", "s stop"] {
+                assert!(
+                    footer.contains(action),
+                    "{cols}x{rows}: {action} missing: {footer}"
+                );
+            }
+            assert!(
+                !footer.contains("v resume"),
+                "history toggle never resumes native execution: {footer}"
+            );
+        }
+    }
 
     #[test]
     fn readable_history_and_explicit_raw_toggle_render_without_launching_resume() {

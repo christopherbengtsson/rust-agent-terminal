@@ -26,7 +26,7 @@ The failing ownership cases and original source line numbers were:
 | `retained_registry_reuses_workspace_across_adoption_alias_and_restart` | Line 5806, retained task identity mismatch |
 | `stopped_history_survives_restart_and_missing_checkout_without_launching` | Line 91, old title absent; retained text visible under the new readable title |
 | `storage_abrupt_loss_preserves_durable_prefix_and_excludes_unsynced_tail` | Line 3517, deadline |
-| `storage_saturation_keeps_navigation_retry_stop_and_exact_retained_bytes` | Line 3331, expected zero pending bytes but observed 137188 |
+| `storage_saturation_keeps_navigation_retry_stop_and_exact_retained_bytes` | Line 3331, retained transcript length 137188 differs from reported accepted bytes 0 |
 | `surviving_native_execution_blocks_replacement_then_different_boot_reconciles` | Line 1773, deadline |
 | `sustained_capture_crosses_caps_while_attached_focused_detached_and_lagged` | Line 2488, deadline |
 
@@ -47,3 +47,232 @@ combined gate. Tickets 06 and 08 remain reopened pending corrections and a passi
 full gate. Ticket 13 retains its scoped qualification. Native support claims remain
 limited to the source/tool/workload boundaries in each feature proof; milestone
 and release acceptance are not established here.
+
+## Compatibility corrections and the first repair gate
+
+The isolated repair branch began at ticket 13 integration `283808a` and merged
+the reopened-tracker integration `5c1a604`. Source commit `f81537a` repaired the
+observed boundaries without removing the original assertions:
+
+- Identical raw-history polls coalesce instead of replacing their request UUID
+  and clearing the response before a Controller can observe it. A different
+  owner, session or passage still rejects the earlier response.
+- Workspace selection has a private UUID-attributed completion. Adoption remains
+  metadata-pending through that exact receipt, independently of earlier metadata
+  commits and registry snapshots.
+- Failed launch outcomes are found across owners after adoption. The existing
+  lost-failure test now waits for adoption to finish before replaying each of
+  fixture, Claude and Codex launch requests; removing the lookup produces a new
+  successful child identity instead of the original failed/null outcome.
+- Legacy restoration validates identities retained solely in the durable identity
+  column, using the same bounded conversion as migration. It does not discard or
+  rewrite the original history merely to restore it.
+- Final capture counters freeze while the successful seal retires its live
+  registration. Holding the exact seal receipt reproduced accepted bytes 0 against
+  100 actual bytes before this guard. The regression checks the held receipt,
+  completion, reconnect, supervisor restart, a replacement session's separate
+  counters and the unchanged earlier transcript.
+- The erased/alternate-screen assertion explicitly selects `v` escaped raw after
+  `h`; all escaped-control and chronology assertions remain. The readable history
+  title retains the existing “Retained history” wording, and a selected tombstone
+  still reports “No retained session” with its explicit identity scope.
+
+The first repair aggregate tested product source `0104e03`. A regular `cargo build`
+ran after the aggregate began and rebuilt the product artifact under the same
+source; a single unchanged binary for the entire run was not established.
+The later recorded product SHA-256 was
+`2d919defdc5b8f71656a54de67818eecd9b579fcc851a58228a5adf09e73bfce`.
+Build, format and warnings-denied all-target Clippy passed. The all-target test
+command exited 101: units 61 passed/2 ignored; ownership 72 passed/4 failed/2 ignored
+in 477.13 seconds. Every original failing case except the stopped-history readable
+display passed, including full numbered-record pagination under sustained capture.
+The four remaining failures were
+`abrupt_supervisor_loss_recovers_acknowledged_prefix_without_automatic_coding`,
+`codex_native_identity_survives_exit_and_resume_uses_original_id_without_new_prompt`,
+`failed_final_storage_commit_keeps_quit_visible_until_explicit_retry`, and
+`stopped_history_survives_restart_and_missing_checkout_without_launching`.
+Each showed a readable page left preparing. Exact output is in the local temporary
+file `/tmp/rat-coordination-compat-fullgate.log`; later integration binaries did
+not run after this ownership failure.
+
+That run exposed an error in the first repair: raw/preparing and final readable
+replies are two stages of one request. Commit `c20cd49` retains the UUID until
+final success or error. Its focused staged-success and staged-error tests both
+went red before the correction and passed afterward; the tests also preserve
+changed-query/owner rejection, clear a failed preparing page, permit explicit
+retry, and refresh the same passage to a newer committed prefix. A further
+no-child launch replay test went red when querying another owner's cached result
+cleared the selected owner's provisional error. Replay now checks that reservation
+before clearing its diagnostic and preserves its request/result/control identity.
+Cached replies are passed through the existing launch handler without duplicating
+other owners' outcome caches. All 63 active unit tests passed with 2 ignored;
+build, format and warnings-denied all-target Clippy passed for this checkpoint.
+
+That recorded first-repair product hash stayed unchanged while those additional
+unit tests were developed in the separate test harness, after the earlier regular
+build. The source-fixed aggregate result
+remains failed. The corrected full aggregate and final integration review are
+still required; no new native-tool or milestone-completion claim follows from
+these fixture and state checks.
+
+Before the corrected aggregate, the four failed readable cases were rerun through
+their original PTY seam. Abrupt-prefix recovery, Codex history/native identity and
+final-storage retry passed (6.08, 3.84 and 2.63 seconds). Stopped-history recovery
+then reached its later escaped bracketed-paste assertion, which correctly failed
+in the default readable view. The test now verifies retained readable text first,
+explicitly selects `v` escaped raw, and keeps that exact escape assertion. The
+corrected stopped-history test passed in 2.55 seconds. This preserves both view
+contracts; no raw content assertion was removed or weakened.
+
+## Frozen corrected gate and the remaining status fixture
+
+The next aggregate prebuilt every target with `cargo test --locked --all-targets
+--no-run`, recorded source `06900269e7eca8a84b6370d12a066aca4628f3a9` and every
+test/product executable hash, then ran `cargo test --locked --all-targets --
+--test-threads=1`. Source stayed clean and unchanged, and every recorded binary
+hash matched afterward. The product SHA-256 was
+`b998149c5c56ed287c7e3db2071d18715d322c0f900d1078f13fcd992c892c10`.
+The source-specific local log is
+`/tmp/rat-coordination-compat-0690026-all-targets-serial.log` and ends with
+`boundary_stable: true`.
+
+Units passed 63 with 2 ignored. Ownership passed 75, failed 1 and ignored 2 in
+447.63 seconds. All twelve originally failing cases passed, including every
+numbered record from the sustained four-run capture. The command still exited
+101 before later integration binaries. Its sole failure was
+`codex_status_requires_current_attributed_evidence_despite_liveness_and_prose`:
+the fixture never received the quoted prose, the dashboard reported its bounded
+32-request transport queue was full, and semantic status correctly stayed Unknown.
+This was not a native-evidence classification failure.
+
+The original 57-byte unpaced key burst passed 25 subsequent isolated runs, so the
+natural race was not represented as deterministically reproducible. A temporary
+fixture-only causal probe paused its live authenticated supervisor for 500 ms
+while the dashboard consumed that same burst and its outer output was drained.
+That reproduced the exact queue-full/missing-echo failure. The live owner was
+resumed by an independent bounded thread; no restored PID or unrelated process
+was signalled. An earlier 200 ms probe that joined before draining output passed
+and did not establish reproduction. Probe-only code was removed afterward.
+
+For the semantic-negative fixture, the same prose now arrives through one real
+outer-terminal bracketed-paste event, followed by Return. The scripted child
+echoes escape wrappers literally, so its existing `paste-off` command first
+disables child-side wrappers; the dashboard still takes its actual paste event
+and native delivery path. The original received-prefix, Unknown/Running,
+malformed-receipt and failed-command assertions remain, and a complete prose echo
+assertion was added. A paste probe with child wrappers still enabled delivered
+the complete payload but failed the unchanged plain-prefix assertion; this was
+recorded separately, not called a pass. Under the same 500 ms consumer delay,
+plain-child-mode raw keys still failed and the real paste passed all assertions
+in 3.23 seconds. The final fixture without the probe passed in 2.79 seconds.
+
+No status classification, evidence freshness/version bounds, queue capacity or
+input-saturation/Stop test changed. The observed raw-key burst limitation remains:
+when individual key requests outrun the bounded transport, the UI reports queue
+full and requires recovery; this fixture correction does not qualify arbitrary
+unpaced input delivery. Probe logs are local temporary files under
+`/tmp/rat-status-0690026-*`; the final focused run is
+`/tmp/rat-status-paste-final-focused.log`. A new frozen full aggregate is required
+after the fixture correction before claiming an aggregate pass.
+
+## Previously unreached screen and interaction preflights
+
+After completed ticket 14 was integrated, source `9423bc3` ran the two integration
+binaries that the failed ownership aggregates had never reached. The screen
+preflight failed its unchanged initial `size: 104x32` assertion: the child still
+had the new owner's default 100x24 geometry. The scripted interaction preflight
+failed twice waiting for `paste plain`, after earlier input/cursor assertions had
+passed. These failures were retained in
+`/tmp/rat-compat-screen-preflight.log`,
+`/tmp/rat-compat-scripted-preflight.log` and
+`/tmp/rat-compat-scripted-preflight-repeat.log`.
+
+The viewport acknowledgement remembered only dimensions. A resize accepted by the
+old owner during adoption could therefore suppress the same-sized new owner's
+resize. The cache now also identifies its exact control target, native session
+and whether its real PTY is running, while retaining queue-full retry and unusable
+geometry behavior. The adoption state test was strengthened by accepting an old
+owner's resize while adoption was pending, then requiring a new targeted resize
+before its explicit launch. A new state test covers prepared/new conversation and
+real-PTY readiness. Both went red with the previous acknowledgement policy; all
+22 App state tests then passed.
+
+The actual launch seam also records `/bin/stty size` in a Codex fixture wrapper
+before executing the scripted child, without waiting for a later size command.
+With dimensions-only acknowledgement it recorded 24 rows/100 columns and failed;
+the corrected acknowledgement recorded 32/104 and passed in 1.40 seconds. The
+original screen test then passed its exact startup, resize, styled/wide-cell,
+alternate-screen, focus, detach and reconnect assertions in 10.47 seconds.
+Changing only the viewport acknowledgement also made the unchanged scripted
+interaction test pass in 30.60 seconds: its native 24-row screen had hidden the
+later paste receipt below the dashboard's 22-row pane. No scripted input, quoting,
+paste, byte-equality, status or focus assertion was changed for this correction.
+The local green logs are `/tmp/rat-viewport-startup-green.log`,
+`/tmp/rat-compat-screen-viewport-fixed.log` and
+`/tmp/rat-compat-scripted-viewport-fixed.log`; the startup red log is
+`/tmp/rat-viewport-startup-red.log`. These are real PTY fixture results, not a new
+native CLI/version qualification. The final combined full gate remains required.
+
+
+## Scoped assembled closure (2026-11-07)
+
+The final frozen attempt included completed tickets 14 and 15 at source
+`5b3ab573f9123e9d110b0029ec637c8528ef4a4e`. Every target was prebuilt, source stayed
+clean, and every recorded executable hash matched afterward. Product SHA-256 was
+`53ac230a44608eac8b5859209768a906db96234328bd085309b930c4a0e99401`.
+The source-specific log is
+`/tmp/rat-coordination-compat-5b3ab57-all-targets-serial-nocapture.log`, ending
+`boundary_stable: true`. Units passed 74/ignored 2; editor passed 1/ignored 1;
+ownership passed 78/failed 1/ignored 2 in 498.68 seconds. Cargo exited 101 before
+scripted/screen targets. All runtime, capture, history, storage, migration, replay
+and geometry cases passed, including the complete numbered history. The sole
+failure was cleanup's unchanged `h history` assertion: editor help pushed that
+action beyond 160 columns. This aggregate remains failed.
+
+Correction `6e73aa294942874327e5df7b796237af30486d26` keeps History, Stop, Quit,
+attach/resume and live editing discoverable in concise contextual help. Rendered
+TestBackend regressions went red before correction and green afterward at 160x40
+and 60x18, asserting actual footer cells and unchanged viewports of 104x32 and
+58x11. Existing 120-column attach/Codex/resume/quit-stop checks remain unchanged;
+compact Failed stays visible in the existing title. History help correctly says
+`v raw/readable` even for Interrupted records. No layout dimensions, input action,
+status classification, capture or persistence behavior changed for this footer.
+
+The final assembled checks are:
+
+| Check | Result |
+| --- | --- |
+| Main unit target, including existing/new UI cases | 76 passed, 2 ignored |
+| Exact cleanup ownership case | passed, 2.44 seconds |
+| Scripted interaction target | passed, 30.54 seconds |
+| Screen target, including fixture-drop native cleanup | 2 passed, 10.64 seconds |
+| Locked build, format, all-target warnings-denied Clippy | passed |
+
+Final local logs are `/tmp/rat-compat-footer-units-final.log`,
+`/tmp/rat-compat-footer-cleanup-final.log`,
+`/tmp/rat-compat-footer-scripted-final.log` and
+`/tmp/rat-compat-footer-screen-final.log`. These are assembled checks after the
+sole footer failure, not a retroactive aggregate pass or one frozen binary
+interval. The scoped integration decision accepts this closure instead of
+repeating full capture solely for help text. A fresh whole-milestone aggregate
+and final global review remain required after remaining features are integrated.
+Ignored native editor/resource proofs retain their separate evidence boundaries.
+
+A cleanup audit found five old private fixture supervisors and four scripted
+children after failed or prematurely dropped older PTY harnesses; their state
+and sockets were already removed. Cleanup verified live Darwin executable paths,
+current arguments, birth times, parent/group identities and matching private
+fixture working directories, then rechecked those identities before terminating
+only confirmed children and owners. No stored PID granted signal authority, no
+unrelated process was signalled, and no escalation was needed. The local audit is
+`/tmp/rat-compat-owned-process-audit.json`. Both harnesses now consume the greeting,
+retain the private connection through confirmed Shutdown, and preserve state if
+cleanup cannot be confirmed. Final screen quit waits for dashboard exit; a new
+regression verifies the native process exits after dashboard loss. The final
+canonical-path audit found no remaining executable from this isolated worktree.
+
+Current M2 accepted/written/durable counters describe one managed-session stream,
+reset for its replacement and restore only its committed prefix. `output_bytes`
+alone remains cumulative for the in-process owner's screen across conversations,
+reinitializes on owner restoration, and needs a launch baseline. Source comments
+now make this distinction. Historical M1 measurements remain unchanged.
