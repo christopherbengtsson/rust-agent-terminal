@@ -48,15 +48,15 @@ checks, bounded execution/cancellation, and serialized operations per repository
 The current discovery worker can wait on a stuck Git process, but does not block
 the UI or dashboard exit; process deadlines belong in the next worker hardening.
 
-**Agent sessions (next).** A local supervisor process, implemented as another
+**Agent sessions (target; scripted prototype below).** A local supervisor process, implemented as another
 mode of the same executable, must own child processes, PTYs, and history. The
 dashboard is a reconnectable client over a user-private local socket. There is
 one supervisor per macOS user, shared across projects, and at most one connected
 dashboard controls it at a time; see
 [the ownership decision](adr/0001-user-wide-supervisor.md). This separation is
 necessary because the product requires agents to survive terminal
-or dashboard loss. No supervisor/session code or persistence is present yet.
-The prototype must validate this choice before other features rely on it.
+or dashboard loss. The scripted prototype below implements supervisor/session
+ownership; durable persistence and crash reconciliation remain planned.
 The supervisor owns one active session per worktree, stable session IDs, launch
 deduplication, lifecycle transitions, and explicit stop versus detach. Ordinary
 quit requests supervisor shutdown; an unexpectedly lost client does not. On
@@ -226,8 +226,34 @@ next poll. Blocking socket, filesystem, child, and PTY work runs outside the UI
 loop. There is no transcript capture or durability claim in this slice.
 
 This is a thin first slice, not completion of the planned interaction baseline.
-Owner election, robust single-controller rejection, launch reconciliation,
+Launch reconciliation,
 persistence, lifecycle evidence, native adapters, full input encoding, geometry,
 and stop escalation remain follow-on work. Failed shutdown remains visible and
 retryable; no confirmed stop means no successful quit. See
 [the prototype evidence](proofs/01-scripted-pty.md).
+
+## Session ownership (ticket 02)
+
+The default application-support directory identifies the user-wide supervisor.
+Each startup opens the same permanent, user-private lock file and tries an
+exclusive OS lock. A losing contender exits; the winner retains the lock for its
+whole lifetime. Under that lock it removes an old socket only when connecting is
+refused. A live endpoint without the lock, an unexpected endpoint type, or an
+uncertain connection error fails closed. The state directory must be a real
+user-owned directory with no group/other permissions; lock and socket are private.
+The lock file is never unlinked, avoiding replacement-inode election races.
+
+A startup handshake grants or refuses control before commands. The listener
+continues accepting while a controller is connected, immediately refusing other
+clients without dispatching their commands. Bounded nonblocking framing detects
+EOF/socket failure and releases control while preserving the child and parsed
+screen. Supervisor startup creates a separate OS session so losing the dashboard's
+controlling terminal does not send it SIGHUP. Worker-only socket handling keeps
+ownership errors outside rendering and preserves successful Git discovery.
+
+Adoption resolves Git's working-tree root and canonicalizes it, unifying symlinks
+and subdirectory paths without merging distinct linked worktrees. Repeated launch
+retains the existing identity and refuses execution; same-checkout adoption and
+attach retain the child. This slice remains limited to one prototype child total,
+with no persistence or supervisor-crash survivor reconciliation. See
+[recorded ownership scenarios](proofs/02-session-ownership.md).

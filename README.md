@@ -50,13 +50,25 @@ socket under `~/Library/Application Support/rat/proof`. For isolated experiments
 cargo run --locked -- /path/to/repository --state-dir /tmp/rat-proof-example
 ```
 
-Use one dashboard per isolated state directory. This prototype has no durable
-metadata/history, owner election, stale-endpoint recovery, or guaranteed descendant
-cleanup. Do not use it to run real coding work. A lost dashboard may leave its
-supervisor and fixture running; reconnect to that state directory and quit normally
-to clean up. Do not remove a socket for a running supervisor. The bounded parsed
-screen retains the latest 100×24 cells without scrollback; it is not session history.
-See the [prototype evidence](docs/proofs/01-scripted-pty.md) for measured scope.
+One dashboard controls the supervisor at a time. A second dashboard reports the
+existing connection and cannot launch, type into, or stop its session. After a
+controller dies, reopen the dashboard to recover the same fixture and screen.
+Symlink checkout aliases and paths inside a checkout adopt its canonical Git
+worktree root. Repeated launch is refused; Enter attaches to the existing child.
+
+The state directory must be owned by the current user with mode 0700 and cannot
+itself be a symlink. The socket is mode 0600. Concurrent starts use an OS ownership
+lock; only its owner can remove a stale, refused socket. A live or uncertain
+endpoint is never displaced. Keep the lock file in place, including after shutdown.
+Use separate private `--state-dir` directories only for isolated experiments.
+
+This prototype has no durable metadata/history, supervisor-crash launch
+reconciliation, or guaranteed descendant cleanup. Do not use it for real coding
+work. Dashboard loss preserves the supervisor and fixture; reconnect and quit
+normally to clean up. Do not remove a socket for a running supervisor. The bounded
+parsed screen retains the latest 100×24 cells without scrollback; it is not history.
+See the [first-slice evidence](docs/proofs/01-scripted-pty.md) and
+[ownership evidence](docs/proofs/02-session-ownership.md) for tested scope.
 
 ## Development
 
