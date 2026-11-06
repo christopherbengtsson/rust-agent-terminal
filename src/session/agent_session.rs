@@ -63,6 +63,7 @@ pub(super) struct AgentSession {
     metadata_error: Option<String>,
     shutdown: bool,
     retry_requested: bool,
+    pending_history: Option<uuid::Uuid>,
 }
 #[derive(Default)]
 struct Launch {
@@ -141,6 +142,7 @@ impl AgentSession {
             metadata_error: None,
             shutdown: false,
             retry_requested: false,
+            pending_history: None,
             launch: Launch::default(),
             execution: Execution {
                 write_errors,
@@ -192,6 +194,7 @@ impl AgentSession {
                     "History deletion completed: {id}. Capacity may remain low; y retry capture / s stop."
                 ));
                 self.state.history = None;
+                self.pending_history = None;
                 self.state.history_index = 0;
                 if self
                     .state
@@ -304,8 +307,8 @@ impl AgentSession {
                 }
             }
             Completion::History(page) => self.state.history = Some(page),
-            Completion::HistoryTarget(target, result) => {
-                if target == self.state.control_target {
+            Completion::HistoryTarget(target, request, result) => {
+                if target == self.state.control_target && self.pending_history == Some(request) {
                     match result {
                         Ok(page) => self.state.history = Some(page),
                         Err(error) => {
@@ -1202,11 +1205,17 @@ impl AgentSession {
                         .set_size(rows.try_into().unwrap(), cols.try_into().unwrap());
                 }
                 Request::HistorySession { session, offset } => {
-                    storage.commands.try_send(crate::persistence::Command::HistoryTarget { target: self.state.control_target.clone(), index: 0, session: Some(session), offset }).map_err(|error| format!("History busy: {error}; retry"))?;
+                    let request = uuid::Uuid::new_v4();
+                    storage.commands.try_send(crate::persistence::Command::HistoryTarget { target: self.state.control_target.clone(), request, index: 0, session: Some(session), offset }).map_err(|error| format!("History busy: {error}; retry"))?;
+                    self.pending_history = Some(request);
+                    self.state.history = None;
                 }
                 Request::History { index, offset } => {
+                    let request = uuid::Uuid::new_v4();
                     self.state.history_index = index;
-                    storage.commands.try_send(crate::persistence::Command::HistoryTarget { target: self.state.control_target.clone(), index, session: if index == 0 { self.state.session_identity.as_ref().map(|identity| identity.session.clone()) } else { None }, offset }).map_err(|e| format!("History busy: {e}; retry"))?;
+                    storage.commands.try_send(crate::persistence::Command::HistoryTarget { target: self.state.control_target.clone(), request, index, session: if index == 0 { self.state.session_identity.as_ref().map(|identity| identity.session.clone()) } else { None }, offset }).map_err(|e| format!("History busy: {e}; retry"))?;
+                    self.pending_history = Some(request);
+                    self.state.history = None;
                 }
                 Request::Screen => {}
                 Request::Cleanup { page } => {
