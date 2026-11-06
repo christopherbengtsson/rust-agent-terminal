@@ -19,7 +19,7 @@ pub struct Passage {
     pub text_end: usize,
     pub provisional: bool,
 }
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 pub struct Projection {
     mode: Mode,
     utf8: Vec<u8>,
@@ -29,7 +29,7 @@ pub struct Projection {
     carriage: bool,
     row: Option<u16>,
 }
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 enum Mode {
     #[default]
     Text,
@@ -98,7 +98,9 @@ impl Projection {
         if self.cursor == 2048 {
             self.flush(start, range, page);
         }
-        let character = if character.is_control() {
+        let character = if character.is_control()
+            || matches!(character, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+        {
             '�'
         } else {
             character

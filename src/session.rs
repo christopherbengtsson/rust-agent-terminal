@@ -303,6 +303,9 @@ impl Delivery {
 // Runtime selection belongs to the supervisor. Each concrete owner retains its
 // private launch, cleanup and capture phases while another owner is selected.
 struct Sessions {
+    history_revision: u64,
+    browse: Option<crate::persistence::search::Response>,
+    browse_request: Option<String>,
     entries: Vec<(String, agent_session::AgentSession)>,
     selected: usize,
     directory: PathBuf,
@@ -391,6 +394,9 @@ impl Sessions {
             None
         };
         Ok(Self {
+            history_revision: 0,
+            browse: None,
+            browse_request: None,
             entries,
             selected: 0,
             directory: directory.to_owned(),
@@ -403,6 +409,26 @@ impl Sessions {
         event: crate::persistence::Completion,
         storage: &crate::persistence::Worker,
     ) {
+        if let crate::persistence::Completion::Browse(response) = &event {
+            if self.browse_request.as_ref() == Some(&response.request) {
+                self.browse = Some(response.clone());
+            }
+            return;
+        }
+        if let crate::persistence::Completion::HistoryHidden(_) = &event {
+            self.history_revision = self.history_revision.wrapping_add(1);
+            self.browse =
+                self.browse_request
+                    .as_ref()
+                    .map(|request| crate::persistence::search::Response {
+                        request: request.clone(),
+                        error: Some(
+                            "History deletion hides previous search results; Ctrl-R refreshes"
+                                .into(),
+                        ),
+                        ..Default::default()
+                    });
+        }
         if let crate::persistence::Completion::Selected(operation, result) = event {
             if self.selection_pending != Some(operation) {
                 return;
@@ -422,6 +448,7 @@ impl Sessions {
             crate::persistence::Completion::Committed(_)
                 | crate::persistence::Completion::Failed(..)
                 | crate::persistence::Completion::Deleted(_)
+                | crate::persistence::Completion::HistoryHidden(_)
                 | crate::persistence::Completion::HistoryTarget(..)
         ) {
             for (_, owner) in &mut self.entries {
@@ -466,6 +493,9 @@ impl Sessions {
             });
         }
         let mut state = self.entries[self.selected].1.observation();
+        state.history_revision = self.history_revision;
+        state.browse_protocol = 1;
+        state.browse = self.browse.clone();
         state.sessions_protocol = 1;
         state.control_target = self.entries[self.selected].0.clone();
         state.sessions = summaries;
@@ -587,6 +617,27 @@ impl Sessions {
         }
     }
     fn handle(&mut self, request: Request, storage: &crate::persistence::Worker, adopting: bool) {
+        if let Request::Browse(query) = request {
+            let request = query.request.clone();
+            match storage
+                .commands
+                .try_send(crate::persistence::Command::Browse(query))
+            {
+                Ok(()) => {
+                    self.browse_request = Some(request);
+                    self.browse = None;
+                }
+                Err(error) => {
+                    self.browse_request = Some(request.clone());
+                    self.browse = Some(crate::persistence::search::Response {
+                        request,
+                        error: Some(format!("Search busy: {error}; Enter retries")),
+                        ..Default::default()
+                    });
+                }
+            }
+            return;
+        }
         let (index, request) = match request {
             Request::Session {
                 target,
@@ -612,7 +663,8 @@ impl Sessions {
                 }
                 if matches!(
                     *command,
-                    Request::Session { .. }
+                    Request::Browse(_)
+                        | Request::Session { .. }
                         | Request::SelectSession(_)
                         | Request::Shutdown
                         | Request::Adopt(_)
@@ -856,6 +908,27 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             {
                 if pending_discovery.as_ref() != Some(&(request, repository.clone())) {
                     continue;
+                }
+                if let Ok(worktrees) = &result {
+                    // Facts are retained only after an actual Git discovery, never guessed from creation metadata.
+                    for batch in worktrees.chunks(32) {
+                        let facts = batch
+                            .iter()
+                            .map(|w| {
+                                (
+                                    path_bytes(&w.path),
+                                    w.branch.clone().unwrap_or_else(|| "(detached HEAD)".into()),
+                                )
+                            })
+                            .collect();
+                        if storage
+                            .commands
+                            .try_send(crate::persistence::Command::ObservedBranches(facts))
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
                 }
                 pending_discovery = None;
                 discovery_result = Some(crate::git::Discovery {

@@ -1,4 +1,5 @@
 //! The supervisor's sole SQLite/file writer. No disk operation runs on the UI thread.
+pub mod search;
 use crate::session::{Lifecycle, Observation};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
@@ -135,6 +136,7 @@ pub fn metadata(state: &Observation) -> Box<Observation> {
     saved.formatted = String::new();
     saved.decoded = None;
     saved.history = None;
+    saved.browse = None;
     saved.discovery = None;
     saved.creation = Default::default();
     saved.creation_protocol = 0;
@@ -282,6 +284,8 @@ impl Snapshot {
     }
 }
 pub enum Command {
+    ObservedBranches(Vec<(Vec<u8>, String)>),
+    Browse(search::Query),
     CreationLoad,
     CreationSave(uuid::Uuid, Box<crate::creation::Record>),
     SelectWorkspace(uuid::Uuid, String),
@@ -312,6 +316,7 @@ pub enum Command {
 }
 #[derive(Clone)]
 pub enum Completion {
+    Browse(search::Response),
     Creations(std::result::Result<Vec<crate::creation::Record>, String>),
     CreationSaved(
         uuid::Uuid,
@@ -330,6 +335,7 @@ pub enum Completion {
     Sealed,
     Cleanup(crate::cleanup::Page),
     Deleted(String),
+    HistoryHidden(String),
     Committed(Operation),
     Failed(Operation, String),
     History(HistoryPage),
@@ -462,10 +468,17 @@ impl Worker {
                             continue;
                         }
                     }
-                    let kind = match &command { Command::ComparisonBase(..) | Command::CreationLoad | Command::CreationSave(..) => "registry", Command::SelectWorkspace(..) => "selection", Command::Capture(..) => unreachable!(), Command::Rename(..) | Command::Register(..) => "registry", Command::Save(..) | Command::Prepare(..) | Command::Authorize(..) => "metadata", Command::History(..) | Command::HistorySession(..) | Command::HistoryTarget { .. } => "history", Command::Cleanup(..) | Command::Delete(..) | Command::Seal(..) => "cleanup", Command::Retry => "retry", Command::Flush(..) => "flush" };
+                    let kind = match &command { Command::Browse(..) => "browse", Command::ObservedBranches(..) => "registry", Command::ComparisonBase(..) | Command::CreationLoad | Command::CreationSave(..) => "registry", Command::SelectWorkspace(..) => "selection", Command::Capture(..) => unreachable!(), Command::Rename(..) | Command::Register(..) => "registry", Command::Save(..) | Command::Prepare(..) | Command::Authorize(..) => "metadata", Command::History(..) | Command::HistorySession(..) | Command::HistoryTarget { .. } => "history", Command::Cleanup(..) | Command::Delete(..) | Command::Seal(..) => "cleanup", Command::Retry => "retry", Command::Flush(..) => "flush" };
                     status.lock().unwrap().operation = Some((kind, Instant::now()));
                     let operation = match &command { Command::Prepare(snapshot) | Command::Authorize(snapshot) | Command::Save(snapshot) => Some(snapshot.operation.clone()), Command::Flush(operation) | Command::Seal(operation) => Some(operation.clone()), _ => None };
                     let result = match command {
+                        Command::Browse(query) => Ok(Completion::Browse(store.start_browse(query))),
+                        Command::ObservedBranches(facts) => (|| {
+                            if facts.len()>32 {return Err("Branch fact batch exceeds 32".into());}
+                            let tx=store.db.transaction()?;
+                            for (path,branch) in facts {tx.execute("INSERT INTO checkout_branch_facts VALUES(?1,?2) ON CONFLICT(path) DO UPDATE SET branch=excluded.branch",params![path,branch])?;}
+                            tx.commit()?;Ok(Completion::Sealed)
+                        })(),
                         Command::SelectWorkspace(request, task) => Ok(Completion::Selected(request, store.select_workspace(&task).map_err(|error| error.to_string()))),
                         Command::Capture(..) => unreachable!(),
                         Command::CreationLoad => Ok(Completion::Creations(store.creations().map_err(|e|e.to_string()))),
@@ -474,7 +487,7 @@ impl Worker {
                         Command::Rename(id, workspace, name) => Ok(Completion::Registered(id, store.rename(&workspace, &name).map_err(|error| error.to_string()))),
                         Command::Register(id, checkout) => Ok(Completion::Registered(id, store.register(checkout).map_err(|error| error.to_string()))),
                         Command::Cleanup(index) => store.start_cleanup(index).map(|_| Completion::Sealed),
-                        Command::Delete(id) => store.start_delete(&id).map(|_| Completion::Sealed),
+                        Command::Delete(id) => store.start_delete(&id).map(|_| Completion::HistoryHidden(id)),
                         Command::Seal(operation) => operation.session.as_deref().ok_or_else(|| io::Error::other("Missing session for seal").into()).and_then(|id| {
                             if streams.iter().find(|stream| stream.session == id).is_some_and(|stream| stream.progress.lock().unwrap().pending_bytes != 0) { return Err("History still owns pending capture".into()); }
                             store.seal(id)?;
@@ -483,7 +496,7 @@ impl Worker {
                             endpoints.lock().unwrap().remove(id);
                             Ok(())
                         }).map(|_| Completion::Committed(operation)),
-                        Command::Retry => { since = Instant::now() - FLUSH; Ok(Completion::Retried) },
+                        Command::Retry => { store.index_error=None; since = Instant::now() - FLUSH; Ok(Completion::Retried) },
                         Command::Prepare(Snapshot { operation, state, checkout, task, workspace_name }) => store.fault("prepare").and_then(|_| store.save_named(&state, checkout, task, workspace_name)).map(|_| Completion::Committed(operation)),
                         Command::Authorize(Snapshot { operation, state, checkout, task, workspace_name }) => store.fault("authorize").and_then(|_| store.save_named(&state, checkout, task, workspace_name)).map(|_| Completion::Committed(operation)),
                         Command::Save(Snapshot { operation, state, checkout, task, workspace_name }) => store.fault("save").and_then(|_| store.save_named(&state, checkout, task, workspace_name)).map(|_| Completion::Committed(operation)),
@@ -546,6 +559,7 @@ impl Worker {
                 }
                 if let Some(event) = store.readable_step()
                     && tx.send(event).is_err() { break; }
+                if let Some(event)=store.browse_step() && tx.send(event).is_err() {break;}
                 if capacity_since.elapsed() >= Duration::from_secs(1) {
                     status.lock().unwrap().capacity = crate::cleanup::Capacity::sample(&store.directory);
                     capacity_since = Instant::now();
@@ -608,6 +622,7 @@ impl Worker {
                     status.lock().unwrap().operation = None;
                     since = Instant::now();
                 }
+                if let Err(error)=store.index_step() {store.index_error=Some(format!("History index: {error}; committed raw history remains available"));}
                 if !worked { thread::sleep(Duration::from_millis(5)); }
                 if Arc::strong_count(&endpoints) == 1 { break; }
 
@@ -640,6 +655,9 @@ struct HistoryJob {
     readable: crate::history::ReadablePage,
 }
 struct Store {
+    search_job: Option<search::Job>,
+    index_cursor: i64,
+    index_error: Option<String>,
     history_jobs: std::collections::VecDeque<HistoryJob>,
     history_checkpoints: std::collections::VecDeque<(String, u64, crate::history::Projection)>,
     cleanup_job: Option<CleanupJob>,
@@ -697,7 +715,7 @@ impl Store {
             "PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL; PRAGMA fullfsync=ON;",
         )?;
         let version: u32 = db.pragma_query_value(None, "user_version", |r| r.get(0))?;
-        if version > 6 {
+        if version > 7 {
             return Err("History schema is newer than this executable".into());
         }
         if version == 0 {
@@ -777,7 +795,16 @@ impl Store {
             tx.commit()?;
         }
         db.execute_batch("CREATE TABLE IF NOT EXISTS workspace_comparison_bases(workspace TEXT PRIMARY KEY, reference BLOB NOT NULL, base_commit TEXT NOT NULL);")?;
+        if version < 7 {
+            let tx = db.transaction()?;
+            search::schema(&tx)?;
+            tx.pragma_update(None, "user_version", 7)?;
+            tx.commit()?;
+        }
         let mut store = Self {
+            search_job: None,
+            index_cursor: 0,
+            index_error: None,
             history_jobs: Default::default(),
             history_checkpoints: Default::default(),
             cleanup_job: None,
@@ -900,6 +927,7 @@ impl Store {
             [id],
         )?;
         tx.commit()?;
+        self.search_job = None;
         self.history_checkpoints
             .retain(|(session, _, _)| session != id);
         self.cleanup_job = Some(CleanupJob::Delete(
@@ -1851,6 +1879,331 @@ mod concurrent_tests {
         committed(worker, &operation);
     }
     #[test]
+    fn search_opens_exact_committed_passage_after_long_terminal_controls_and_restart() {
+        let root = tempfile::tempdir().unwrap();
+        let session = uuid::Uuid::new_v4().to_string();
+        let (worker, _) = Worker::start(root.path()).unwrap();
+        saved(&worker, &session);
+        let mut raw = "café ".as_bytes().to_vec();
+        raw.extend(b"\x1b]52;c;");
+        raw.extend(vec![b'x'; 9000]);
+        raw.extend(b"\x07needle\n");
+        capture_bytes(&worker, &session, &raw);
+        let result = search_until(&worker, "needle");
+        assert_eq!(result.rows.len(), 1);
+        let hit = result.rows[0].passage.clone().unwrap();
+        drop(worker);
+        thread::sleep(Duration::from_millis(30));
+        OpenOptions::new()
+            .append(true)
+            .open(root.path().join(format!("{session}-00000000.transcript")))
+            .unwrap()
+            .write_all(b"UNCOMMITTEDSECRET")
+            .unwrap();
+        let (worker, _) = Worker::start(root.path()).unwrap();
+        let uncommitted = search::Query::new(search::Mode::History, "UNCOMMITTEDSECRET");
+        let uncommitted_request = uncommitted.request.clone();
+        worker.commands.send(Command::Browse(uncommitted)).unwrap();
+        loop {
+            if let Completion::Browse(response) =
+                worker.events.recv_timeout(Duration::from_secs(5)).unwrap()
+                && response.request == uncommitted_request
+                && !response.preparing
+            {
+                assert!(response.rows.is_empty());
+                break;
+            }
+        }
+        let request = uuid::Uuid::new_v4().to_string();
+        worker
+            .commands
+            .send(Command::Browse(search::Query::open(&request, hit)))
+            .unwrap();
+        loop {
+            if let Completion::Browse(response) =
+                worker.events.recv_timeout(Duration::from_secs(5)).unwrap()
+                && response.request == request
+            {
+                assert_eq!(response.opened.unwrap().text, "café needle\n");
+                break;
+            }
+        }
+    }
+    fn search_until(worker: &Worker, words: &str) -> search::Response {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let query = search::Query::new(search::Mode::History, words);
+            let request = query.request.clone();
+            worker.commands.send(Command::Browse(query)).unwrap();
+            loop {
+                if let Completion::Browse(response) =
+                    worker.events.recv_timeout(Duration::from_secs(5)).unwrap()
+                    && response.request == request
+                {
+                    assert!(response.error.is_none(), "{:?}", response.error);
+                    if response.preparing {
+                        continue;
+                    }
+                    if !response.rows.is_empty() {
+                        return response;
+                    }
+                    break;
+                }
+            }
+            assert!(Instant::now() < deadline, "index did not catch up");
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+    #[test]
+    fn deleted_search_text_never_reappears_after_restart_but_session_identity_remains() {
+        let root = tempfile::tempdir().unwrap();
+        let session = uuid::Uuid::new_v4().to_string();
+        let (worker, _) = Worker::start(root.path()).unwrap();
+        saved(&worker, &session);
+        capture_bytes(&worker, &session, b"deletable secretword\n");
+        let hit = search_until(&worker, "secretword").rows[0]
+            .passage
+            .clone()
+            .unwrap();
+        let seal = Operation {
+            purpose: Purpose::Seal,
+            ..final_operation(&session)
+        };
+        worker.commands.send(Command::Seal(seal.clone())).unwrap();
+        committed(&worker, &seal);
+        worker
+            .commands
+            .send(Command::Delete(session.clone()))
+            .unwrap();
+        loop {
+            if let Completion::Deleted(id) =
+                worker.events.recv_timeout(Duration::from_secs(5)).unwrap()
+                && id == session
+            {
+                break;
+            }
+        }
+        drop(worker);
+        thread::sleep(Duration::from_millis(30));
+        let (worker, _) = Worker::start(root.path()).unwrap();
+        let query = search::Query::new(search::Mode::History, "secretword");
+        let request = query.request.clone();
+        worker.commands.send(Command::Browse(query)).unwrap();
+        loop {
+            if let Completion::Browse(response) =
+                worker.events.recv_timeout(Duration::from_secs(5)).unwrap()
+                && response.request == request
+                && !response.preparing
+            {
+                assert!(response.rows.is_empty());
+                break;
+            }
+        }
+        worker
+            .commands
+            .send(Command::Browse(search::Query::open("deleted-open", hit)))
+            .unwrap();
+        loop {
+            if let Completion::Browse(response) =
+                worker.events.recv_timeout(Duration::from_secs(5)).unwrap()
+                && response.request == "deleted-open"
+            {
+                assert!(response.opened.is_none());
+                assert!(response.error.unwrap().contains("deleted"));
+                break;
+            }
+        }
+        let query = search::Query::new(search::Mode::Sessions, "");
+        let request = query.request.clone();
+        worker.commands.send(Command::Browse(query)).unwrap();
+        loop {
+            if let Completion::Browse(response) =
+                worker.events.recv_timeout(Duration::from_secs(5)).unwrap()
+                && response.request == request
+                && !response.preparing
+            {
+                assert_eq!(response.rows[0].session.as_deref(), Some(session.as_str()));
+                assert!(response.rows[0].label.contains("history deleted"));
+                break;
+            }
+        }
+    }
+    #[test]
+    fn retained_browser_includes_archived_missing_git_workspace_branch_and_cancelled_queries() {
+        let root = tempfile::tempdir().unwrap();
+        let checkout = root.path().join("historical-project");
+        assert!(
+            std::process::Command::new("git")
+                .args(["init", "-b", "searchbranch11"])
+                .arg(&checkout)
+                .output()
+                .unwrap()
+                .status
+                .success()
+        );
+        let identity = crate::git::resolve_checkout(&checkout, &AtomicBool::new(false)).unwrap();
+        let session = uuid::Uuid::new_v4().to_string();
+        let task = uuid::Uuid::new_v4().to_string();
+        let state = Observation {
+            checkout_identity: Some(identity),
+            session_identity: Some(crate::events::SessionIdentity {
+                session: session.clone(),
+                task: task.clone(),
+                request: "search-fixture".into(),
+            }),
+            lifecycle: Lifecycle::Stopped,
+            ..Default::default()
+        };
+        let (worker, _) = Worker::start(root.path()).unwrap();
+        let snapshot = Snapshot::new(&state, Some(&checkout), &task);
+        let operation = snapshot.operation.clone();
+        worker.commands.send(Command::Save(snapshot)).unwrap();
+        committed(&worker, &operation);
+        worker
+            .commands
+            .send(Command::ObservedBranches(vec![(
+                crate::session::path_bytes(&checkout),
+                "searchbranch11".into(),
+            )]))
+            .unwrap();
+        loop {
+            if matches!(
+                worker.events.recv_timeout(Duration::from_secs(5)).unwrap(),
+                Completion::Sealed
+            ) {
+                break;
+            }
+        }
+        capture_bytes(
+            &worker,
+            &session,
+            "archived searchable café answer\n".as_bytes(),
+        );
+        search_until(&worker, "searchable");
+        drop(worker);
+        thread::sleep(Duration::from_millis(30));
+        // Seed future archive metadata through its schema contract before reopening the real worker.
+        let db = Connection::open(root.path().join("history.sqlite3")).unwrap();
+        db.execute(
+            "INSERT INTO workspace_history_facts(workspace,archived) SELECT id,1 FROM workspaces",
+            [],
+        )
+        .unwrap();
+        let tx = db.unchecked_transaction().unwrap();
+        for index in 0..1000 {
+            tx.execute(
+                "INSERT INTO workspaces(id,task,name) VALUES(?1,?1,?2)",
+                params![format!("fixture-{index}"), format!("workspace {index}")],
+            )
+            .unwrap();
+        }
+        tx.commit().unwrap();
+        drop(db);
+        std::fs::remove_dir_all(&checkout).unwrap();
+        let (worker, _) = Worker::start(root.path()).unwrap();
+        let response = search_until(&worker, "searchable");
+        let label = &response.rows[0].label;
+        for fact in [
+            "historical-project",
+            "searchbranch11",
+            "archived",
+            "checkout missing",
+        ] {
+            assert!(label.contains(fact), "{label}");
+        }
+        let old = search::Query::new(search::Mode::Workspaces, "never-matches");
+        let old_request = old.request.clone();
+        let mut cancel = search::Query::new(search::Mode::Workspaces, "");
+        cancel.cancel = true;
+        let request = cancel.request.clone();
+        worker.commands.send(Command::Browse(old)).unwrap();
+        worker.commands.send(Command::Browse(cancel)).unwrap();
+        loop {
+            if let Completion::Browse(response) =
+                worker.events.recv_timeout(Duration::from_secs(5)).unwrap()
+            {
+                assert!(
+                    response.request != old_request || response.preparing,
+                    "cancelled scan published final results"
+                );
+                if response.request == request {
+                    assert!(response.rows.is_empty());
+                    break;
+                }
+            }
+        }
+    }
+    #[test]
+    fn search_checkpoint_restarts_split_utf8_and_rolls_back_failed_index_commit() {
+        let root = tempfile::tempdir().unwrap();
+        let session = uuid::Uuid::new_v4().to_string();
+        let (worker, _) = Worker::start(root.path()).unwrap();
+        saved(&worker, &session);
+        let mut prefix = b"checkpointprefix\n".to_vec();
+        prefix.resize(511, b'x');
+        prefix.push(0xc3);
+        capture_bytes(&worker, &session, &prefix);
+        search_until(&worker, "checkpointprefix");
+        drop(worker);
+        thread::sleep(Duration::from_millis(30));
+        std::fs::write(root.path().join("proof-storage-index-commit"), "error").unwrap();
+        let (worker, _) = Worker::start(root.path()).unwrap();
+        capture_bytes(
+            &worker,
+            &session,
+            &[0xa9, b' ', b'n', b'e', b'e', b'd', b'l', b'e', b'\n'],
+        );
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let query = search::Query::new(search::Mode::History, "needle");
+            let request = query.request.clone();
+            worker.commands.send(Command::Browse(query)).unwrap();
+            let response = loop {
+                if let Completion::Browse(response) =
+                    worker.events.recv_timeout(Duration::from_secs(5)).unwrap()
+                    && response.request == request
+                    && !response.preparing
+                {
+                    break response;
+                }
+            };
+            assert!(
+                response.rows.is_empty(),
+                "failed index transaction published text"
+            );
+            if response.error.is_some_and(|e| e.contains("History index")) {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "index failure did not become visible"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+        drop(worker);
+        thread::sleep(Duration::from_millis(30));
+        std::fs::remove_file(root.path().join("proof-storage-index-commit")).unwrap();
+        let (worker, _) = Worker::start(root.path()).unwrap();
+        let response = search_until(&worker, "needle");
+        assert_eq!(response.rows.len(), 1);
+        let passage = response.rows[0].passage.clone().unwrap();
+        worker
+            .commands
+            .send(Command::Browse(search::Query::open("split-open", passage)))
+            .unwrap();
+        loop {
+            if let Completion::Browse(response) =
+                worker.events.recv_timeout(Duration::from_secs(5)).unwrap()
+                && response.request == "split-open"
+            {
+                let page = response.opened.unwrap();
+                assert!(page.text.ends_with("é needle\n"));
+                assert!(!page.text.contains('�'));
+                break;
+            }
+        }
+    }
+    #[test]
     fn readable_committed_history_replays_across_pages_and_chunks_after_restart_without_a_checkout()
     {
         let root = tempfile::tempdir().unwrap();
@@ -2026,6 +2379,62 @@ mod concurrent_tests {
         std::fs::create_dir_all(&directory).unwrap();
         std::fs::write(directory.join(format!("{expected}-readable.json")), serde_json::to_vec_pretty(&serde_json::json!({"source_state":source,"source_session":session,"source_committed":durable,"pages":pages})).unwrap()).unwrap();
         std::fs::write(directory.join(format!("{expected}-committed.raw")), raw).unwrap();
+    }
+    #[test]
+    #[ignore = "explicit retained native corpus search replay; no native process is launched"]
+    fn qualify_search_native_committed_corpus() {
+        let source =
+            PathBuf::from(std::env::var_os("RAT_HISTORY_CORPUS").expect("RAT_HISTORY_CORPUS"));
+        let expected = std::env::var("RAT_HISTORY_MARKER").expect("RAT_HISTORY_MARKER");
+        let evidence =
+            PathBuf::from(std::env::var_os("RAT_HISTORY_EVIDENCE").expect("RAT_HISTORY_EVIDENCE"));
+        let root = tempfile::tempdir().unwrap();
+        for entry in std::fs::read_dir(&source).unwrap() {
+            let entry = entry.unwrap();
+            if entry.file_type().unwrap().is_file() {
+                std::fs::copy(entry.path(), root.path().join(entry.file_name())).unwrap();
+            }
+        }
+        let db = Connection::open_with_flags(
+            source.join("history.sqlite3"),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .unwrap();
+        let (session,durable,state):(String,u64,String)=db.query_row("SELECT id,durable,state FROM sessions WHERE history_state='retained' ORDER BY rowid DESC LIMIT 1",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).unwrap();
+        let original = decode_record(&state).unwrap();
+        let (worker, restored) = Worker::start(root.path()).unwrap();
+        assert_eq!(
+            restored.state.native_conversation,
+            original.native_conversation
+        );
+        assert_eq!(restored.state.agent, original.agent);
+        let response = search_until(&worker, &expected);
+        let mut opened = Vec::new();
+        for row in &response.rows {
+            assert_eq!(row.session.as_deref(), Some(session.as_str()));
+            let passage = row.passage.clone().unwrap();
+            assert!(passage.raw_end <= durable);
+            let request = uuid::Uuid::new_v4().to_string();
+            worker
+                .commands
+                .send(Command::Browse(search::Query::open(&request, passage)))
+                .unwrap();
+            loop {
+                if let Completion::Browse(result) =
+                    worker.events.recv_timeout(Duration::from_secs(5)).unwrap()
+                    && result.request == request
+                {
+                    opened.push(result.opened.unwrap());
+                    break;
+                }
+            }
+        }
+        assert!(
+            opened.iter().any(|p| p.text.contains(&expected)),
+            "matching native marker did not reopen"
+        );
+        std::fs::create_dir_all(&evidence).unwrap();
+        std::fs::write(evidence.join(format!("{expected}-search.json")),serde_json::to_vec_pretty(&serde_json::json!({"source_corpus":source,"source_session":session,"source_committed":durable,"source_native_conversation":original.native_conversation,"source_agent":original.agent,"query":expected,"response":response,"opened":opened,"scope":"current search replay of retained08 native corpus; no new native run or native search timing"})).unwrap()).unwrap();
     }
     #[test]
     fn independent_capture_prefixes_and_scoped_final_flush() {
