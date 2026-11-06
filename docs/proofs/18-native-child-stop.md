@@ -102,3 +102,19 @@ integration passed (29.09 seconds), followed by the styled-screen/resize/focus/
 reconnect integration (8.91 seconds). The child-stop branch is clean; subsequent
 native receipts, final resource measurement and union all-target run are owned
 by ticket 18 and the integration coordinator.
+
+Final Stop-only closure follow-up after merging integration 9cae355 compares the
+complete retained identity map across the second inventory. Replacing a dead
+retained PID with a freshly verified descendant no longer passes closure merely
+because the map's size stayed constant; the replacement goes through the next
+freeze pass. Deterministic OS PID reuse is not forced through a new internal
+mock seam. The existing real foreground-child Stop/quit/native-exit behavior
+check passed in 5.36 seconds. Active background tracking is unchanged.
+
+The permission-fault final-storage test now accepts the product's visible
+capture, storage, or final-sync failure states, preserving its blocked-quit,
+explicit repair/retry, restart, and retained-history assertions. Its first
+semantic attempt reproduced the final-sync error variant (`History sync failed`)
+instead of the capture-write variant seen in ticket 18. Including all three
+actual failure stages passed in 1.92 seconds. No OS/SQLite error text is assumed.
+Locked build, formatting and all-target warnings-denied Clippy passed.

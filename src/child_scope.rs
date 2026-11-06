@@ -103,14 +103,16 @@ impl Scope {
                     thread::sleep(Duration::from_millis(2));
                     continue;
                 }
-                state.owned.len()
+                state.owned.clone()
             };
             self.refresh();
             let state = self.0.lock().unwrap();
             if let Some(error) = &state.error {
                 return Err(io::Error::other(error.clone()));
             }
-            if state.owned.len() == before {
+            // A newly verified identity may replace a retained dead PID without
+            // changing the count. It must go through SIGSTOP on the next pass.
+            if state.owned == before {
                 if Instant::now() >= deadline {
                     return Err(io::Error::other("Owned scope closure deadline exceeded"));
                 }
