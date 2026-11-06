@@ -44,10 +44,35 @@ only afterward. A successful later result acknowledgement cannot revive stopped
 execution. Existing receipt-gap, partial-spawn, stale receipt, final capture,
 storage fault and reconciliation cases remain unchanged.
 
-Pending final integrated validation. Locked build and warnings-denied all-target
-Clippy pass; bin state/render/Git checks passed 32 with one subprocess probe
-ignored directly. Final ownership/all-target results will be recorded after the
-coordinator releases the serial PTY test slot.
+Implementation `125bf5a`, based on prerequisite integration `bb306b3`, passed
+locked build, formatting, warnings-denied all-target Clippy and `git diff --check`.
+The bin state/render/Git suite passed 32 checks with one subprocess probe ignored
+directly; its real terminal-restoration driver passed. After the coordinator
+released the serial PTY slot, all 13 focused ownership cases passed:
+
+- `mismatched_` ran all three operation-attribution cases, including strengthened
+  provisional native controls and Stop, in 2.93 seconds.
+- `partial_spawn_` ran the five setup-window matrix and actual failed-cleanup
+  repair cases in 7.50 seconds.
+- Outstanding creation cancellation passed in 1.04 seconds; failed capture
+  installation after a prior session passed in 1.91 seconds.
+- Held native exec receipt passed in 0.98 seconds; stalled Prepare cancellation
+  passed in 1.82 seconds; stalled Authorize/result controls passed in 2.79 seconds.
+- Failed final commit/explicit retry passed in 2.36 seconds; failed launch-result
+  write plus lifecycle save/explicit retry passed in 1.87 seconds.
+- Stop, ordinary quit and natural native exit with a separate-process-group
+  foreground tool passed in 8.01 seconds, preserving an unrelated sentinel.
+
+Each used `cargo test --locked --test ownership <filter> -- --test-threads=1`.
+No test assertions were weakened to accommodate extraction. The integration tip
+`50c0bae` was then merged; it changes only prerequisite evidence documentation.
+Post-merge locked build, formatting and warnings-denied all-target Clippy passed.
+
+The full combined 03/05 all-target gate belongs to the integration coordinator
+and is pending. The prerequisite aggregate record preserves two independently
+reproduced byte-boundary fixture failures; their diagnosis belongs to a separate
+change, and these focused passes do not relabel that earlier aggregate as green.
+No sustained-resource or styled-screen rerun is claimed for this owner change.
 
 ## Limits
 
