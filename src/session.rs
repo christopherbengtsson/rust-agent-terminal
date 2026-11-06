@@ -681,11 +681,12 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                         fixture
                     };
                     monitor = None;
-                    monitor = if codex { None } else {
+                    state.status = crate::native_status::Status::default();
+                    if !codex {
                         let status_monitor = crate::native_status::Monitor::start(directory, !claude)?;
                         status_monitor.configure(&mut command);
-                        Some(status_monitor)
-                    };
+                        monitor = Some(status_monitor);
+                    }
                     command.env("TERM", "xterm-256color");
                     command.cwd(path);
                     let launched = pty.slave.spawn_command(command).map_err(|error| {
