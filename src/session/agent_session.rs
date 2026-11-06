@@ -53,6 +53,7 @@ pub(super) struct AgentSession {
     execution: Execution,
     history: History,
     directory: PathBuf,
+    endpoint_directory: PathBuf,
     state: Observation,
     task_identity: String,
     checkout: Option<PathBuf>,
@@ -130,7 +131,14 @@ impl AgentSession {
         )?;
         state.metadata_pending = true;
         let (write_errors, input_errors) = mpsc::sync_channel(1);
+        let endpoint_directory = std::env::temp_dir().join(format!(
+            "rat-{}-{}",
+            unsafe { libc::geteuid() },
+            &uuid::Uuid::new_v4().simple().to_string()[..12]
+        ));
+        super::private_directory(&endpoint_directory)?;
         Ok(Self {
+            endpoint_directory,
             directory: directory.to_owned(),
             state,
             task_identity,
@@ -686,7 +694,7 @@ impl AgentSession {
                 .map(|identity| identity.session.as_str()),
         );
         let mut deferred = false;
-        if !matches!(request, Request::Screen) && !self.metadata_failed {
+        if !matches!(request, Request::Screen | Request::Resize { .. }) && !self.metadata_failed {
             self.state.error = None;
         }
         let save_history = matches!(&request, Request::History { index, .. } if *index != self.state.history_index);
@@ -783,7 +791,7 @@ impl AgentSession {
                 return Err("Launch reconciliation pending; wait for durable outcome".into());
             }
             match request {
-                Request::Discover { .. } | Request::Adopt(_) | Request::Register(_) => unreachable!("workspace requests are supervisor-owned"),
+                Request::Session { .. } | Request::SelectSession(_) | Request::Discover { .. } | Request::Adopt(_) | Request::Register(_) => unreachable!("workspace requests are supervisor-owned"),
                 Request::Reconcile => {
                     if self.execution.child.is_some() || self.execution.stopping.is_some() { return Err("Session owned by current supervisor; stop it normally".into()); }
                     if let Some(evidence) = &self.state.execution { evidence.reconcile()?; }
@@ -842,7 +850,7 @@ impl AgentSession {
                         pixel_height: 0,
                     })?;
                     crate::recovery::crash_barrier(directory, "before-create");
-                    let gate_path = directory.join("launch-gate.sock");
+                    let gate_path = self.endpoint_directory.join("launch-gate.sock");
                     let _ = fs::remove_file(&gate_path);
                     let gate_listener = UnixListener::bind(&gate_path)?;
                     gate_listener.set_nonblocking(true)?;
@@ -879,7 +887,7 @@ impl AgentSession {
                     self.execution.codex_monitor = None;
                     self.state.status = crate::native_status::Status::default();
                     if codex {
-                        match crate::codex_status::Monitor::start(directory) {
+                        match crate::codex_status::Monitor::start(&self.endpoint_directory) {
                             Ok(mut status_monitor) => {
                                 if resume { status_monitor.expect_session(self.state.native_conversation.as_ref().unwrap()); }
                                 if status_monitor.configure(&mut command).is_ok() { self.execution.codex_monitor = Some(status_monitor); }
@@ -888,7 +896,7 @@ impl AgentSession {
                             Err(_) => self.state.status.reason = "Codex status monitor unavailable".into(),
                         }
                     } else {
-                        match crate::native_status::Monitor::start(directory, !claude, if resume { self.state.native_conversation.as_deref() } else { None }) {
+                        match crate::native_status::Monitor::start(&self.endpoint_directory, !claude, if resume { self.state.native_conversation.as_deref() } else { None }) {
 
                             Ok(mut status_monitor) => {
                                 status_monitor.native_executable(claude_executable.as_deref());
@@ -974,7 +982,7 @@ impl AgentSession {
                     self.launch.gate_receipt = Some(result);
                     let gate_listener = self.launch.partial_gate.take().unwrap();
                     let proof_receipt_pause = directory.join("proof-launch-receipt");
-                    let gate_path = directory.join("launch-gate.sock");
+                    let gate_path = self.endpoint_directory.join("launch-gate.sock");
                     thread::spawn(move || {
                         let result = (|| -> io::Result<crate::recovery::Receipt> {
                             let deadline = std::time::Instant::now() + Duration::from_secs(2);
@@ -1318,48 +1326,6 @@ impl AgentSession {
     pub(super) fn report_error(&mut self, error: String) {
         self.state.error = Some(error);
     }
-    pub(super) fn prepare_adoption(&mut self) -> Result<(), String> {
-        if !self.metadata_failed {
-            self.state.error = None;
-        }
-        if self.launch.creating.is_some() {
-            return Err("Process creation still owns a launch reservation; Stop cancels intent, then wait for cleanup".into());
-        }
-        if self.launch.pending_launch.is_some() || self.launch.gate_receipt.is_some() {
-            return Err("Launch reconciliation pending; wait for durable outcome".into());
-        }
-        Ok(())
-    }
-    pub(super) fn adoption_refusal(
-        &self,
-        same_checkout: bool,
-        storage: &crate::persistence::Worker,
-    ) -> Result<(), String> {
-        if (self.execution.child.is_some()
-            || self.execution.stopping.is_some()
-            || !self.history.eof
-            || self.history.capture_done.is_some()
-            || storage
-                .progress_for(
-                    self.state
-                        .session_identity
-                        .as_ref()
-                        .map(|identity| identity.session.as_str()),
-                )
-                .pending_bytes
-                > 0)
-            && !same_checkout
-        {
-            return Err("Stop the existing session before adopting another checkout".into());
-        }
-        if self.state.execution.is_some() && self.execution.child.is_none() && !same_checkout {
-            return Err(
-                "Interrupted execution is uncertain; inspect history before changing adoption"
-                    .into(),
-            );
-        }
-        Ok(())
-    }
     pub(super) fn adopt(
         &mut self,
         identity: crate::git::CheckoutIdentity,
@@ -1384,6 +1350,18 @@ impl AgentSession {
     pub(super) fn adoption_failed(&mut self, error: String, storage: &crate::persistence::Worker) {
         self.report_error(error);
         self.save_metadata(storage);
+    }
+    pub(super) fn reserved(&self) -> bool {
+        self.state.execution.is_some()
+            || self.execution.child.is_some()
+            || self.execution.stopping.is_some()
+            || self.launch.pending_launch.is_some()
+            || self.launch.creating.is_some()
+            || self.launch.created.is_some()
+            || self.launch.gate_receipt.is_some()
+    }
+    pub(super) fn task(&self) -> &str {
+        &self.task_identity
     }
     pub(super) fn checkout(&self) -> Option<&Path> {
         self.checkout.as_deref()

@@ -13,6 +13,7 @@ pub struct App {
     pub workspace_selected: Option<String>,
     pub project_input: Option<String>,
     pub session: Observation,
+    selected_target: String,
     pub attached: bool,
     pub history_open: bool,
     pub cleanup_open: bool,
@@ -44,6 +45,7 @@ impl App {
             sent_viewport: None,
             pending_viewport: None,
             session: Default::default(),
+            selected_target: String::new(),
             attached: false,
             history_open: false,
             cleanup_open: false,
@@ -72,7 +74,7 @@ impl App {
             return None;
         }
         self.pending_viewport = Some(dimensions);
-        Some(Effect::Session(Request::Resize {
+        Some(self.session_effect(Request::Resize {
             rows: dimensions.0,
             cols: dimensions.1,
         }))
@@ -94,7 +96,32 @@ impl App {
         {
             self.launch_request = uuid::Uuid::new_v4().to_string();
         }
-        Effect::Session(request(self.launch_request.clone()))
+        self.session_effect(request(self.launch_request.clone()))
+    }
+
+    fn session_effect(&self, request: Request) -> Effect {
+        if self.selected_target.is_empty()
+            || matches!(
+                request,
+                Request::Shutdown
+                    | Request::Adopt(_)
+                    | Request::Register(_)
+                    | Request::SelectSession(_)
+                    | Request::Discover { .. }
+            )
+        {
+            Effect::Session(request)
+        } else {
+            Effect::Session(Request::Session {
+                target: self.selected_target.clone(),
+                session: self
+                    .session
+                    .session_identity
+                    .as_ref()
+                    .map(|id| id.session.clone()),
+                command: Box::new(request),
+            })
+        }
     }
 
     pub fn observe_session(&mut self, mut observation: Observation) {
@@ -105,6 +132,16 @@ impl App {
                 repository: PathBuf::from(std::ffi::OsString::from_vec(discovery.repository)),
                 result: discovery.result,
             });
+        }
+        if !observation.connection_lost
+            && !self.selected_target.is_empty()
+            && !observation.control_target.is_empty()
+            && observation.control_target != self.selected_target
+        {
+            return;
+        }
+        if self.selected_target.is_empty() {
+            self.selected_target = observation.control_target.clone();
         }
         if observation.connection_lost {
             let error = observation.error.take();
@@ -174,7 +211,7 @@ impl App {
                 self.attached = false;
                 return None;
             }
-            return Some(Effect::Session(Request::Key(key)));
+            return Some(self.session_effect(Request::Key(key)));
         }
         if let Some(path) = self.project_input.as_mut() {
             match key.code {
@@ -186,7 +223,7 @@ impl App {
                         return None;
                     }
                     self.workspaces_open = true;
-                    return Some(Effect::Session(Request::Register(path.into_bytes())));
+                    return Some(self.session_effect(Request::Register(path.into_bytes())));
                 }
                 KeyCode::Backspace => {
                     path.pop();
@@ -270,7 +307,7 @@ impl App {
                     self.history_offset = 0;
                     self.history_scroll = 0;
                     self.session.history = None;
-                    return Some(Effect::Session(Request::HistorySession {
+                    return Some(self.session_effect(Request::HistorySession {
                         session: session.clone(),
                         offset: 0,
                     }));
@@ -286,7 +323,22 @@ impl App {
                     };
                     use std::os::unix::ffi::OsStringExt;
                     if key.code == KeyCode::Char('a') {
-                        return Some(Effect::Session(Request::Adopt(path.clone())));
+                        self.selected_target.clear();
+                        self.sent_viewport = None;
+                        return Some(self.session_effect(Request::Adopt(path.clone())));
+                    }
+                    if let Some(target) = self
+                        .session
+                        .sessions
+                        .iter()
+                        .find(|entry| entry.task == workspace.task)
+                        .map(|entry| entry.target.clone())
+                    {
+                        self.selected_target = target.clone();
+                        self.attached = false;
+                        self.sent_viewport = None;
+                        self.workspaces_open = false;
+                        return Some(Effect::Session(Request::SelectSession(target)));
                     }
                     let repository = PathBuf::from(std::ffi::OsString::from_vec(path.clone()));
                     if repository != self.repository {
@@ -300,7 +352,7 @@ impl App {
                 }
                 KeyCode::Char('q') => {
                     self.shutdown_pending = true;
-                    return Some(Effect::Session(Request::Shutdown));
+                    return Some(self.session_effect(Request::Shutdown));
                 }
                 KeyCode::Char('d') => {
                     self.detached = true;
@@ -327,7 +379,7 @@ impl App {
             self.cleanup_selected = 0;
             self.history_open = false;
             self.session.cleanup = None;
-            return Some(Effect::Session(Request::Cleanup { page: 0 }));
+            return Some(self.session_effect(Request::Cleanup { page: 0 }));
         }
         if self.cleanup_open
             && (key.modifiers.is_empty()
@@ -346,7 +398,9 @@ impl App {
                         self.history_offset = 0;
                         self.history_scroll = 0;
                         self.session.history = None;
-                        return Some(Effect::Session(Request::DeleteHistory { id: preview.id }));
+                        return Some(
+                            self.session_effect(Request::DeleteHistory { id: preview.id }),
+                        );
                     }
                     return None;
                 }
@@ -389,7 +443,7 @@ impl App {
                     };
                     self.cleanup_selected = 0;
                     self.session.cleanup = None;
-                    return Some(Effect::Session(Request::Cleanup { page: index }));
+                    return Some(self.session_effect(Request::Cleanup { page: index }));
                 }
                 KeyCode::Char('y' | 's' | 'q') => {}
                 _ => return None,
@@ -437,12 +491,12 @@ impl App {
             if self.history_open && matches!(key.code, KeyCode::Char('h' | 'n' | 'p' | '[' | ']')) {
                 self.history_scroll = 0;
                 if let Some(session) = &self.history_session {
-                    return Some(Effect::Session(Request::HistorySession {
+                    return Some(self.session_effect(Request::HistorySession {
                         session: session.clone(),
                         offset: self.history_offset,
                     }));
                 }
-                return Some(Effect::Session(Request::History {
+                return Some(self.session_effect(Request::History {
                     index: self.history_index,
                     offset: self.history_offset,
                 }));
@@ -458,13 +512,13 @@ impl App {
                 return Some(Effect::Detach);
             }
             KeyCode::Char('u') if key.modifiers.is_empty() => {
-                return Some(Effect::Session(Request::Reconcile));
+                return Some(self.session_effect(Request::Reconcile));
             }
             KeyCode::Char('y') if key.modifiers.is_empty() => {
-                return Some(Effect::Session(Request::RetryStorage));
+                return Some(self.session_effect(Request::RetryStorage));
             }
             KeyCode::Char('s') if key.modifiers.is_empty() => {
-                return Some(Effect::Session(Request::Stop));
+                return Some(self.session_effect(Request::Stop));
             }
             KeyCode::Char('a') if key.modifiers.is_empty() => {
                 let tree = self.current()?;
@@ -474,9 +528,10 @@ impl App {
                     );
                     return None;
                 }
-                return Some(Effect::Session(Request::Adopt(crate::session::path_bytes(
-                    &tree.path,
-                ))));
+                let path = crate::session::path_bytes(&tree.path);
+                self.selected_target.clear();
+                self.sent_viewport = None;
+                return Some(self.session_effect(Request::Adopt(path)));
             }
             KeyCode::Char('v') if key.modifiers.is_empty() => {
                 return Some(self.launch_intent(Request::Resume));
@@ -503,7 +558,7 @@ impl App {
             Some(Action::Refresh) => return Some(Effect::Refresh),
             Some(Action::Quit) => {
                 self.shutdown_pending = true;
-                return Some(Effect::Session(Request::Shutdown));
+                return Some(self.session_effect(Request::Shutdown));
             }
             None => {}
         }
@@ -542,7 +597,7 @@ impl App {
             self.error = Some("Paste exceeds 4084-byte limit; split it and retry".into());
             return None;
         }
-        Some(Effect::Session(Request::Paste(text)))
+        Some(self.session_effect(Request::Paste(text)))
     }
 
     pub fn begin_refresh(&mut self) -> bool {
@@ -615,6 +670,29 @@ mod tests {
             path: PathBuf::from(path),
             ..Worktree::default()
         }
+    }
+
+    #[test]
+    fn session_actions_freeze_owner_and_conversation_identity() {
+        let mut app = App::new("repo".into());
+        app.observe_session(Observation {
+            control_target: "owner-a".into(),
+            session_identity: Some(crate::events::SessionIdentity { task: "workspace-a".into(), session: "conversation-a".into(), request: "launch-a".into() }),
+            ..Observation::default()
+        });
+        assert!(matches!(app.viewport(Some((24, 100))), Some(Effect::Session(Request::Session { target, session: Some(session), command }))
+            if target == "owner-a" && session == "conversation-a" && matches!(*command, Request::Resize { rows: 24, cols: 100 })));
+        assert!(matches!(app.input(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE)), Some(Effect::Session(Request::Session { target, session: Some(session), command }))
+            if target == "owner-a" && session == "conversation-a" && matches!(*command, Request::Stop)));
+    }
+
+    #[test]
+    fn late_projection_cannot_replace_explicitly_selected_runtime() {
+        let mut app = App::new("repo".into());
+        app.observe_session(Observation { control_target: "owner-b".into(), screen: "B".into(), ..Observation::default() });
+        app.observe_session(Observation { control_target: "owner-a".into(), screen: "late A".into(), ..Observation::default() });
+        assert_eq!(app.session.control_target, "owner-b");
+        assert_eq!(app.session.screen, "B");
     }
 
     #[test]

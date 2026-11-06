@@ -277,6 +277,7 @@ pub enum Command {
     Retry,
     Flush(Operation),
 }
+#[derive(Clone)]
 pub enum Completion {
     Registered(
         uuid::Uuid,

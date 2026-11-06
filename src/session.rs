@@ -97,7 +97,10 @@ fn transport(
     let mut greeting: Observation = serde_json::from_slice(&read_frame(&mut reader)?)?;
     decode_screen(&mut greeting);
     if greeting.control_denied {
-        if greeting.git_jobs_protocol != 1 || greeting.registry_protocol != 1 {
+        if greeting.git_jobs_protocol != 1
+            || greeting.registry_protocol != 1
+            || greeting.sessions_protocol != 1
+        {
             events.send(greeting)?;
             return Ok(());
         }
@@ -130,9 +133,12 @@ fn transport(
         }
         return Ok(());
     }
-    if greeting.git_jobs_protocol != 1 || greeting.registry_protocol != 1 {
+    if greeting.git_jobs_protocol != 1
+        || greeting.registry_protocol != 1
+        || greeting.sessions_protocol != 1
+    {
         greeting.control_denied = true;
-        greeting.error = Some("Existing supervisor does not support this dashboard's worktree protocol or registry protocol. Use its compatible dashboard to stop activity before upgrading; d detaches locally.".into());
+        greeting.error = Some("Existing supervisor does not support this dashboard's worktree, registry or session protocol. Use its compatible dashboard to stop activity before upgrading; d detaches locally.".into());
         events.send(greeting)?;
         return Ok(());
     }
@@ -288,6 +294,213 @@ impl Delivery {
     }
 }
 
+// Runtime selection belongs to the supervisor. Each concrete owner retains its
+// private launch, cleanup and capture phases while another owner is selected.
+struct Sessions {
+    entries: Vec<(String, agent_session::AgentSession)>,
+    selected: usize,
+    directory: PathBuf,
+}
+impl std::ops::Deref for Sessions {
+    type Target = agent_session::AgentSession;
+    fn deref(&self) -> &Self::Target {
+        &self.entries[self.selected].1
+    }
+}
+impl std::ops::DerefMut for Sessions {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.entries[self.selected].1
+    }
+}
+impl Sessions {
+    fn restore(
+        directory: &Path,
+        restored: crate::persistence::Restored,
+        storage: &crate::persistence::Worker,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        Ok(Self {
+            entries: vec![(
+                uuid::Uuid::new_v4().to_string(),
+                agent_session::AgentSession::restore(directory, restored, storage)?,
+            )],
+            selected: 0,
+            directory: directory.to_owned(),
+        })
+    }
+    fn complete(
+        &mut self,
+        event: crate::persistence::Completion,
+        storage: &crate::persistence::Worker,
+    ) {
+        // Attributed completions are ignored by owners without the matching
+        // obligation. Projection replies belong to the selected owner only.
+        if matches!(
+            event,
+            crate::persistence::Completion::Committed(_)
+                | crate::persistence::Completion::Failed(..)
+                | crate::persistence::Completion::Deleted(_)
+        ) {
+            for (_, owner) in &mut self.entries {
+                owner.complete(event.clone(), storage);
+            }
+        } else {
+            self.entries[self.selected].1.complete(event, storage);
+        }
+    }
+    fn advance(&mut self, storage: &crate::persistence::Worker, adopting: bool) {
+        for (_, owner) in &mut self.entries {
+            owner.advance(storage, adopting);
+        }
+    }
+    fn observation(&mut self) -> Observation {
+        let mut summaries = Vec::new();
+        for (target, owner) in &mut self.entries {
+            let state = owner.observation();
+            summaries.push(crate::events::SessionSummary {
+                target: target.clone(),
+                task: owner.task().to_owned(),
+                session: state.session_identity.map(|id| id.session),
+                lifecycle: state.lifecycle,
+                checkout: owner.checkout().map(path_bytes),
+            });
+        }
+        let mut state = self.entries[self.selected].1.observation();
+        state.sessions_protocol = 1;
+        state.control_target = self.entries[self.selected].0.clone();
+        state.sessions = summaries;
+        state
+    }
+    fn all_stopped(&mut self) -> bool {
+        self.entries
+            .iter_mut()
+            .all(|(_, owner)| owner.observation().stopped)
+    }
+    fn adopt_checkout(
+        &mut self,
+        identity: crate::git::CheckoutIdentity,
+        task: String,
+        storage: &crate::persistence::Worker,
+    ) -> Result<(), String> {
+        if let Some(index) = self.entries.iter_mut().position(|(_, owner)| {
+            let state = owner.observation();
+            state.checkout_identity.as_ref().is_some_and(|known| {
+                known.git_dir == identity.git_dir && known.common_dir == identity.common_dir
+            }) || owner.checkout() == Some(identity.root.as_path())
+        }) {
+            self.selected = index;
+            self.entries[index].1.adopt(identity, true, task, storage);
+            return Ok(());
+        }
+        if self.entries.len() >= 1024 {
+            return Err("Session owner capacity reached; retained owners are preserved".into());
+        }
+        let restored = crate::persistence::Restored {
+            state: Observation::default(),
+            checkout: None,
+            task: task.clone(),
+            launches: Vec::new(),
+        };
+        let mut owner = agent_session::AgentSession::restore(&self.directory, restored, storage)
+            .map_err(|e| e.to_string())?;
+        owner.adopt(identity, false, task, storage);
+        self.entries.push((uuid::Uuid::new_v4().to_string(), owner));
+        self.selected = self.entries.len() - 1;
+        Ok(())
+    }
+    fn handle(&mut self, request: Request, storage: &crate::persistence::Worker, adopting: bool) {
+        let (index, request) = match request {
+            Request::Session {
+                target,
+                session,
+                command,
+            } => {
+                let Some(index) = self.entries.iter().position(|(id, _)| *id == target) else {
+                    self.report_error(
+                        "Session target no longer exists; refresh before retrying".into(),
+                    );
+                    return;
+                };
+                let current = self.entries[index]
+                    .1
+                    .observation()
+                    .session_identity
+                    .map(|id| id.session);
+                if current != session {
+                    self.entries[index].1.report_error(
+                        "Session changed before command delivery; refresh before retrying".into(),
+                    );
+                    return;
+                }
+                if matches!(
+                    *command,
+                    Request::Session { .. }
+                        | Request::SelectSession(_)
+                        | Request::Shutdown
+                        | Request::Adopt(_)
+                        | Request::Register(_)
+                        | Request::Discover { .. }
+                ) {
+                    self.report_error("Invalid targeted session command".into());
+                    return;
+                }
+                (index, *command)
+            }
+            Request::SelectSession(target) => {
+                if let Some(index) = self.entries.iter().position(|(id, _)| *id == target) {
+                    self.selected = index;
+                } else {
+                    self.report_error("Session target no longer exists".into());
+                }
+                return;
+            }
+            Request::Shutdown => {
+                for (_, owner) in &mut self.entries {
+                    owner.handle(Request::Shutdown, storage, adopting);
+                }
+                return;
+            }
+            request => (self.selected, request),
+        };
+        if matches!(
+            request,
+            Request::Launch(_)
+                | Request::LaunchClaude(_)
+                | Request::LaunchCodex(_)
+                | Request::Resume(_)
+        ) {
+            let active = self
+                .entries
+                .iter()
+                .filter(|(_, owner)| owner.reserved())
+                .count();
+            if active >= 32 && !self.entries[index].1.reserved() {
+                self.entries[index].1.report_error(
+                    "At most 32 concurrent session executions can be admitted".into(),
+                );
+                return;
+            }
+            let target_checkout = self.entries[index].1.observation().checkout_identity;
+            if target_checkout.is_some_and(|target| {
+                self.entries
+                    .iter_mut()
+                    .enumerate()
+                    .any(|(other, (_, owner))| {
+                        other != index
+                            && owner.reserved()
+                            && owner.observation().checkout_identity.is_some_and(|known| {
+                                known.git_dir == target.git_dir
+                                    && known.common_dir == target.common_dir
+                            })
+                    })
+            }) {
+                self.entries[index].1.report_error("This canonical worktree already has an active or uncertain session; attach or reconcile it first".into());
+                return;
+            }
+        }
+        self.entries[index].1.handle(request, storage, adopting);
+    }
+}
+
 pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let Some(_ownership) = elect_owner(directory)? else {
         return Ok(());
@@ -339,7 +552,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let mut registry_error = None;
     let mut registry_operation = None;
     let mut registering = false;
-    let mut session = agent_session::AgentSession::restore(directory, restored, &storage)?;
+    let mut session = Sessions::restore(directory, restored, &storage)?;
     let mut adoption: Option<crate::git::AdoptionJob> = None;
     let mut discovery: Option<crate::git::GitWorker> = None;
     let mut pending_discovery: Option<(u64, PathBuf)> = None;
@@ -406,20 +619,11 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                 continue;
             }
             let result = result.and_then(|identity| {
-                let previous = session.observation();
-                let same_checkout = previous.checkout_identity.as_ref().map_or_else(
-                    || session.checkout() == Some(identity.root.as_path()),
-                    |previous| {
-                        previous.git_dir == identity.git_dir
-                            && previous.common_dir == identity.common_dir
-                    },
-                );
-                session.adoption_refusal(same_checkout, &storage)?;
                 let task = registry
                     .checkout(&identity)
                     .map(|workspace| workspace.task.clone())
                     .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-                session.adopt(identity, same_checkout, task, &storage);
+                session.adopt_checkout(identity, task, &storage)?;
                 Ok(())
             });
             if let Err(error) = result {
@@ -454,8 +658,11 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
         state.error = state.error.or_else(|| registry_error.clone());
         state.adoption_pending = adoption_pending;
         state.discovery = discovery_result.clone();
-        state.stopped &=
-            quitting && adoption.is_none() && discovery.is_none() && registry_operation.is_none();
+        state.stopped = session.all_stopped()
+            && quitting
+            && adoption.is_none()
+            && discovery.is_none()
+            && registry_operation.is_none();
         if state.stopped && controller.is_none() {
             fs::remove_file(&socket)?;
             return Ok(());
@@ -469,6 +676,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                         let refusal = Observation {
                             git_jobs_protocol: 1,
                             registry_protocol: 1,
+                            sessions_protocol: 1,
                             control_denied: true,
                             error: Some("Another dashboard controls this supervisor; close it before reconnecting".into()),
                             ..Observation::default()
@@ -606,7 +814,6 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             Request::Adopt(bytes) => {
                 registry_error = None;
                 let result = (|| -> Result<(), Box<dyn std::error::Error>> {
-                    session.prepare_adoption()?;
                     if bytes.len() > 32768 {
                         return Err("Checkout path exceeds 32768 bytes".into());
                     }
@@ -653,8 +860,11 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
         state.error = state.error.or_else(|| registry_error.clone());
         state.adoption_pending = adoption_pending;
         state.discovery = discovery_result.clone();
-        state.stopped &=
-            quitting && adoption.is_none() && discovery.is_none() && registry_operation.is_none();
+        state.stopped = session.all_stopped()
+            && quitting
+            && adoption.is_none()
+            && discovery.is_none()
+            && registry_operation.is_none();
         if controller.is_some() {
             delivery = Some(Delivery::new(&mut state)?);
             subscriber_frame_high_water =

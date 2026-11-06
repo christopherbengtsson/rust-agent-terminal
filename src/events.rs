@@ -50,7 +50,18 @@ pub enum Effect {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Request {
-    Discover { request: u64, repository: Vec<u8> },
+    /// Freeze a runtime target when an action is queued. Never resolve it from later selection.
+    Session {
+        target: String,
+        #[serde(default)]
+        session: Option<String>,
+        command: Box<Request>,
+    },
+    SelectSession(String),
+    Discover {
+        request: u64,
+        repository: Vec<u8>,
+    },
     Adopt(Vec<u8>),
     Register(Vec<u8>),
     Launch(String),
@@ -59,17 +70,30 @@ pub enum Request {
     Resume(String),
     QueryLaunch(String),
     Reconcile,
-    History { index: usize, offset: u64 },
-    HistorySession { session: String, offset: u64 },
+    History {
+        index: usize,
+        offset: u64,
+    },
+    HistorySession {
+        session: String,
+        offset: u64,
+    },
     Input(Vec<u8>),
     Key(crossterm::event::KeyEvent),
     Paste(String),
     Screen,
     Stop,
     RetryStorage,
-    Cleanup { page: usize },
-    DeleteHistory { id: String },
-    Resize { rows: u16, cols: u16 },
+    Cleanup {
+        page: usize,
+    },
+    DeleteHistory {
+        id: String,
+    },
+    Resize {
+        rows: u16,
+        cols: u16,
+    },
     Shutdown,
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -92,6 +116,12 @@ pub struct LaunchResult {
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Observation {
+    #[serde(default)]
+    pub sessions_protocol: u32,
+    #[serde(default)]
+    pub control_target: String,
+    #[serde(default)]
+    pub sessions: Vec<SessionSummary>,
     #[serde(default)]
     pub registry_protocol: u32,
     #[serde(default)]
@@ -225,4 +255,13 @@ impl ProcessExit {
             None => format!("exit code {}", self.code),
         }
     }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct SessionSummary {
+    pub target: String,
+    pub task: String,
+    pub session: Option<String>,
+    pub lifecycle: Lifecycle,
+    pub checkout: Option<Vec<u8>>,
 }
