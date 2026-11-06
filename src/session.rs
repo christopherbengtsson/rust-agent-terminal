@@ -1357,8 +1357,14 @@ pub fn scripted_child() -> io::Result<()> {
                 } else if line == b"status-native-submit" {
                     crate::native_status::fixture("UserPromptSubmit");
                     print!("\x1b[2J\x1b[HClaude Code v2.1.318\r\n❯ proof\r\n");
-                } else if line == b"status-native-active" {
+                } else if line == b"status-native-active"
+                    || line == b"status-native-old-ack"
+                    || line == b"status-native-tool-active"
+                {
                     native_active = true;
+                    if line == b"status-native-tool-active" {
+                        crate::native_status::fixture("FixtureNativeBashPre");
+                    }
                     print!(
                         "\x1b[2J\x1b[HClaude Code v2.1.318\r\n⏺ Ownership controls when values are destroyed.\r\n\r\n✢ Noodling…\r\n────────────────────────────────────────\r\n❯ \r\n────────────────────────────────────────\r\n  ⏵⏵ auto mode on (shift+tab to cycle) · esc to interrupt"
                     );
@@ -1373,8 +1379,10 @@ pub fn scripted_child() -> io::Result<()> {
                     thread::sleep(Duration::from_millis(80));
                     crate::native_status::fixture("Stop");
                     println!("\r");
-                } else if line == b"status-native-done" {
-                    crate::native_status::fixture("Stop");
+                } else if line == b"status-native-done" || line == b"status-native-quoted-done" {
+                    if line == b"status-native-done" {
+                        crate::native_status::fixture("Stop");
+                    }
                     io::stdout().flush()?;
                     thread::sleep(Duration::from_millis(80));
                     print!(
@@ -1403,6 +1411,7 @@ pub fn scripted_child() -> io::Result<()> {
                         b"status-completed" => "FixtureCompleted",
                         b"status-interrupted" => "FixtureInterrupted",
                         b"status-wrong-session" => "FixtureWrongSession",
+                        b"status-old-stop" => "FixtureOldStop",
                         _ => "FixtureInvalid",
                     };
                     crate::native_status::fixture(event);

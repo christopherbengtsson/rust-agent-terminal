@@ -94,8 +94,9 @@ pub struct Monitor {
     screen_boundary: u64,
     output_observed: Instant,
     active_screen: bool,
-    interrupt_request: Option<(u64, Instant)>,
+    interrupt_request: Option<(u64, Instant, usize)>,
     acknowledged: Option<Instant>,
+    ack_count: usize,
 }
 impl Monitor {
     pub fn start(directory: &Path, fixture: bool, resume: Option<&str>) -> io::Result<Self> {
@@ -180,6 +181,7 @@ impl Monitor {
             active_screen: false,
             interrupt_request: None,
             acknowledged: None,
+            ack_count: 0,
         })
     }
     pub fn native_executable(&mut self, executable: Option<&Path>) {
@@ -206,7 +208,7 @@ impl Monitor {
     }
     pub fn input(&mut self, boundary: u64, interrupt: bool) {
         self.interrupt_request = (interrupt && self.active_screen && self.turn.is_some())
-            .then(|| (boundary, Instant::now()));
+            .then(|| (boundary, Instant::now(), self.ack_count));
         self.acknowledged = None;
         if !self.fixture || interrupt {
             self.input_boundary = Some(boundary);
@@ -542,7 +544,7 @@ impl Monitor {
                         .take(composer - marker_index - 1)
                         .all(|line| {
                             line.trim().is_empty()
-                                || line.trim().starts_with("✔ Update installed")
+                                || auxiliary_row(line.trim())
                                 || line.trim().starts_with("────────────────────")
                         })
             })
@@ -561,9 +563,16 @@ impl Monitor {
                     && line.ends_with(" · esc to interrupt")
             });
         if (self.fixture || (self.supported_screen && self.supported_executable))
-            && self.interrupt_request.is_some_and(|(request, at)| {
-                boundary > request && at.elapsed() <= Duration::from_secs(5)
-            })
+            && self
+                .interrupt_request
+                .is_some_and(|(request, at, previous)| {
+                    boundary > request
+                        && at.elapsed() <= Duration::from_secs(5)
+                        && content
+                            .matches("Interrupted · What should Claude do instead?")
+                            .count()
+                            > previous
+                })
             && let Some(composer) = idle_composer(content)
             && content
                 .lines()
@@ -571,7 +580,7 @@ impl Monitor {
                 .map(str::trim)
                 .filter(|line| {
                     !line.is_empty()
-                        && !line.starts_with("✔ Update installed")
+                        && !auxiliary_row(line)
                         && !line.starts_with("────────────────────")
                 })
                 .last()
@@ -597,6 +606,9 @@ impl Monitor {
             );
             self.status.reason = "30s bounded native interruption evidence".into();
         }
+        self.ack_count = content
+            .matches("Interrupted · What should Claude do instead?")
+            .count();
         if !running {
             self.status.state = State::Unknown;
             self.status.reason = "execution not running".into();
@@ -703,6 +715,7 @@ pub fn fixture(event: &str) {
         event: match event {
             "FixtureNativeBashPre" => "PreToolUse",
             "FixtureNativeBashPermission" => "PermissionRequest",
+            "FixtureOldStop" => "Stop",
             _ => event,
         }
         .into(),
@@ -714,7 +727,11 @@ pub fn fixture(event: &str) {
             String::new()
         },
         main_agent: true,
-        at: millis(),
+        at: if event == "FixtureOldStop" {
+            millis().saturating_sub(31_000)
+        } else {
+            millis()
+        },
     };
     let _ = send(Path::new(&path), &receipt);
 }
@@ -759,7 +776,7 @@ fn done_marker(screen: &str) -> Option<(usize, &str)> {
             let (clock, suffix) = clock.rsplit_once(' ')?;
             (verb.len() <= 32
                 && !verb.is_empty()
-                && verb.chars().all(|ch| ch.is_ascii_alphabetic())
+                && verb.chars().all(char::is_alphabetic)
                 && duration.len() <= 32
                 && !duration.is_empty()
                 && duration
@@ -779,4 +796,12 @@ fn response_header(screen: &str) -> Option<&str> {
         .rev()
         .map(str::trim)
         .find(|line| line.starts_with("⏺ ") && line.len() > "⏺ ".len())
+}
+
+fn auxiliary_row(line: &str) -> bool {
+    matches!(
+        line,
+        "✔ Update installed · Restart to update"
+            | "◐ medium · /effort · ✔ Update installed · Restart to update"
+    )
 }
