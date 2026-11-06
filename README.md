@@ -151,8 +151,15 @@ needed. Native authentication/setup prompts stay in the CLI. Failed spawn keeps
 the adopted checkout; `x` explicitly retries. Stop the current session before
 changing tools: launching the other tool starts a new conversation and does not
 transfer context. See [the Codex native proof](docs/proofs/11-codex-native.md)
-for the tested version and limitations. Semantic status remains unknown pending
-the separate native status proof.
+for the tested version and limitations. For Codex 0.167.0, passive invocation-local
+hooks plus demonstrated native UI evidence can show working, input, approval,
+completed turns and interruption. Codex may ask you to review/trust those exact
+hook definitions; without valid fresh evidence the dashboard shows unknown.
+Working evidence expires after five seconds; modal/completion/interruption
+confidence after 30 seconds. Different versions/layouts and ambiguous completion
+markers remain unknown. No hook approves commands or changes your policy.
+See [the versioned status proof](docs/proofs/12-codex-status.md) for the native
+scenarios and conservative limits.
 
 Readable history is independent of a live child, native resume, and the checkout.
 In dashboard focus press `h` to open/close retained history, `n`/`p` for older/newer
