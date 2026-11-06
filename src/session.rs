@@ -42,6 +42,8 @@ pub enum Request {
     Screen,
     Stop,
     RetryStorage,
+    Cleanup { page: usize },
+    DeleteHistory { id: String },
     Resize { rows: u16, cols: u16 },
     Shutdown,
 }
@@ -66,6 +68,12 @@ pub struct LaunchResult {
 pub struct Observation {
     #[serde(default)]
     pub connection_lost: bool,
+    #[serde(default)]
+    pub capacity: crate::cleanup::Capacity,
+    #[serde(default)]
+    pub cleanup: Option<crate::cleanup::Page>,
+    #[serde(default)]
+    pub cleanup_message: Option<String>,
     #[serde(default)]
     pub capture_pending_bytes: usize,
     #[serde(default)]
@@ -460,6 +468,8 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let mut metadata_failed = false;
     let mut flush_pending = false;
     let mut final_flush = false;
+    let mut history_sealed = false;
+    let mut capture_started_here = false;
     let mut capture_done: Option<Receiver<()>> = None;
     let mut eof = true;
     let mut child: Option<Box<dyn portable_pty::Child + Send + Sync>> = None;
@@ -484,7 +494,20 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
         while let Ok(event) = storage.events.try_recv() {
             use crate::persistence::Completion;
             match event {
-                Completion::Retried => {}
+                Completion::Retried | Completion::Sealed => {}
+                Completion::Cleanup(page) => state.cleanup = Some(page),
+                Completion::Deleted(id) => {
+                    state.cleanup_message = Some(format!(
+                        "History deletion completed: {id}. Capacity may remain low; y retry capture / s stop."
+                    ));
+                    state.history = None;
+                    state.history_index = 0;
+                    history_sealed = false;
+                    state.cleanup = None;
+                    let _ = storage
+                        .commands
+                        .try_send(crate::persistence::Command::Cleanup(0));
+                }
                 Completion::Prepared(request) => {
                     save_pending = save_pending.saturating_sub(1);
                     prepared_ready = !cancelled_launch
@@ -515,6 +538,12 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     final_flush = true;
                 }
                 Completion::Error(kind, error) => {
+                    if kind == "cleanup" {
+                        state.cleanup_message = Some(format!(
+                            "History cleanup failed/incomplete: {error}; no recovery claimed; g reopen / select / retry, y capture retry / s stop"
+                        ));
+                        continue;
+                    }
                     if kind == "history" {
                         state.error = Some(error);
                         continue;
@@ -640,6 +669,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         let progress = storage.progress.lock().unwrap().clone();
+        state.capacity = progress.capacity.clone();
         state.accepted_bytes = progress.accepted;
         state.written_bytes = progress.written;
         state.storage_wait_millis = progress
@@ -677,6 +707,27 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                 .is_ok()
         {
             flush_pending = true;
+        }
+        if capture_started_here
+            && !history_sealed
+            && final_flush
+            && !state.metadata_pending
+            && child.is_none()
+            && stopping.is_none()
+            && eof
+            && capture_done.is_none()
+            && progress.pending_bytes == 0
+            && matches!(state.lifecycle, Lifecycle::Stopped | Lifecycle::Exited)
+            && let Some(id) = state
+                .identity
+                .as_deref()
+                .and_then(|identity| crate::persistence::session_id(identity).ok())
+            && storage
+                .commands
+                .try_send(crate::persistence::Command::Seal(id))
+                .is_ok()
+        {
+            history_sealed = true;
         }
         state.stopped = shutdown
             && final_flush
@@ -1193,6 +1244,8 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     state.stopped = false;
                     native_exit = false;
                     state.history_index = 0;
+                    history_sealed = false;
+                    capture_started_here = true;
                     let session = crate::persistence::session_id(state.identity.as_ref().ok_or("Missing prepared identity")?).map_err(|e| e.to_string())?;
                     let capture = storage.output.clone();
                     let (finished, done) = mpsc::sync_channel(1);
@@ -1285,7 +1338,19 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     storage.commands.try_send(crate::persistence::Command::History(index, offset)).map_err(|e| format!("History busy: {e}; retry"))?;
                 }
                 Request::Screen => {}
+                Request::Cleanup { page } => {
+                    state.cleanup = None;
+                    storage.commands.try_send(crate::persistence::Command::Cleanup(page)).map_err(|e| format!("Cleanup busy: {e}; retry"))?;
+                }
+                Request::DeleteHistory { id } => {
+                    if state.identity.as_deref().and_then(|identity| crate::persistence::session_id(identity).ok()).as_deref() == Some(&id)
+                        && (child.is_some() || stopping.is_some() || !eof || capture_done.is_some() || !final_flush || state.metadata_pending || progress.pending_bytes > 0)
+                    { return Err("Selected history still has active, uncertain or unflushed capture".into()); }
+                    state.cleanup_message = Some(format!("Deleting explicitly selected history {id}; completion pending"));
+                    storage.commands.try_send(crate::persistence::Command::Delete(id)).map_err(|e| format!("Cleanup busy: {e}; retry"))?;
+                }
                 Request::RetryStorage => {
+                    history_sealed = false;
                     retry_requested = true;
                     final_flush = false;
                 }
