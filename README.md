@@ -36,12 +36,26 @@ Errors appear in the dashboard, where you can retry or quit.
 | Ctrl-] | Return from attached focus to dashboard navigation |
 | `q` / Esc / Ctrl-C | In dashboard focus, stop the fixture and quit |
 
-In attached focus, ordinary characters, Enter, Backspace, Tab, Esc and Ctrl-C
-are forwarded to the fixture PTY. Arrow/function keys, paste and dynamic PTY
-resize are not implemented. Ctrl-] (the same legacy byte as Ctrl-5) returns to
-dashboard focus without stopping the fixture. It is a provisional escape chord,
-not yet validated with either native agent. Ordinary quit waits for the prototype
-supervisor to report that it killed and reaped the fixture.
+In attached focus, UTF-8 characters, Ctrl-C, legacy control/Alt shortcuts,
+arrows, navigation keys, F1–F12 and Shift-Tab reach the fixture PTY. The pane and
+help show input focus; attached `q` and Esc are native input. Ctrl-] (the same
+legacy byte as Ctrl-5) returns to dashboard focus without stopping the fixture;
+Enter reattaches to the same child. This provisional chord still needs both
+native-agent proofs. Ordinary quit waits for the supervisor's confirmed stop.
+
+Bracketed paste is enabled on the outer terminal and forwarded with delimiters
+when the child requests that mode; otherwise multiline paste normalizes line
+breaks to Enter. A paste over 4084 UTF-8 bytes is visibly rejected for retry in
+smaller pieces. The scripted child reports exact bytes, accepts `approve` then
+`y`/`n`, handles Ctrl-C as an interrupt, and `identity` reports its PID.
+
+Encoding uses legacy xterm sequences. Super/Hyper/Meta and unmappable control
+characters report an error. Legacy terminals cannot distinguish every modifier
+combination (for example Ctrl-Enter versus Enter), or Ctrl-] versus Ctrl-5.
+Keyboard enhancement protocols, mouse forwarding, IME composition guarantees and
+dynamic PTY resize remain unimplemented. Child cursor-key mode is respected by the supervisor at encoding time. Paste requires terminal bracketed-paste support; Crossterm buffers an entire
+incoming paste before the application can reject its size. See the
+[input proof](docs/proofs/03-native-input.md) for the tested bytes and boundaries.
 
 The supervisor runs as another mode of the same executable, with a private local
 socket under `~/Library/Application Support/rat/proof`. For isolated experiments:

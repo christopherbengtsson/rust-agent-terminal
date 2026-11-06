@@ -80,7 +80,7 @@ fn dashboard_adopts_launches_and_interacts_without_discovery_mutation() {
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
             if parser.screen().contents().contains(needle) {
-                break;
+                break parser.screen().contents();
             }
             assert!(
                 Instant::now() < deadline,
@@ -99,17 +99,55 @@ fn dashboard_adopts_launches_and_interacts_without_discovery_mutation() {
     wait("Adopted");
     writer.write_all(b"l").unwrap();
     wait("fixture>");
-    wait(&format!(
+    let screen = wait(&format!(
         "cwd={}",
         repository.canonicalize().unwrap().display()
     ));
+    let pid = screen
+        .split("pid=")
+        .nth(1)
+        .unwrap()
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .to_string();
     wait("task=");
     writer.write_all(b"hello\r").unwrap();
     wait("received: hello");
+    writer.write_all(&[0xce]).unwrap();
+    std::thread::sleep(Duration::from_millis(30));
+    writer.write_all(&[0xbb, b'\r']).unwrap();
+    wait("received: λ");
+    writer
+        .write_all(b"\x1b[200~alpha\n\xce\xb2\x1b[201~\r")
+        .unwrap();
+    wait("bytes: 1b5b3230307e616c7068610aceb21b5b3230317e");
+    writer.write_all(b"\x1bx\x1b[1;5A\x1bOP\x1b[Z\r").unwrap();
+    wait("bytes: 1b781b5b313b35411b4f501b5b5a");
+    writer.write_all(b"cursor-on\r").unwrap();
+    wait("cursor application");
+    writer.write_all(b"\x1b[A\r").unwrap();
+    wait("bytes: 1b4f41");
+    writer.write_all(b"paste-off\r").unwrap();
+    wait("paste plain");
+    writer
+        .write_all(b"\x1b[200~plain\nline\x1b[201~\r")
+        .unwrap();
+    wait("received: plain");
+    wait("received: line");
+    writer.write_all(b"approve\r").unwrap();
+    wait("Approve action? [y/n]");
+    writer.write_all(b"y\r").unwrap();
+    wait("approval: yes");
+    writer.write_all(&[3]).unwrap();
+    wait("interrupted: 03");
+    wait("Focus: session");
     writer.write_all(&[0x1d]).unwrap();
     wait("Focus: dashboard");
     writer.write_all(b"\r").unwrap();
     wait("Focus: session");
+    writer.write_all(b"identity\r").unwrap();
+    wait(&format!("same-child pid={pid}"));
     writer.write_all(b"again\r").unwrap();
     wait("received: again");
     writer.write_all(&[0x1d]).unwrap();

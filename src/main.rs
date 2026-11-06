@@ -1,6 +1,7 @@
 mod app;
 mod events;
 mod git;
+mod native_input;
 mod session;
 mod terminal;
 mod ui;
@@ -100,6 +101,13 @@ fn main() -> Result<(), Box<dyn Error>> {
                     }
                     None => {}
                 },
+                TerminalEvent::Paste(text) => {
+                    if let Some(Effect::Session(request)) = app.paste(text)
+                        && let Err(error) = client.send(request)
+                    {
+                        app.error = Some(error);
+                    }
+                }
                 TerminalEvent::Resize(_, _) => {} // Ratatui queries the new size on draw.
                 _ => {}
             }
