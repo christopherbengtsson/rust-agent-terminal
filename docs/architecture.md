@@ -228,7 +228,7 @@ loop. There is no transcript capture or durability claim in this slice.
 This is a thin first slice, not completion of the planned interaction baseline.
 Launch reconciliation,
 persistence, lifecycle evidence, native adapters, geometry,
-and stop escalation remain follow-on work. Failed shutdown remains visible and
+remain follow-on work. Failed shutdown remains visible and
 retryable; no confirmed stop means no successful quit. See
 [the prototype evidence](proofs/01-scripted-pty.md).
 
@@ -271,3 +271,27 @@ The parser supplies cursor-key mode at encoding time. Only the
 dashboard enables the outer terminal's bracketed-paste mode; its terminal guard
 restores raw mode, alternate screen, cursor visibility and bracketed paste after
 normal return, errors and panic. See [recorded evidence](proofs/03-native-input.md).
+
+
+## Fixture lifecycle (ticket 06)
+
+Process lifecycle is explicit (`Idle`, `Running`, `Stopping`, `Exited`, `Stopped`,
+`StopFailed`) and separate from semantic agent status, which remains unknown.
+The supervisor polls child exit even without a controller; native exit retains
+in-memory attribution and the bounded screen. Stop keeps the dashboard open;
+quit enters App pending shutdown and exits only after a confirmed observation.
+A stop failure preserves the child reservation, shows an actionable error and
+allows explicit retry. Final shutdown observations use reliable event delivery
+rather than the coalescible screen-only path. Detach exits through the normal
+terminal guard without sending Shutdown. Client EOF merely releases control.
+
+A termination worker owns the child while stopping, sends process-group TERM,
+escalates after 500 ms and polls leader exit plus `ps` group execution evidence.
+The deadline is two seconds with a 500 ms timeout on each verification subprocess.
+Inspection failures never count as confirmed absence. Zombies cannot execute;
+processes that deliberately escape the managed group are outside this proof.
+No launch or adoption replacement is allowed while termination is pending or
+unconfirmed. PTY input uses a separate worker with 32 bounded 4096-byte slots;
+queue saturation reports retry, and a blocked writer cannot block stop commands.
+No persistence or clean-shutdown durable flush is claimed before ticket 08.
+See [lifecycle evidence](proofs/06-lifecycle.md).

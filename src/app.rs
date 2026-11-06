@@ -9,12 +9,15 @@ use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 pub enum Effect {
     Refresh,
+    Detach,
     Session(Request),
 }
 
 pub struct App {
     pub session: crate::session::Observation,
     pub attached: bool,
+    pub shutdown_pending: bool,
+    detached: bool,
     pub launch_request: String,
     pub repository: PathBuf,
     pub worktrees: Vec<Worktree>,
@@ -28,6 +31,8 @@ impl App {
         Self {
             session: Default::default(),
             attached: false,
+            shutdown_pending: false,
+            detached: false,
             launch_request: uuid::Uuid::new_v4().to_string(),
             repository,
             worktrees: Vec::new(),
@@ -38,10 +43,23 @@ impl App {
     }
 
     pub fn observe_session(&mut self, observation: Observation) {
-        if observation.identity.is_some() && self.session.identity.is_none() {
+        if observation.identity.is_some() && observation.identity != self.session.identity {
             self.attached = true;
         }
+        if observation.stopped
+            || (observation.error.is_some()
+                && observation.lifecycle != crate::session::Lifecycle::Stopping)
+        {
+            self.shutdown_pending = false;
+        }
+        if observation.lifecycle != crate::session::Lifecycle::Running {
+            self.attached = false;
+        }
         self.session = observation;
+    }
+
+    pub fn should_exit(&self) -> bool {
+        self.detached || self.session.stopped
     }
 
     pub fn input(&mut self, key: KeyEvent) -> Option<Effect> {
@@ -59,6 +77,17 @@ impl App {
             return Some(Effect::Session(Request::Key(key)));
         }
         match key.code {
+            KeyCode::Char('d') if key.modifiers.is_empty() => {
+                if self.shutdown_pending {
+                    self.error = Some("Shutdown already requested; wait for confirmation or retry q after failure".into());
+                    return None;
+                }
+                self.detached = true;
+                return Some(Effect::Detach);
+            }
+            KeyCode::Char('s') if key.modifiers.is_empty() => {
+                return Some(Effect::Session(Request::Stop));
+            }
             KeyCode::Char('a') if key.modifiers.is_empty() => {
                 let tree = self.current()?;
                 if tree.bare || tree.prunable.is_some() {
@@ -86,7 +115,10 @@ impl App {
             Some(Action::Next) => self.next(),
             Some(Action::Previous) => self.previous(),
             Some(Action::Refresh) => return Some(Effect::Refresh),
-            Some(Action::Quit) => return Some(Effect::Session(Request::Shutdown)),
+            Some(Action::Quit) => {
+                self.shutdown_pending = true;
+                return Some(Effect::Session(Request::Shutdown));
+            }
             None => {}
         }
         None
@@ -96,7 +128,7 @@ impl App {
         if self.attached {
             "Native input · Ctrl-C interrupt · Ctrl-] / Ctrl-5 dashboard (keeps session running)"
         } else {
-            "j/k select · r refresh · a adopt · l fixture · Enter attach · q/Esc/Ctrl-C quit/stop"
+            "j/k select · r refresh · a adopt · l fixture · Enter attach · s stop · d detach · q/Esc/Ctrl-C quit/stop"
         }
     }
 
@@ -168,6 +200,31 @@ mod tests {
             path: PathBuf::from(path),
             ..Worktree::default()
         }
+    }
+
+    #[test]
+    fn quit_waits_for_confirmation_and_stop_failure_can_be_retried() {
+        let mut app = App::new("repo".into());
+        assert!(matches!(
+            app.input(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE)),
+            Some(Effect::Session(Request::Shutdown))
+        ));
+        assert!(app.shutdown_pending);
+        app.observe_session(Observation {
+            error: Some("Stop unconfirmed; retry s or q".into()),
+            ..Observation::default()
+        });
+        assert!(!app.shutdown_pending);
+        assert!(!app.should_exit());
+        assert!(matches!(
+            app.input(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE)),
+            Some(Effect::Session(Request::Shutdown))
+        ));
+        app.observe_session(Observation {
+            stopped: true,
+            ..Observation::default()
+        });
+        assert!(app.should_exit());
     }
 
     #[test]

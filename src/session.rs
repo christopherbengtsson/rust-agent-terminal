@@ -31,7 +31,18 @@ pub enum Request {
     Key(crossterm::event::KeyEvent),
     Paste(String),
     Screen,
+    Stop,
     Shutdown,
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Lifecycle {
+    #[default]
+    Idle,
+    Running,
+    Stopping,
+    Exited,
+    Stopped,
+    StopFailed,
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Observation {
@@ -40,6 +51,8 @@ pub struct Observation {
     pub screen: String,
     pub error: Option<String>,
     pub stopped: bool,
+    #[serde(default)]
+    pub lifecycle: Lifecycle,
     pub control_denied: bool,
 }
 pub struct Client {
@@ -127,7 +140,7 @@ fn transport(
         serde_json::to_writer(&mut stream, &request)?;
         stream.write_all(b"\n")?;
         let observation: Observation = serde_json::from_slice(&read_frame(&mut reader)?)?;
-        if shutdown {
+        if shutdown || observation.stopped {
             let stopped = observation.stopped;
             events.send(observation)?;
             if stopped {
@@ -233,8 +246,14 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
     listener.set_nonblocking(true)?;
     let mut state = Observation::default();
     let mut checkout = None;
+    let mut task_identity = uuid::Uuid::new_v4().to_string();
     let mut child: Option<Box<dyn portable_pty::Child + Send + Sync>> = None;
-    let mut writer: Option<Box<dyn Write + Send>> = None;
+    let mut writer: Option<SyncSender<Vec<u8>>> = None;
+    let (write_errors, input_errors) = mpsc::sync_channel(1);
+    let mut process_group = 0;
+    let mut stopping: Option<Receiver<crate::lifecycle::Outcome>> = None;
+    let mut shutdown = false;
+    let mut native_exit = false;
     let screen = Arc::new(Mutex::new(vt100::Parser::new(
         ROWS.try_into().unwrap(),
         COLS.try_into().unwrap(),
@@ -243,6 +262,50 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let mut controller: Option<UnixStream> = None;
     let mut pending = Vec::new();
     loop {
+        if let Ok(error) = input_errors.try_recv() {
+            state.error = Some(format!("Native input failed: {error}; stop or retry"));
+        }
+        if stopping.is_none()
+            && state.lifecycle != Lifecycle::StopFailed
+            && let Some(active) = child.as_mut()
+        {
+            match active.try_wait() {
+                Ok(Some(_)) => {
+                    native_exit = true;
+                    writer = None;
+                    state.lifecycle = Lifecycle::Stopping;
+                    stopping = Some(crate::lifecycle::stop(child.take().unwrap(), process_group));
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    state.error = Some(format!(
+                        "Cannot observe execution: {error}; stop explicitly"
+                    ))
+                }
+            }
+        }
+        if let Some(receiver) = &stopping
+            && let Ok(outcome) = receiver.try_recv()
+        {
+            stopping = None;
+            child = outcome.child;
+            if let Some(error) = outcome.error {
+                state.lifecycle = Lifecycle::StopFailed;
+                state.error = Some(error);
+                shutdown = false;
+            } else {
+                state.lifecycle = if native_exit {
+                    Lifecycle::Exited
+                } else {
+                    Lifecycle::Stopped
+                };
+                state.stopped = shutdown;
+            }
+        }
+        if state.stopped && controller.is_none() {
+            fs::remove_file(&socket)?;
+            return Ok(());
+        }
         // Accept/reject independently of the active client's commands or output.
         for _ in 0..32 {
             match listener.accept() {
@@ -326,16 +389,19 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                         root.pop();
                     }
                     let path = PathBuf::from(std::ffi::OsString::from_vec(root)).canonicalize()?;
-                    if child.is_some() && checkout.as_ref() != Some(&path) {
+                    if (child.is_some() || stopping.is_some()) && checkout.as_ref() != Some(&path) {
                         return Err(
                             "Stop the existing session before adopting another checkout".into()
                         );
+                    }
+                    if checkout.as_ref() != Some(&path) {
+                        task_identity = uuid::Uuid::new_v4().to_string();
                     }
                     state.adopted = Some(path.display().to_string());
                     checkout = Some(path);
                 }
                 Request::Launch(request) => {
-                    if child.is_some() {
+                    if child.is_some() || stopping.is_some() {
                         return Err("A session already exists; attach to it".into());
                     }
                     let path = checkout.as_ref().ok_or("Adopt a checkout before launch")?;
@@ -350,7 +416,25 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     command.cwd(path);
                     let launched = pty.slave.spawn_command(command)?;
                     drop(pty.slave);
-                    writer = Some(pty.master.take_writer()?);
+                    process_group = launched
+                        .process_id()
+                        .ok_or("Missing managed process identity")?
+                        .try_into()?;
+                    let mut sink = pty.master.take_writer()?;
+                    let (input, writes) = mpsc::sync_channel::<Vec<u8>>(32);
+                    let errors = write_errors.clone();
+                    thread::spawn(move || {
+                        while let Ok(bytes) = writes.recv() {
+                            if let Err(error) = sink.write_all(&bytes) {
+                                let _ = errors.try_send(error.to_string());
+                                break;
+                            }
+                        }
+                    });
+                    writer = Some(input);
+                    state.lifecycle = Lifecycle::Running;
+                    state.stopped = false;
+                    native_exit = false;
                     let mut source = pty.master.try_clone_reader()?;
                     let parser = screen.clone();
                     thread::spawn(move || {
@@ -365,7 +449,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     });
                     state.identity = Some(format!(
                         "task={} session={} request={request}",
-                        uuid::Uuid::new_v4(),
+                        task_identity,
                         uuid::Uuid::new_v4()
                     ));
                     child = Some(launched);
@@ -377,7 +461,8 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     writer
                         .as_mut()
                         .ok_or("No session; launch first")?
-                        .write_all(&bytes)?;
+                        .try_send(bytes)
+                        .map_err(|e| format!("Native input queue unavailable: {e}; retry"))?;
                 }
                 Request::Key(key) => {
                     let application_cursor = screen.lock().unwrap().screen().application_cursor();
@@ -385,7 +470,8 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     writer
                         .as_mut()
                         .ok_or("No session; launch first")?
-                        .write_all(&bytes)?;
+                        .try_send(bytes)
+                        .map_err(|e| format!("Native input queue unavailable: {e}; retry"))?;
                 }
                 Request::Paste(text) => {
                     if text.len() > 4084 {
@@ -400,15 +486,22 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     writer
                         .as_mut()
                         .ok_or("No session; launch first")?
-                        .write_all(&bytes)?;
+                        .try_send(bytes)
+                        .map_err(|e| format!("Native input queue unavailable: {e}; retry"))?;
                 }
                 Request::Screen => {}
-                Request::Shutdown => {
-                    if let Some(child) = child.as_mut() {
-                        child.kill()?;
-                        child.wait()?;
+                Request::Stop | Request::Shutdown => {
+                    shutdown |= matches!(request, Request::Shutdown);
+                    if stopping.is_none() {
+                        if let Some(active) = child.take() {
+                            writer = None;
+                            native_exit = false;
+                            state.lifecycle = Lifecycle::Stopping;
+                            stopping = Some(crate::lifecycle::stop(active, process_group));
+                        } else {
+                            state.stopped = shutdown;
+                        }
                     }
-                    state.stopped = true;
                 }
             }
             Ok(())
@@ -459,7 +552,22 @@ pub fn scripted_child() -> io::Result<()> {
                 if line == b"exit" {
                     break;
                 }
-                if line == b"identity" {
+                if line == b"no-read" {
+                    println!("input paused\r");
+                    io::stdout().flush()?;
+                    loop {
+                        thread::sleep(Duration::from_secs(60));
+                    }
+                } else if line == b"descendant" {
+                    // Both leader and descendant refuse TERM so bounded KILL is exercised.
+                    ignore_term();
+                    let mut command = Command::new(std::env::current_exe()?);
+                    command.arg("--scripted-descendant");
+                    let mut descendant = command.spawn()?;
+                    thread::spawn(move || {
+                        let _ = descendant.wait();
+                    });
+                } else if line == b"identity" {
                     println!("same-child pid={}\r", std::process::id());
                     print!("fixture> ");
                 } else if line == b"cursor-on" {
@@ -495,4 +603,19 @@ pub fn scripted_child() -> io::Result<()> {
     }
     print!("\x1b[?2004l");
     io::stdout().flush()
+}
+
+fn ignore_term() {
+    // SAFETY: installs the POSIX constant disposition, with no Rust signal handler.
+    unsafe {
+        libc::signal(libc::SIGTERM, libc::SIG_IGN);
+    }
+}
+pub fn scripted_descendant() -> io::Result<()> {
+    ignore_term();
+    println!("descendant pid={}\r", std::process::id());
+    io::stdout().flush()?;
+    loop {
+        thread::sleep(Duration::from_secs(60));
+    }
 }

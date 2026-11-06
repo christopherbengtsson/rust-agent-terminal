@@ -1,6 +1,7 @@
 mod app;
 mod events;
 mod git;
+mod lifecycle;
 mod native_input;
 mod session;
 mod terminal;
@@ -33,13 +34,16 @@ fn main() -> Result<(), Box<dyn Error>> {
             arguments.next().ok_or("Missing state directory")?,
         ));
     }
+    if first.as_deref() == Some(std::ffi::OsStr::new("--scripted-descendant")) {
+        return Ok(session::scripted_descendant()?);
+    }
     if first.as_deref() == Some(std::ffi::OsStr::new("--scripted-child")) {
         return Ok(session::scripted_child()?);
     }
     let repository = match first {
         Some(argument) if argument == "--help" || argument == "-h" => {
             println!(
-                "Usage: agent-terminal [repository-path]\n\nLists Git worktrees in a keyboard-driven dashboard. Defaults to the current directory.\n\nj/k or arrows: select · r: refresh · q/Esc/Ctrl-C: quit\na adopt · l launch scripted PTY · Enter attach · Ctrl-] dashboard\nPrototype fixture only; native CLI support is unverified."
+                "Usage: agent-terminal [repository-path]\n\nLists Git worktrees in a keyboard-driven dashboard. Defaults to the current directory.\n\nj/k or arrows: select · r: refresh · q/Esc/Ctrl-C: quit\na adopt · l launch scripted PTY · Enter attach · Ctrl-] dashboard\ns stop session · d detach preserving execution · q quit and stop managed activity\nPrototype fixture only; native CLI support is unverified."
             );
             return Ok(());
         }
@@ -86,7 +90,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         if let Ok(observation) = client.events.try_recv() {
             app.observe_session(observation);
         }
-        if app.session.stopped {
+        if app.should_exit() {
             break;
         }
         terminal.draw(|frame| ui.draw(frame, &app))?;
@@ -94,8 +98,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             match event::read()? {
                 TerminalEvent::Key(key) => match app.input(key) {
                     Some(Effect::Refresh) => refresh(&mut app, &worker),
+                    Some(Effect::Detach) => break,
                     Some(Effect::Session(request)) => {
                         if let Err(error) = client.send(request) {
+                            app.shutdown_pending = false;
                             app.error = Some(error);
                         }
                     }
