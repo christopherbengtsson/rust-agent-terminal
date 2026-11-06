@@ -134,7 +134,7 @@ impl Client {
                 if let Err(error) = transport(directory, rx, &tx) {
                     let _ = tx.send(Observation {
                         connection_lost: true,
-                        error: Some(format!("Dashboard disconnected; press d to detach locally, then reopen. Process state unknown; stop unconfirmed. ({error})")),
+                        error: Some(format!("{error}. Dashboard disconnected; press d to detach locally, then reopen. Process state unknown; stop unconfirmed.")),
                         ..Observation::default()
                     });
                 }
@@ -1396,6 +1396,9 @@ pub fn scripted_child() -> io::Result<()> {
                     print!("Approve action? [y/n] ");
                     approval = true;
                 } else {
+                    if line == b"attach13-nonce" {
+                        println!("input13-received_ns={}\r", fixture_clock()?);
+                    }
                     println!(
                         "received: {}\r",
                         String::from_utf8_lossy(&line).escape_debug()
