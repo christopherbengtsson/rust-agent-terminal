@@ -9,23 +9,20 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 use std::{
-    io::{self, Read, Write},
-    os::unix::{io::AsRawFd, net::UnixListener, process::CommandExt},
-    process::{Command as Process, Stdio},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
-        mpsc::{self, Receiver, SyncSender},
+        mpsc,
     },
     thread,
-    time::{Duration, Instant},
 };
-const MAX_RECORDS: usize = 256;
+const MAX_RECORDS: usize = 32;
 const OUTPUT: usize = 8192;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Phase {
     Prepared,
     Authorized,
+    Running,
     Succeeded,
     Failed,
     Cancelled,
@@ -47,7 +44,7 @@ impl Record {
     pub fn reserved(&self) -> bool {
         matches!(
             self.phase,
-            Phase::Prepared | Phase::Authorized | Phase::Uncertain
+            Phase::Prepared | Phase::Authorized | Phase::Running | Phase::Uncertain | Phase::Failed
         )
     }
 }
@@ -55,7 +52,7 @@ impl Record {
 pub struct View {
     pub records: Vec<Record>,
     pub pending: bool,
-    pub authorized_start: Option<String>,
+    pub armed_launches: Vec<String>,
     pub error: Option<String>,
 }
 #[derive(Default)]
@@ -92,9 +89,9 @@ pub struct Coordinator {
     job: Option<Job>,
     pending: Option<(uuid::Uuid, Record, bool)>,
     unsaved: Option<Record>,
-    start: Option<String>,
+    armed: std::collections::BTreeSet<String>,
     loaded: bool,
-    cancelled: bool,
+    cancelled: std::collections::BTreeSet<String>,
 }
 impl Coordinator {
     pub fn new(storage: &Worker) -> Self {
@@ -105,26 +102,38 @@ impl Coordinator {
             job: None,
             pending: None,
             unsaved: None,
-            start: None,
+            armed: Default::default(),
             loaded: false,
-            cancelled: false,
+            cancelled: Default::default(),
         }
     }
     pub fn busy(&self) -> bool {
         self.job.is_some() || self.pending.is_some() || self.unsaved.is_some()
     }
+    pub fn ready(&self) -> bool {
+        self.loaded
+    }
+    pub fn capacity(&self) -> bool {
+        self.view.records.len() < MAX_RECORDS
+    }
     pub fn admission_busy(&self) -> bool {
         !self.loaded || self.busy()
     }
-    pub fn reservations(&self) -> usize {
-        self.view.records.iter().filter(|r| r.reserved()).count()
-    }
+
     pub fn reserved(&self, checkout: &CheckoutIdentity) -> bool {
         self.view
             .records
             .iter()
             .filter(|r| {
-                r.reserved() || self.busy() && self.current_attempt() == Some(r.attempt.as_str())
+                !self
+                    .view
+                    .records
+                    .iter()
+                    .rev()
+                    .find(|other| other.creation.intent.request == r.creation.intent.request)
+                    .is_some_and(|latest| latest.attempt != r.attempt)
+                    && (r.reserved()
+                        || self.busy() && self.current_attempt() == Some(r.attempt.as_str()))
             })
             .any(|r| {
                 r.creation.checkout.as_ref().is_some_and(|c| {
@@ -159,6 +168,7 @@ impl Coordinator {
     }
     fn save(&mut self, record: Record, storage: &Worker) {
         let id = uuid::Uuid::new_v4();
+        self.publish(record.clone());
         self.unsaved = Some(record.clone());
         match storage
             .commands
@@ -180,13 +190,11 @@ impl Coordinator {
         };
         if self.admission_busy() || self.view.records.len() >= MAX_RECORDS {
             self.view.error=Some("Setup capacity unavailable; workspace retained. Explicit recovery required before Start".into());
-            self.start = None;
             return;
         }
-        self.cancelled = false;
-        self.start = handoff
-            .authorized_start
-            .then(|| handoff.record.intent.request.clone());
+        if handoff.authorized_start {
+            self.armed.insert(handoff.record.intent.request.clone());
+        }
         match Execution::prepared() {
             Ok(execution) => self.save(
                 Record {
@@ -202,31 +210,51 @@ impl Coordinator {
                 storage,
             ),
             Err(e) => {
-                self.start = None;
+                self.armed.remove(&handoff.record.intent.request);
                 self.view.error = Some(format!("Setup not prepared: {e}; workspace retained"));
             }
         }
     }
     pub fn cancel(&mut self, creation: Option<&str>) {
-        let applies = creation.is_none()
-            || creation == self.start.as_deref()
-            || self
-                .view
-                .records
-                .last()
-                .is_some_and(|r| Some(r.creation.intent.request.as_str()) == creation);
-        if applies {
-            self.cancelled = true;
-            self.start = None;
-            self.launch = None;
-            if let Some(job) = &self.job {
-                job.cancel.store(true, Ordering::Release);
-            }
+        let current = self.current_attempt().map(str::to_owned);
+        let matches = |r: &Record| creation.is_none_or(|id| r.creation.intent.request == id);
+        let stop_job = current
+            .as_deref()
+            .and_then(|id| self.view.records.iter().find(|r| r.attempt == id))
+            .is_some_and(matches);
+        for r in self.view.records.iter().filter(|r| matches(r)) {
+            self.cancelled.insert(r.attempt.clone());
+            self.armed.remove(&r.creation.intent.request);
         }
+        if creation.is_none() {
+            self.armed.clear();
+        }
+        if self
+            .launch
+            .as_ref()
+            .is_some_and(|l| creation.is_none_or(|id| l.record.intent.request == id))
+        {
+            self.launch = None;
+        }
+        if stop_job && let Some(job) = &self.job {
+            job.cancel.store(true, Ordering::Release);
+        }
+        self.view.armed_launches = self.armed.iter().cloned().collect();
     }
     pub fn cancel_checkout(&mut self, checkout: &CheckoutIdentity) {
-        if self.reserved(checkout) {
-            self.cancel(None);
+        let requests: Vec<_> = self
+            .view
+            .records
+            .iter()
+            .filter(|r| {
+                r.creation.checkout.as_ref().is_some_and(|c| {
+                    c.common_dir == checkout.common_dir && c.git_dir == checkout.git_dir
+                })
+            })
+            .map(|r| r.creation.intent.request.clone())
+            .collect();
+        for request in requests {
+            self.cancel(Some(&request));
         }
     }
     pub fn retry_storage(&mut self, storage: &Worker) {
@@ -253,6 +281,17 @@ impl Coordinator {
             self.view.error = Some("Setup attempt unavailable".into());
             return;
         };
+        if self
+            .view
+            .records
+            .iter()
+            .rev()
+            .find(|r| r.creation.intent.request == record.creation.intent.request)
+            .is_some_and(|r| r.attempt != record.attempt)
+        {
+            self.view.error = Some("Setup attempt superseded; recover the latest attempt".into());
+            return;
+        }
         if !matches!(
             record.phase,
             Phase::Failed
@@ -260,19 +299,23 @@ impl Coordinator {
                 | Phase::Uncertain
                 | Phase::Prepared
                 | Phase::Authorized
+                | Phase::Running
         ) {
             self.view.error = Some("Setup already settled; use explicit Start".into());
             return;
         }
         // Reconciliation is read-only and runs off the routing loop.
-        if record.reserved() {
+        if matches!(
+            record.phase,
+            Phase::Prepared | Phase::Authorized | Phase::Running | Phase::Uncertain
+        ) {
             if !informed {
                 self.view.error=Some("Setup outcome uncertain. Informed retry may repeat external effects; reconcile survivors before retry/skip".into());
                 return;
             }
             let mut next = record.clone();
             next.phase = Phase::Uncertain;
-            self.start = None;
+            self.armed.remove(&record.creation.intent.request);
             let (tx, events) = mpsc::sync_channel(1);
             let (ack, _) = mpsc::sync_channel(1);
             let cancel = Arc::new(AtomicBool::new(false));
@@ -302,7 +345,7 @@ impl Coordinator {
             return;
         }
         self.view.error = None;
-        self.cancelled = false;
+
         let mut next = record;
         if retry {
             if self.view.records.len() >= MAX_RECORDS {
@@ -335,7 +378,13 @@ impl Coordinator {
                 match result {
                     Ok(records) => {
                         for mut r in records.clone() {
-                            if r.reserved() {
+                            if matches!(
+                                r.phase,
+                                Phase::Prepared
+                                    | Phase::Authorized
+                                    | Phase::Running
+                                    | Phase::Uncertain
+                            ) {
                                 r.phase = Phase::Uncertain;
                                 r.message="Restored setup outcome uncertain; no automatic retry or native launch. Reconcile survivors before informed Retry/Continue".into();
                             }
@@ -364,7 +413,7 @@ impl Coordinator {
                 self.view.error = None;
                 if record.phase == Phase::Prepared && self.job.is_none() {
                     // Stop while a prepare save was outstanding must never spawn a child.
-                    if self.cancelled {
+                    if self.cancelled.contains(&record.attempt) {
                         let mut r = record;
                         r.phase = Phase::Cancelled;
                         r.message = "Setup cancelled before spawn; pending launch disarmed".into();
@@ -380,14 +429,14 @@ impl Coordinator {
                             self.save(r, storage);
                         }
                     }
-                } else if record.phase == Phase::Authorized {
+                } else if matches!(record.phase, Phase::Authorized | Phase::Running) {
                     if let Some(job) = &self.job {
                         let _ = job.acknowledgement.try_send(());
                     }
                 } else if matches!(record.phase, Phase::Succeeded | Phase::Skipped)
-                    && self.start.as_deref() == Some(&record.creation.intent.request)
+                    && self.armed.contains(&record.creation.intent.request)
                 {
-                    self.start = None;
+                    self.armed.remove(&record.creation.intent.request);
                     self.launch = Some(LaunchHandoff {
                         record: record.creation,
                         authorized_start: true,
@@ -402,13 +451,13 @@ impl Coordinator {
             && self.unsaved.is_none()
             && let Some(record) = self.job.as_ref().and_then(|j| j.events.try_recv().ok())
         {
-            if record.phase != Phase::Authorized {
+            if !matches!(record.phase, Phase::Authorized | Phase::Running) {
                 self.job = None;
             }
             self.save(record, storage);
         }
         self.view.pending = self.busy();
-        self.view.authorized_start = self.start.clone();
+        self.view.armed_launches = self.armed.iter().cloned().collect();
         if let Some(job) = &self.job
             && let Some(record) = self.view.records.last_mut()
         {

@@ -186,7 +186,9 @@ impl AgentSession {
         let directory = directory.as_path();
         use crate::persistence::Completion;
         match event {
-            Completion::Creations(_)
+            Completion::Setups(_)
+            | Completion::SetupSaved(..)
+            | Completion::Creations(_)
             | Completion::CreationSaved(..)
             | Completion::Registry(_)
             | Completion::Selected(..)
@@ -851,7 +853,7 @@ impl AgentSession {
                 return Err("Launch reconciliation pending; wait for durable outcome".into());
             }
             match request {
-                Request::EditorSource{..} | Request::InspectWorking{..} | Request::PreviewCreation{..} | Request::CreateWorkspace(_) | Request::RecoverCreation{..} | Request::CancelCreation{..} | Request::RenameWorkspace { .. } | Request::Session { .. } | Request::SelectSession(_) | Request::Discover { .. } | Request::Adopt(_) | Request::Register(_) => unreachable!("workspace requests are supervisor-owned"),
+                Request::EditorSource{..} | Request::InspectWorking{..} | Request::PreviewCreation{..} | Request::ConfigureSetup {..} | Request::RecoverSetup {..} | Request::CreateWorkspace(_) | Request::RecoverCreation{..} | Request::CancelCreation{..} | Request::RenameWorkspace { .. } | Request::Session { .. } | Request::SelectSession(_) | Request::Discover { .. } | Request::Adopt(_) | Request::Register(_) => unreachable!("workspace requests are supervisor-owned"),
                 Request::Reconcile => {
                     if self.execution.child.is_some() || self.execution.stopping.is_some() { return Err("Session owned by current supervisor; stop it normally".into()); }
                     if let Some(evidence) = &self.state.execution { evidence.reconcile()?; }

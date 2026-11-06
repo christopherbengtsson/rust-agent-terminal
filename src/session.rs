@@ -103,6 +103,7 @@ fn transport(
             || greeting.sessions_protocol != 1
             || greeting.prompt_naming_protocol != 1
             || greeting.creation_protocol != 1
+            || greeting.setup_protocol != 1
         {
             events.send(greeting)?;
             return Ok(());
@@ -142,6 +143,7 @@ fn transport(
         || greeting.sessions_protocol != 1
         || greeting.prompt_naming_protocol != 1
         || greeting.creation_protocol != 1
+        || greeting.setup_protocol != 1
     {
         greeting.control_denied = true;
         greeting.error = Some("Existing supervisor does not support this dashboard's worktree, registry, session or comparison protocol. Use its compatible dashboard to stop activity before upgrading; d detaches locally.".into());
@@ -303,6 +305,8 @@ impl Delivery {
 // Runtime selection belongs to the supervisor. Each concrete owner retains its
 // private launch, cleanup and capture phases while another owner is selected.
 struct Sessions {
+    setup_reservations: Vec<crate::git::CheckoutIdentity>,
+    setup_ready: bool,
     entries: Vec<(String, agent_session::AgentSession)>,
     selected: usize,
     directory: PathBuf,
@@ -391,6 +395,8 @@ impl Sessions {
             None
         };
         Ok(Self {
+            setup_reservations: Vec::new(),
+            setup_ready: false,
             entries,
             selected: 0,
             directory: directory.to_owned(),
@@ -618,6 +624,8 @@ impl Sessions {
                         | Request::Adopt(_)
                         | Request::Register(_)
                         | Request::PreviewCreation { .. }
+                        | Request::ConfigureSetup { .. }
+                        | Request::RecoverSetup { .. }
                         | Request::CreateWorkspace(_)
                         | Request::RecoverCreation { .. }
                         | Request::CancelCreation { .. }
@@ -700,12 +708,31 @@ impl Sessions {
                 | Request::LaunchCodex(_)
                 | Request::Resume(_)
         ) {
+            if !self.setup_ready {
+                self.entries[index].1.report_error(
+                    "Setup recovery is loading; retry after the committed receipts arrive".into(),
+                );
+                return;
+            }
+            if self.entries[index]
+                .1
+                .observation()
+                .checkout_identity
+                .is_some_and(|target| {
+                    self.setup_reservations
+                        .iter()
+                        .any(|r| r.common_dir == target.common_dir && r.git_dir == target.git_dir)
+                })
+            {
+                self.entries[index].1.report_error("Workspace setup owns this checkout or has an uncertain outcome; Stop/reconcile setup before Start".into());
+                return;
+            }
             let active = self
                 .entries
                 .iter()
                 .filter(|(_, owner)| owner.reserved())
                 .count();
-            if active >= 32 && !self.entries[index].1.reserved() {
+            if active + self.setup_reservations.len() >= 32 && !self.entries[index].1.reserved() {
                 self.entries[index].1.report_error(
                     "At most 32 unsettled session executions or capture streams can be admitted"
                         .into(),
@@ -782,6 +809,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
         }
     };
     let mut creation = crate::creation::Coordinator::new(&storage);
+    let mut setup = crate::setup::Coordinator::new(&storage);
     let mut registry = restored.state.registry.clone();
     let mut registry_error = None;
     let mut registry_operation = None;
@@ -904,11 +932,14 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         while let Ok(event) = storage.events.try_recv() {
+            setup.complete(&event, &storage);
             if let Some(snapshot) = creation.complete(&event, &storage) {
                 registry = snapshot;
             }
             match event {
-                crate::persistence::Completion::Creations(_)
+                crate::persistence::Completion::Setups(_)
+                | crate::persistence::Completion::SetupSaved(..)
+                | crate::persistence::Completion::Creations(_)
                 | crate::persistence::Completion::CreationSaved(..) => {}
                 crate::persistence::Completion::Registry(snapshot) => registry = snapshot,
                 crate::persistence::Completion::Selected(operation, result) => {
@@ -951,10 +982,32 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         creation.advance(&storage);
+        if let Some(handoff) = creation.launch.take() {
+            let command = registry
+                .projects
+                .iter()
+                .find(|p| p.id == handoff.record.intent.project)
+                .and_then(|p| p.setup_command.clone());
+            setup.accept(handoff, command, &storage);
+        }
+        setup.advance(&storage);
+        session.setup_reservations = setup
+            .view
+            .records
+            .iter()
+            .filter_map(|r| {
+                r.creation
+                    .checkout
+                    .as_ref()
+                    .filter(|c| setup.reserved(c))
+                    .cloned()
+            })
+            .collect();
+        session.setup_ready = setup.ready();
         if let Some(crate::creation::LaunchHandoff {
             record,
             authorized_start,
-        }) = creation.launch.take()
+        }) = setup.launch.take()
             && let Some(checkout) = record.checkout
         {
             match session.adopt_checkout_at(
@@ -1003,6 +1056,8 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
         state.registry_protocol = 1;
         state.prompt_naming_protocol = 1;
         state.creation_protocol = 1;
+        state.setup_protocol = 1;
+        state.setup = setup.view.clone();
         let launches = std::mem::take(&mut state.creation.launches);
         state.creation = creation.view.clone();
         state.creation.launches = launches
@@ -1028,7 +1083,8 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             && diff_job.is_none()
             && diff_save.is_none()
             && registry_operation.is_none()
-            && !creation.busy();
+            && !creation.busy()
+            && !setup.busy();
         if state.stopped && controller.is_none() {
             fs::remove_file(&socket)?;
             return Ok(());
@@ -1047,6 +1103,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                             sessions_protocol: 1,
                             prompt_naming_protocol: 1,
                             creation_protocol: 1,
+                            setup_protocol: 1,
                             control_denied: true,
                             error: Some("Another dashboard controls this supervisor; close it before reconnecting".into()),
                             ..Observation::default()
@@ -1137,6 +1194,19 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             && let Some(job) = &source_job
         {
             job.cancel();
+        }
+
+        if let Request::Session {
+            target,
+            session: expected,
+            command,
+        } = &request
+            && matches!(**command, Request::Stop)
+            && let Some((_, owner)) = session.entries.iter_mut().find(|(id, _)| id == target)
+            && owner.observation().session_identity.map(|id| id.session) == *expected
+            && let Some(checkout) = owner.observation().checkout_identity
+        {
+            setup.cancel_checkout(&checkout);
         }
 
         match request {
@@ -1292,10 +1362,35 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
             }
+            Request::ConfigureSetup { project, command } => {
+                let operation = uuid::Uuid::new_v4();
+                if registry_operation.is_some() {
+                    registry_error = Some("Project configuration save pending".into());
+                } else if let Err(e) = crate::setup::validate_command(&command) {
+                    registry_error = Some(e);
+                } else {
+                    match storage
+                        .commands
+                        .try_send(crate::persistence::Command::ConfigureSetup(
+                            operation, project, command,
+                        )) {
+                        Ok(()) => registry_operation = Some(operation),
+                        Err(e) => {
+                            registry_error = Some(format!("Setup configuration not saved: {e}"))
+                        }
+                    }
+                }
+            }
+            Request::RecoverSetup {
+                attempt,
+                retry,
+                informed,
+            } => setup.recover(&attempt, retry, informed, &storage),
             Request::CancelCreation {
                 request,
                 native_session,
             } => {
+                setup.cancel(Some(&request));
                 session.cancel_creation_launch(&request, native_session.as_deref(), &storage);
                 creation.handle(
                     Request::CancelCreation {
@@ -1310,7 +1405,13 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             request @ (Request::PreviewCreation { .. }
             | Request::CreateWorkspace(_)
             | Request::RecoverCreation { .. }) => {
-                creation.handle(request, &registry, &storage, directory);
+                if matches!(request, Request::CreateWorkspace(_))
+                    && (setup.admission_busy() || !setup.capacity())
+                {
+                    creation.view.error=Some("Project setup is still pending; workspace creation waits for setup outcome".into());
+                } else {
+                    creation.handle(request, &registry, &storage, directory);
+                }
             }
             Request::Register(bytes) => {
                 registry_error = None;
@@ -1354,10 +1455,12 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             Request::RetryStorage => {
+                setup.retry_storage(&storage);
                 creation.retry_storage(&storage);
                 session.handle(Request::RetryStorage, &storage, adoption.is_some());
             }
             Request::Stop | Request::Shutdown => {
+                setup.cancel(None);
                 creation.cancel();
                 if let Some(job) = &source_job {
                     job.cancel();
@@ -1395,6 +1498,8 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
         state.registry_protocol = 1;
         state.prompt_naming_protocol = 1;
         state.creation_protocol = 1;
+        state.setup_protocol = 1;
+        state.setup = setup.view.clone();
         let launches = std::mem::take(&mut state.creation.launches);
         state.creation = creation.view.clone();
         state.creation.launches = launches
@@ -1420,7 +1525,8 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             && diff_job.is_none()
             && diff_save.is_none()
             && registry_operation.is_none()
-            && !creation.busy();
+            && !creation.busy()
+            && !setup.busy();
         if controller.is_some() {
             delivery = Some(Delivery::new(&mut state)?);
             subscriber_frame_high_water =

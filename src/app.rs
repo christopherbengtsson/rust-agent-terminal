@@ -42,6 +42,7 @@ pub struct EditorContext {
 }
 
 pub struct App {
+    pub setup_input: Option<(String, String)>,
     pub create_form: Option<CreateForm>,
     pub creation_open: bool,
     pub creation_selected: Option<String>,
@@ -84,6 +85,7 @@ pub struct App {
 impl App {
     pub fn new(repository: PathBuf) -> Self {
         Self {
+            setup_input: None,
             create_form: None,
             creation_open: false,
             creation_selected: None,
@@ -410,6 +412,74 @@ impl App {
                 return None;
             }
             return Some(self.session_effect(Request::Key(key)));
+        }
+        if let Some((_, command)) = &mut self.setup_input {
+            match key.code {
+                KeyCode::Esc => self.setup_input = None,
+                KeyCode::Enter => {
+                    let (project, command) = self.setup_input.take().unwrap();
+                    return Some(Effect::Session(Request::ConfigureSetup {
+                        project,
+                        command: (!command.trim().is_empty()).then_some(command),
+                    }));
+                }
+                KeyCode::Backspace => {
+                    command.pop();
+                }
+                KeyCode::Char('u') if key.modifiers == KeyModifiers::CONTROL => command.clear(),
+                KeyCode::Char(c)
+                    if !key.modifiers.intersects(
+                        KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER,
+                    ) =>
+                {
+                    if command.len() + c.len_utf8() <= 4096 {
+                        command.push(c);
+                    }
+                }
+                _ => {}
+            }
+            return None;
+        }
+        if self.create_form.is_none()
+            && key.code == KeyCode::Char('U')
+            && !key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER)
+        {
+            let project = self
+                .workspace_selected
+                .as_ref()
+                .or(self.session.registry.selected.as_ref())
+                .and_then(|id| {
+                    self.session
+                        .registry
+                        .workspaces
+                        .iter()
+                        .find(|w| &w.id == id)
+                })
+                .and_then(|w| w.project.as_ref())
+                .and_then(|id| self.session.registry.projects.iter().find(|p| &p.id == id))
+                .or_else(|| self.session.registry.projects.first());
+            if let Some(project) = project {
+                self.setup_input = Some((
+                    project.id.clone(),
+                    project.setup_command.clone().unwrap_or_default(),
+                ));
+            }
+            return None;
+        }
+        if self.creation_open
+            && self.create_form.is_none()
+            && matches!(key.code, KeyCode::Char('T' | 'I' | 'Y'))
+        {
+            if let Some(record) = self.setup_record() {
+                return Some(Effect::Session(Request::RecoverSetup {
+                    attempt: record.attempt.clone(),
+                    retry: key.code != KeyCode::Char('Y'),
+                    informed: matches!(key.code, KeyCode::Char('I' | 'Y')),
+                }));
+            }
+            return None;
         }
         if self.creation_open
             && self.create_form.is_none()
@@ -1269,6 +1339,15 @@ impl App {
         }))
     }
 
+    pub fn setup_record(&self) -> Option<&crate::setup::Record> {
+        let request = self.creation_record().map(|r| r.intent.request.as_str());
+        self.session
+            .setup
+            .records
+            .iter()
+            .rev()
+            .find(|r| Some(r.creation.intent.request.as_str()) == request)
+    }
     pub fn creation_record(&self) -> Option<&crate::creation::Record> {
         if let Some(request) = &self.creation_selected {
             self.session
@@ -1281,7 +1360,9 @@ impl App {
         }
     }
     pub fn keyboard_help(&self) -> &'static str {
-        if self.create_form.is_some() {
+        if self.setup_input.is_some() {
+            "Project setup: /bin/sh -c command · Enter save · empty disables · Ctrl-U clear · Esc cancel"
+        } else if self.create_form.is_some() {
             "New workspace: Tab fields · Left/Right agent · Enter Create without starting · Ctrl-S Create and start · Esc cancel"
         } else if self.diff.is_some() {
             "f/Esc back · s stop · q quit · e inspect ALL · o edit LIVE file · E LIVE workspace · j/k file · arrows scroll · w Working/Whole · b base · r refresh · d detach"
@@ -1292,7 +1373,7 @@ impl App {
         } else if self.project_input.is_some() {
             "Add project: existing local path · Enter register without launch · Esc cancel"
         } else if self.workspaces_open {
-            "q quit · h latest history · N create · w/Esc back · j/k select · [/] project · Enter open · a adopt · R rename · A add · E edit LIVE · f diff · d detach"
+            "q quit · h latest history · N create · U setup · w/Esc back · j/k select · [/] project · Enter open · a adopt · R rename · A add · E edit LIVE · f diff · d detach"
         } else if self.attached {
             "Native input · Ctrl-C interrupt · Ctrl-] / Ctrl-5 dashboard (keeps session running)"
         } else if self.cleanup_open {
@@ -1302,11 +1383,17 @@ impl App {
         } else if self.session.lifecycle == crate::session::Lifecycle::Interrupted {
             "u reconcile · v resume · g cleanup · h history · d detach · q quit/stop · j/k select · r refresh"
         } else {
-            "q quit/stop · s stop · h history · Enter attach · x new Codex · v resume · N create · O receipt · E LIVE · f diff · w workspaces · a adopt · d detach"
+            "q quit/stop · s stop · h history · Enter attach · x new Codex · v resume · N create · O receipt · U setup · E LIVE · f diff · w workspaces · a adopt · d detach"
         }
     }
 
     pub fn paste(&mut self, text: String) -> Option<Effect> {
+        if let Some((_, command)) = &mut self.setup_input {
+            if command.len() + text.len() <= 4096 && !text.contains('\0') {
+                command.push_str(&text);
+            }
+            return None;
+        }
         if let Some(form) = &mut self.create_form {
             let dest = match form.field {
                 0 => Some(&mut form.intent.base),
@@ -2135,6 +2222,7 @@ mod tests {
                 .registry
                 .projects
                 .push(crate::registry::Project {
+                    setup_command: None,
                     id: "project".into(),
                     name: "My project".into(),
                     common_dir: b"/repo/.git".to_vec(),
@@ -2177,6 +2265,7 @@ mod tests {
             .registry
             .projects
             .push(crate::registry::Project {
+                setup_command: None,
                 id: "project".into(),
                 name: "Project".into(),
                 common_dir: vec![],
@@ -2200,6 +2289,7 @@ mod tests {
                 .registry
                 .projects
                 .push(crate::registry::Project {
+                    setup_command: None,
                     id: "project".into(),
                     name: "Project".into(),
                     common_dir: vec![],

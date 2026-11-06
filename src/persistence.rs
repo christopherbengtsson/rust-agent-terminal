@@ -1391,7 +1391,7 @@ impl Store {
     }
     fn setups(&self) -> Result<Vec<crate::setup::Record>> {
         self.db
-            .prepare("SELECT record FROM workspace_setup ORDER BY rowid LIMIT 256")?
+            .prepare("SELECT record FROM workspace_setup ORDER BY rowid LIMIT 32")?
             .query_map([], |r| r.get::<_, String>(0))?
             .map(|j| Ok(serde_json::from_str(&j?)?))
             .collect()
