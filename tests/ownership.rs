@@ -517,3 +517,33 @@ fn saturated_native_input_does_not_block_stop_control() {
         started.elapsed()
     );
 }
+
+#[test]
+fn stopped_history_survives_restart_and_missing_checkout_without_launching() {
+    let fixture = Fixture::new();
+    let mut dashboard = fixture.open();
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted");
+    dashboard.send(b"l");
+    dashboard.wait("fixture>");
+    dashboard.send(b"retained-context-08\r");
+    dashboard.wait("received: retained-context-08");
+    dashboard.send(b"exit\r");
+    dashboard.wait("Process: Exited");
+    dashboard.send(b"q");
+    let deadline = Instant::now() + Duration::from_secs(8);
+    while dashboard.child.try_wait().unwrap().is_none() {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    std::fs::rename(&fixture.repository, fixture.temp.path().join("removed-checkout")).unwrap();
+    let mut restored = fixture.open();
+    restored.wait("Process: Exited");
+    restored.send(b"h");
+    restored.wait("Retained history");
+    restored.wait("received: retained-context-08");
+    restored.wait("\\u{1b}[?2004h");
+    assert!(!restored.screen.screen().contents().contains("Focus: session"));
+    restored.send(b"q");
+}
