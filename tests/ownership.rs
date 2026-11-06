@@ -1937,9 +1937,13 @@ fn codex_status_requires_current_attributed_evidence_despite_liveness_and_prose(
     // Reuse the shared scripted child through the normal Codex launch boundary.
     let executable = env!("CARGO_BIN_EXE_agent-terminal").replace('\'', "'\\''");
     let wrapper = tools.join("codex");
+    let invocation = fixture.temp.path().join("codex-invocation");
     std::fs::write(
         &wrapper,
-        format!("#!/bin/sh\nexec '{executable}' --scripted-child\n"),
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\nexec '{executable}' --scripted-child\n",
+            invocation.display()
+        ),
     )
     .unwrap();
     std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -1962,9 +1966,17 @@ fn codex_status_requires_current_attributed_evidence_despite_liveness_and_prose(
             .contains("Process: Running")
     );
     let channel = UnixDatagram::unbound().unwrap();
-    channel
-        .send_to(b"{", fixture.state().join("codex-status.sock"))
+    let argv = std::fs::read_to_string(invocation).unwrap();
+    let endpoint = argv
+        .split("--codex-status-hook '")
+        .nth(1)
+        .unwrap()
+        .split('\'')
+        .next()
         .unwrap();
+    assert!(endpoint.starts_with("/tmp/rat-"));
+    assert!(endpoint.len() < 104, "macOS Unix socket pathname must fit");
+    channel.send_to(b"{", endpoint).unwrap();
     dashboard.wait("invalid or unattributed Codex evidence");
     dashboard.send(b"fixture-failed-test\r");
     dashboard.wait("test result: FAILED; agent continues");

@@ -573,7 +573,8 @@ impl Sessions {
                 .count();
             if active >= 32 && !self.entries[index].1.reserved() {
                 self.entries[index].1.report_error(
-                    "At most 32 concurrent session executions can be admitted".into(),
+                    "At most 32 unsettled session executions or capture streams can be admitted"
+                        .into(),
                 );
                 return;
             }

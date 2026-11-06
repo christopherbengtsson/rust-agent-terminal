@@ -128,6 +128,8 @@ pub fn metadata(state: &Observation) -> Box<Observation> {
     saved.history = None;
     saved.discovery = None;
     saved.registry = Default::default();
+    saved.sessions.clear();
+    saved.control_target.clear();
     saved.registry_pending = false;
     saved.adoption_pending = false;
     saved.cleanup = None;
@@ -1265,9 +1267,6 @@ impl Store {
             .query_row("SELECT task FROM app WHERE id=1", [], |row| row.get(0))
             .optional()?;
         crate::registry::snapshot(&self.db, current.as_deref())
-    }
-    fn save(&mut self, state: &Observation, path: Option<Vec<u8>>, task: String) -> Result<()> {
-        self.save_named(state, path, task, None)
     }
     fn save_named(
         &mut self,

@@ -827,6 +827,81 @@ mod tests {
     }
 
     #[test]
+    fn first_prompt_freezes_the_conversation_when_its_modal_opens() {
+        let mut app = App::new("repo".into());
+        let identity = |session: &str| crate::events::SessionIdentity {
+            task: "task-a".into(),
+            session: session.into(),
+            request: "request-a".into(),
+        };
+        app.observe_session(Observation {
+            control_target: "owner-a".into(),
+            session_identity: Some(identity("conversation-a")),
+            ..Observation::default()
+        });
+        app.input(KeyEvent::new(KeyCode::Char('C'), KeyModifiers::SHIFT));
+        app.paste("Explicit first prompt".into());
+        app.observe_session(Observation {
+            control_target: "owner-a".into(),
+            session_identity: Some(identity("replacement-conversation")),
+            ..Observation::default()
+        });
+        assert!(
+            matches!(app.input(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)), Some(Effect::Session(Request::Session { target, session: Some(session), command }))
+            if target == "owner-a" && session == "conversation-a" && matches!(*command, Request::LaunchNative { .. }))
+        );
+    }
+
+    #[test]
+    fn workspace_enter_selects_its_running_owner_and_rejects_late_previous_screen() {
+        let mut app = App::new("repo".into());
+        let mut state = Observation {
+            control_target: "owner-a".into(),
+            ..Observation::default()
+        };
+        state.registry.workspaces.push(crate::registry::Workspace {
+            id: "workspace-b".into(),
+            task: "task-b".into(),
+            legacy_tasks: vec![],
+            name: "B".into(),
+            project: None,
+            path: Some(b"other".to_vec()),
+            checkout: None,
+            sessions: vec!["conversation-b".into()],
+        });
+        state.sessions.push(crate::events::SessionSummary {
+            target: "owner-b".into(),
+            task: "task-b".into(),
+            session: Some("conversation-b".into()),
+            lifecycle: crate::events::Lifecycle::Running,
+            reserved: true,
+            ..Default::default()
+        });
+        app.observe_session(state);
+        app.input(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE));
+        assert!(
+            matches!(app.input(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)), Some(Effect::Session(Request::SelectSession(target))) if target == "owner-b")
+        );
+        app.observe_session(Observation {
+            control_target: "owner-a".into(),
+            screen: "late A".into(),
+            ..Observation::default()
+        });
+        app.observe_session(Observation {
+            control_target: "owner-b".into(),
+            screen: "current B".into(),
+            lifecycle: crate::events::Lifecycle::Running,
+            identity: Some("session-b".into()),
+            ..Observation::default()
+        });
+        assert_eq!(app.session.screen, "current B");
+        assert!(app.attached);
+        assert!(
+            matches!(app.viewport(Some((24,100))), Some(Effect::Session(Request::Session { target, .. })) if target == "owner-b")
+        );
+    }
+
+    #[test]
     fn explicit_adoption_accepts_new_owner_after_pending_old_owner_reply() {
         let mut app = App::new("repo".into());
         app.apply(Event::WorktreesLoaded(Ok(vec![worktree("other")])));
