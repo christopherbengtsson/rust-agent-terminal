@@ -1,7 +1,7 @@
 # 09: Create and start an independent workspace
 
 Status: ready-for-agent
-Resolved: no
+Resolved: yes
 Blocked by: 06, 07
 
 **What to build:** Create a new branch and folder from the chosen base and optionally start the selected agent with the supplied prompt in one explicit flow.
@@ -21,10 +21,9 @@ implementation or new validation evidence is claimed by this ticket.
 Implementation is ready on `feature/m2-09-create-workspace` in `/tmp/rat-m2-09`.
 It includes the current Whole workspace integration (`ea7deea`) and corrected
 compatibility checkpoint (`0690026`), plus current external-editor integration
-(`438b75d`) and the frozen compatibility source `5b3ab57`. This ticket intentionally remains
-`Resolved: no` while reopened upstream tickets 06/08 await their frozen full gate.
-A fresh merger can integrate this branch and close its criteria afterward; no
-additional individual full aggregate is claimed.
+(`438b75d`) and the frozen compatibility source `5b3ab57`. At feature handoff this ticket remained unresolved pending the upstream 06/08
+compatibility closure and merged-source checks recorded below. No additional
+individual full aggregate was claimed.
 
 [Evidence](../../../docs/proofs/m2-09-workspace-creation.md): six real-Git/coordinator
 checks; App and normal/small rendering checks; Controller creation/restart,
@@ -43,3 +42,16 @@ prompt adapter retains its ticket 07 qualification. No native prompt-turn,
 physical-terminal, sleep/wake or reboot qualification is added. The extra isolated
 creation-protocol guard case compiles and is delegated to the merger's combined
 execution under the shared test-slot schedule. Configured setup remains ticket 10.
+
+
+Closed after integration merge `239cb51`, following the explicit assembled 06/08
+closure merged at `0b28c5f`. The merged source passed six creation tests, 26 App
+tests, 17 UI tests (including normal/compact action visibility and unchanged
+native viewport geometry), and the actual legacy-owner refusal test with its
+creation-protocol-zero matrix case (16.57 seconds). Both creation ownership
+scenarios passed serially (2.43 and 3.42 seconds). Locked build, formatting and
+warnings-denied all-target Clippy passed. Concise context-specific footer help
+and the upstream authenticated PTY cleanup guards are preserved. Ticket 10 can
+consume the typed immutable `LaunchHandoff` interface. The original failed
+06/08 aggregate remains a failed aggregate; its assembled correction and this
+scoped creation gate do not replace ticket 19's final all-feature gate.

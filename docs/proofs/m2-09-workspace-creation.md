@@ -1,8 +1,10 @@
 # Independent workspace creation: scoped evidence
 
-Ticket 09 implements a usable creation flow; the upstream 06/08 integration gate
-remains a separate prerequisite until its corrected full aggregate passes. This
-record does not claim Milestone 2 or C6 release qualification.
+Ticket 09 implements a usable creation flow. The upstream 06/08 compatibility
+closure was assembled from the recorded failed aggregate plus focused corrections
+and the separately completed skipped binaries; its failed aggregate remains
+explicit in [that evidence](m2-06-08-integration-gate.md). This record does not
+claim Milestone 2 or C6 release qualification.
 
 ## Source and environment
 
@@ -133,3 +135,35 @@ no overlapping full/native aggregate is claimed here. Configured setup is ticket
 the record retains original immutable requested intent for persistence; the separate
 boolean alone permits live launch. Reconciliation always clears that authorization. Broader native prompt completion through trust/hooks, physical-terminal
 compatibility, sleep/wake and actual reboot remain outside this scoped proof.
+
+
+## Merged-source scoped closure
+
+Integration merged the assembled compatibility repair at `0b28c5f` and creation
+at `239cb51`. The App/UI conflicts retain concise contextual help, including
+visible History/Stop/Quit and native continuation actions, while adding creation
+and receipt entry points. `Ui::layout` and native viewport dimensions remain
+unchanged. The authenticated shutdown guards in the scripted/screen harnesses
+remain intact. Typed `LaunchHandoff { record, authorized_start }`, immutable
+original requested intent, operation/session-bound cancellation, schema 6
+creation records, and separately editable comparison bases are preserved.
+
+On this merged source, stable locked checks passed:
+
+- Six creation worker/coordinator tests with real temporary Git repositories.
+- 26 App and 17 UI tests, including actual TestBackend footer visibility at
+  160×40 and 60×18 and unchanged native dimensions 104×32 and 58×11.
+- `dashboard_refuses_legacy_live_owner_before_sending_new_git_requests`: one
+  passing test (16.57s), executing all four capability matrices including
+  `creation_protocol=0` without migration or unsupported requests.
+- `creation_without_start_retains_exact_base_and_same_request_after_owner_restart`:
+  passed (2.43s).
+- `dashboard_create_and_start_targets_new_checkout_and_retains_failed_launch_without_duplicates`:
+  passed (3.42s).
+- `cargo build --locked`, `cargo fmt --all -- --check`, and
+  `cargo clippy --locked --all-targets -- -D warnings`.
+
+These are scoped checks, not another individual all-target aggregate. The earlier
+06/08 frozen aggregate failure remains recorded honestly; final all-feature
+aggregate and native milestone qualification remain ticket 19. No additional
+native tool prompt-turn, physical-terminal, sleep/wake or reboot claim is made.
