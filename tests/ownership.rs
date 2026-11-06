@@ -1626,7 +1626,7 @@ fn sustained_capture_crosses_caps_while_attached_focused_detached_and_lagged() {
         writeln!(file.lock().unwrap(), "{value}").unwrap();
     };
     record(
-        serde_json::json!({"kind":"manifest", "revision":String::from_utf8(Command::new("git").args(["rev-parse","HEAD"]).output().unwrap().stdout).unwrap().trim(), "dirty":true, "profile":"debug", "record_bytes":128,"records_per_phase":32768,"phases":["attached","dashboard-focused","fully-detached","slow-subscriber"],"capture_pending_cap":270336,"frame_cap":4194304,"screen":[80,200],"scrollback":0,"rss_sample_period_ms":100}),
+        serde_json::json!({"kind":"manifest", "revision":String::from_utf8(Command::new("git").args(["rev-parse","HEAD"]).output().unwrap().stdout).unwrap().trim(), "tracked_source_dirty":!Command::new("git").args(["diff","HEAD","--quiet"]).status().unwrap().success(), "profile":"debug", "record_bytes":128,"records_per_phase":32768,"phases":["attached","dashboard-focused","fully-detached","slow-subscriber"],"capture_pending_cap":270336,"frame_cap":4194304,"screen":[80,200],"scrollback":0,"rss_sample_period_ms":100}),
     );
     for (command, args) in [
         ("uname", vec!["-mrs"]),
@@ -1729,17 +1729,18 @@ fn sustained_capture_crosses_caps_while_attached_focused_detached_and_lagged() {
         );
         dashboard.send(b"r");
     }
-    let complete = dashboard.wait("flood13-complete run=2");
-    record(
-        serde_json::json!({"kind":"phase","mode":"dashboard-focused","elapsed_us":origin.elapsed().as_micros(),"visible":complete}),
-    );
     let since = Instant::now();
     dashboard.send(b"\r");
     dashboard.wait("Focus: session");
+    let screen_ready_us = since.elapsed().as_micros();
     dashboard.send(b"attach13-nonce\r");
     dashboard.wait("received: attach13-nonce");
     record(
-        serde_json::json!({"kind":"attach","screen_and_input_visible_us":since.elapsed().as_micros()}),
+        serde_json::json!({"kind":"attach","focus_frame_us":screen_ready_us,"screen_and_input_visible_us":since.elapsed().as_micros(),"boundary":"coherent replacement snapshots and unique fixture input ACK; child may finish its unpaced burst before reading input"}),
+    );
+    let complete = dashboard.wait("flood13-complete run=2");
+    record(
+        serde_json::json!({"kind":"phase","mode":"dashboard-focused","elapsed_us":origin.elapsed().as_micros(),"visible":complete}),
     );
     dashboard.kill();
     let mut control = Controller::connect(&fixture);
