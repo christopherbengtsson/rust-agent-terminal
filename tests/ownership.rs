@@ -3757,14 +3757,28 @@ fn paced_capture_saturation_stop_confirms_without_storage_repair() {
     dashboard.wait("Adopted");
     dashboard.send(b"l");
     dashboard.wait("fixture>");
-    std::fs::write(fixture.state().join("proof-storage-write"), "error").unwrap();
-    dashboard.send(b"pace17 9 30000 262144\r");
-    dashboard.wait("pace17 run=9");
     dashboard.send(&[0x1d]);
     dashboard.wait("Focus: dashboard");
     dashboard.kill();
     let mut controller = Controller::connect(&fixture);
     controller.request(serde_json::json!({"Resize":{"rows":80,"cols":200}}));
+    controller.request(serde_json::json!({"Input":b"mosaic\r".to_vec()}));
+    let until = Instant::now() + Duration::from_secs(5);
+    loop {
+        let state = controller.request(serde_json::json!("Screen"));
+        if state["screen"]
+            .as_str()
+            .unwrap()
+            .contains("max geometry complete")
+            && state["capture_pending_bytes"] == 0
+        {
+            break;
+        }
+        assert!(Instant::now() < until);
+    }
+    controller.request(serde_json::json!({"Resize":{"rows":24,"cols":104}}));
+    std::fs::write(fixture.state().join("proof-storage-write"), "error").unwrap();
+    controller.request(serde_json::json!({"Input":b"pace17 9 30000 262144\r".to_vec()}));
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         let state = controller.request(serde_json::json!("Screen"));
@@ -3774,8 +3788,6 @@ fn paced_capture_saturation_stop_confirms_without_storage_repair() {
         assert!(Instant::now() < deadline, "{state}");
         std::thread::sleep(Duration::from_millis(25));
     }
-    controller.request(serde_json::json!({"Input":b"ack17 fault\r".to_vec()}));
-    std::thread::sleep(Duration::from_millis(100));
     controller.request(serde_json::json!("Stop"));
     let deadline = Instant::now() + Duration::from_secs(4);
     loop {
@@ -3786,8 +3798,19 @@ fn paced_capture_saturation_stop_confirms_without_storage_repair() {
         assert!(Instant::now() < deadline, "{state}");
         std::thread::sleep(Duration::from_millis(25));
     }
+    let stopped = controller.request(serde_json::json!("Screen"));
+    assert!(stopped["capture_pending_bytes"].as_u64().unwrap() > 0);
+    assert!(stopped["storage_error"].is_string());
+    let cleanup = cleanup_page15(&mut controller);
+    assert_eq!(cleanup["cleanup"]["entries"][0]["eligible"], false);
     std::fs::remove_file(fixture.state().join("proof-storage-write")).unwrap();
     controller.request(serde_json::json!("RetryStorage"));
+    let repaired = cleanup_wait15(&mut controller, |state| {
+        state["capture_pending_bytes"] == 0 && state["durable_bytes"] == state["accepted_bytes"]
+    });
+    assert!(
+        repaired["accepted_bytes"].as_u64().unwrap() > stopped["durable_bytes"].as_u64().unwrap()
+    );
     controller.request(serde_json::json!("Shutdown"));
 }
 
