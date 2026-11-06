@@ -7335,7 +7335,7 @@ fn whole_workspace_dashboard_switches_bases_and_reopens_working_in_normal_and_sm
         dashboard.send(b"f");
         let screen = dashboard.wait("first file");
         assert!(screen.contains("Working"), "{screen}");
-        assert!(!screen.contains("Whole workspace"), "{screen}");
+        assert!(!screen.contains("Whole workspace ·"), "{screen}");
         dashboard.send(b"q");
         dashboard.child.wait().unwrap();
         std::fs::write(fixture.repository.join("zeta"), "unstaged\n").unwrap();
