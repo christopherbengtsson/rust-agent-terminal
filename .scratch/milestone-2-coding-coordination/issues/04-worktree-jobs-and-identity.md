@@ -16,3 +16,30 @@ Blocked by: None
 
 Prepared from the agreed Milestone 2 spec and architecture exploration. No
 implementation or new validation evidence is claimed by this ticket.
+
+Implementation prepared on `ticket/04-worktree-jobs`:
+
+- Discovery now uses attributed supervisor requests/observations; adoption resolves
+  canonical root, worktree Git directory and common directory in a separate worker.
+  Byte-preserving wire fields never round-trip through display strings.
+- Git children have two-second deadlines, bounded nonblocking output, cancellation,
+  owned process-group cleanup and bounded dispatch. Stop cancels jobs, and supervisor
+  exit waits for their cleanup without blocking its control loop. A refused second
+  dashboard retains read-only discovery through a restricted execution helper.
+- Added a concrete cancellable per-canonical-common-directory mutation lease for
+  subsequent creation/archive workers; it is not held for agent lifetimes.
+- Passing checks so far: locked build, formatting, warnings-denied all-target
+  Clippy, 32 bin tests (one existing subprocess probe ignored), focused real
+  supervisor tests for slow/saturated Git controls, legacy live-owner negotiation,
+  refused-dashboard discovery, aliases/repeated launch, explicit cleanup, and
+  unavailable state-directory handling.
+- The first all-target run exposed readiness assumptions (combined adoption/launch
+  and discovery without a usable owner). Focused fixes passed; that already-failed
+  run was interrupted after it stopped progressing during concurrent host PTY runs.
+  A final serial integrated all-target run is still required before resolution.
+- Actual linked/detached/locked/prunable/bare/missing/alias repositories are covered.
+  This native macOS filesystem rejects non-UTF-8 directory names with EILSEQ; the
+  test explicitly records that limitation, verifies unavailable-path rejection,
+  and exercises byte-exact parser/wire round trips. A real non-UTF-8 checkout on a
+  filesystem supporting those names remains unverified here. No new Claude/Codex
+  native compatibility claim is made.

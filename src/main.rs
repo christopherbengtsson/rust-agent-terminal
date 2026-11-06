@@ -18,7 +18,6 @@ use std::{
     error::Error,
     io::{self, IsTerminal},
     path::PathBuf,
-    sync::mpsc::TryRecvError,
     time::Duration,
 };
 
@@ -27,7 +26,6 @@ use crossterm::event::{self, Event as TerminalEvent};
 use crate::{
     app::App,
     events::{Effect, Event},
-    git::GitWorker,
     terminal::TerminalGuard,
     ui::Ui,
 };
@@ -43,6 +41,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             nonce.to_str().ok_or("Invalid nonce")?,
             arguments.collect(),
         )?);
+    }
+    if first.as_deref() == Some(std::ffi::OsStr::new("--discover-worktrees")) {
+        let repository = PathBuf::from(arguments.next().ok_or("Missing discovery repository")?);
+        return Ok(git::discovery_helper(&repository)?);
     }
     if first.as_deref() == Some(std::ffi::OsStr::new("--supervisor")) {
         return session::supervisor(&PathBuf::from(
@@ -98,28 +100,14 @@ fn main() -> Result<(), Box<dyn Error>> {
         return Err("The dashboard needs an interactive terminal. Use --help for usage.".into());
     }
 
-    let worker = GitWorker::start(repository.clone())?;
     let mut app = App::new(repository);
     let client = session::Client::start(state_directory)?;
 
-    refresh(&mut app, &worker);
+    refresh(&mut app, &client);
     let (_guard, mut terminal) = TerminalGuard::enter()?;
     let mut ui = Ui::default();
 
     loop {
-        // Bound the work per frame so future streaming sources cannot monopolize it.
-        for _ in 0..32 {
-            match worker.events.try_recv() {
-                Ok(event) => app.apply(event),
-                Err(TryRecvError::Empty) => break,
-                Err(TryRecvError::Disconnected) => {
-                    app.apply(Event::WorktreesLoaded(Err(
-                        "Git worker stopped; restart the dashboard.".into(),
-                    )));
-                    break;
-                }
-            }
-        }
         if let Ok(observation) = client.events.try_recv() {
             app.observe_session(observation);
         }
@@ -134,7 +122,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         if event::poll(Duration::from_millis(50))? {
             match event::read()? {
                 TerminalEvent::Key(key) => match app.input(key) {
-                    Some(Effect::Refresh) => refresh(&mut app, &worker),
+                    Some(Effect::Refresh) => refresh(&mut app, &client),
                     Some(Effect::Detach) => break,
                     Some(Effect::Session(request)) => {
                         if let Err(error) = client.send(request) {
@@ -159,9 +147,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn refresh(app: &mut App, worker: &GitWorker) {
+fn refresh(app: &mut App, client: &session::Client) {
     if app.begin_refresh()
-        && let Err(error) = worker.refresh()
+        && let Err(error) = client.send(session::Request::Discover {
+            request: app.discovery_request,
+            repository: session::path_bytes(&app.repository),
+        })
     {
         app.apply(Event::WorktreesLoaded(Err(error)));
     }

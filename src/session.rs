@@ -100,6 +100,42 @@ fn transport(
     let mut greeting: Observation = serde_json::from_slice(&read_frame(&mut reader)?)?;
     decode_screen(&mut greeting);
     if greeting.control_denied {
+        if greeting.git_jobs_protocol != 1 {
+            events.send(greeting)?;
+            return Ok(());
+        }
+        drop(reader);
+        drop(stream);
+        events.send(greeting.clone())?;
+        while let Ok(request) = requests.recv() {
+            greeting.discovery = None;
+            match request {
+                Request::Discover {
+                    request,
+                    repository,
+                } => {
+                    let path = PathBuf::from(std::ffi::OsString::from_vec(repository.clone()));
+                    let result = crate::git::read_only_discovery(&path);
+                    greeting.discovery = Some(crate::git::Discovery {
+                        request,
+                        repository,
+                        result,
+                    });
+                }
+                Request::Shutdown => greeting.stopped = true, // local exit only; no owner control
+                _ => {} // a refused dashboard cannot send any session command
+            }
+            let stopped = greeting.stopped;
+            events.send(greeting.clone())?;
+            if stopped {
+                return Ok(());
+            }
+        }
+        return Ok(());
+    }
+    if greeting.git_jobs_protocol != 1 {
+        greeting.control_denied = true;
+        greeting.error = Some("Existing supervisor does not support this dashboard's worktree protocol. Use its compatible dashboard to stop activity before upgrading; d detaches locally.".into());
         events.send(greeting)?;
         return Ok(());
     }
@@ -318,6 +354,9 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
         }
     };
     let mut state = restored.state;
+    state.git_jobs_protocol = 1;
+    state.discovery = None;
+    state.adoption_pending = false;
     let mut task_identity = restored.task;
     if state.launch_request.is_empty() {
         state.launch_request = uuid::Uuid::new_v4().to_string();
@@ -326,6 +365,9 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
     for result in restored.launches {
         launches.insert(result.request.clone(), result);
     }
+    let mut adoption: Option<crate::git::AdoptionJob> = None;
+    let mut discovery: Option<crate::git::GitWorker> = None;
+    let mut pending_discovery: Option<(u64, PathBuf)> = None;
     let mut checkout = restored
         .checkout
         .map(|bytes| PathBuf::from(std::ffi::OsString::from_vec(bytes)));
@@ -368,6 +410,82 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let mut delivery: Option<Delivery> = None;
     let mut pending = Vec::new();
     loop {
+        if adoption
+            .as_ref()
+            .is_some_and(|job| !state.adoption_pending && job.is_finished())
+        {
+            adoption = None;
+        }
+        if discovery
+            .as_ref()
+            .is_some_and(|worker| worker.is_finished())
+        {
+            discovery = None;
+        }
+        if let Some(worker) = &discovery {
+            while let Ok(crate::events::Event::DiscoveryCompleted {
+                request,
+                repository,
+                result,
+            }) = worker.events.try_recv()
+            {
+                if pending_discovery.as_ref() != Some(&(request, repository.clone())) {
+                    continue;
+                }
+                pending_discovery = None;
+                state.discovery = Some(crate::git::Discovery {
+                    request,
+                    repository: path_bytes(&repository),
+                    result,
+                });
+            }
+        }
+        if let Some(result) = adoption
+            .as_ref()
+            .filter(|_| state.adoption_pending)
+            .and_then(|job| job.result.try_recv().ok())
+        {
+            adoption = None;
+            state.adoption_pending = false;
+            let result = result.and_then(|identity| {
+                let path = identity.root.clone();
+                if (child.is_some() || stopping.is_some() || !eof || capture_done.is_some() || storage.progress.lock().unwrap().pending_bytes > 0) && checkout.as_ref() != Some(&path) {
+                    return Err("Stop the existing session before adopting another checkout".into());
+                }
+                if state.execution.is_some() && child.is_none() && checkout.as_ref() != Some(&path) {
+                    return Err("Interrupted execution is uncertain; inspect history before changing adoption".into());
+                }
+                if checkout.as_ref() != Some(&path) {
+                    state.identity = None;
+                    state.session_identity = None;
+                    state.process_exit = None;
+                    state.lifecycle = Lifecycle::Idle;
+                    state.native_conversation = None;
+                    state.agent = None;
+                    task_identity = uuid::Uuid::new_v4().to_string();
+                }
+                state.adopted = Some(path.display().to_string());
+                checkout = Some(path);
+                state.checkout_identity = Some(identity);
+                Ok(())
+            });
+            if let Err(error) = result {
+                state.error = Some(error);
+            }
+            match storage.commands.try_send(crate::persistence::Command::Save(
+                crate::persistence::Snapshot::new(&state, checkout.as_deref(), &task_identity),
+            )) {
+                Ok(()) => {
+                    save_pending += 1;
+                    state.metadata_pending = true;
+                }
+                Err(error) => {
+                    metadata_failed = true;
+                    state.metadata_pending = true;
+                    state.error = Some(format!("Metadata not saved: {error}; retry"));
+                }
+            }
+        }
         while let Ok(event) = storage.events.try_recv() {
             use crate::persistence::Completion;
             match event {
@@ -612,6 +730,8 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             history_sealed = true;
         }
         state.stopped = shutdown
+            && adoption.is_none()
+            && discovery.is_none()
             && final_flush
             && save_pending == 0
             && !metadata_failed
@@ -735,6 +855,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     incoming.set_nonblocking(true)?;
                     if controller.is_some() {
                         let refusal = Observation {
+                            git_jobs_protocol: 1,
                             control_denied: true,
                             error: Some("Another dashboard controls this supervisor; close it before reconnecting".into()),
                             ..Observation::default()
@@ -885,6 +1006,9 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             if !continuing && child.is_some() && launch_request.is_some() {
                 return Err("A session already exists; attach to it".into());
             }
+            if adoption.is_some() && launch_request.is_some() {
+                return Err("Adoption pending; wait for the checkout result before launch".into());
+            }
             if (pending_launch.is_some() || gate_receipt.is_some())
                 && matches!(
                     request,
@@ -898,41 +1022,24 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                 return Err("Launch reconciliation pending; wait for durable outcome".into());
             }
             match request {
+                Request::Discover { request, repository } => {
+                    if repository.len() > 32768 { return Err("Repository path exceeds 32768 bytes".into()); }
+                    let repository = PathBuf::from(std::ffi::OsString::from_vec(repository));
+                    if discovery.is_none() {
+                        discovery = Some(crate::git::GitWorker::start(repository.clone())?);
+                    }
+                    if let Err(error) = discovery.as_ref().unwrap().refresh_for(request, repository.clone()) {
+                        state.discovery = Some(crate::git::Discovery { request, repository: path_bytes(&repository), result: Err(error) });
+                        return Ok(());
+                    }
+                    pending_discovery = Some((request, repository));
+                    state.discovery = None;
+                }
                 Request::Adopt(bytes) => {
-                    let path =
-                            PathBuf::from(std::ffi::OsString::from_vec(bytes)).canonicalize().map_err(|error| format!("Checkout unavailable: {error}; refresh and choose an existing working checkout"))?;
-                    let output = Command::new("git")
-                        .arg("-C")
-                        .arg(&path)
-                        .args(["rev-parse", "--show-toplevel"])
-                        .output()?;
-                    if !output.status.success() {
-                        return Err("Checkout unavailable or bare; choose an existing working checkout and refresh".into());
-                    }
-                    let mut root = output.stdout;
-                    if root.last() == Some(&b'\n') {
-                        root.pop();
-                    }
-                    let path = PathBuf::from(std::ffi::OsString::from_vec(root)).canonicalize()?;
-                    if (child.is_some() || stopping.is_some() || !eof || capture_done.is_some() || storage.progress.lock().unwrap().pending_bytes > 0) && checkout.as_ref() != Some(&path) {
-                        return Err(
-                            "Stop the existing session before adopting another checkout".into()
-                        );
-                    }
-                    if state.execution.is_some() && child.is_none() && checkout.as_ref() != Some(&path) {
-                        return Err("Interrupted execution is uncertain; inspect history before changing adoption".into());
-                    }
-                    if checkout.as_ref() != Some(&path) {
-                        state.identity = None;
-                        state.session_identity = None;
-                        state.process_exit = None;
-                        state.lifecycle = Lifecycle::Idle;
-                        state.native_conversation = None;
-                        state.agent = None;
-                        task_identity = uuid::Uuid::new_v4().to_string();
-                    }
-                    state.adopted = Some(path.display().to_string());
-                    checkout = Some(path);
+                    if bytes.len() > 32768 { return Err("Checkout path exceeds 32768 bytes".into()); }
+                    if adoption.is_some() { return Err("Adoption already pending; wait or Stop to cancel".into()); }
+                    adoption = Some(crate::git::AdoptionJob::start(PathBuf::from(std::ffi::OsString::from_vec(bytes)))?);
+                    state.adoption_pending = true;
                 }
                 Request::Reconcile => {
                     if child.is_some() || stopping.is_some() { return Err("Session owned by current supervisor; stop it normally".into()); }
@@ -1279,6 +1386,12 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     final_flush = false;
                 }
                 Request::Stop | Request::Shutdown => {
+                    if let Some(job) = &adoption { job.cancel(); }
+                    state.adoption_pending = false;
+                    if let Some(worker) = &discovery { worker.cancel(); }
+                    if let Some((request, repository)) = pending_discovery.take() {
+                        state.discovery = Some(crate::git::Discovery { request, repository: path_bytes(&repository), result: Err("Git discovery cancelled by Stop".into()) });
+                    }
                     if state.storage_wait_millis >= 250 || state.producer_wait_millis > 0 || state.storage_error.is_some() { state.capture_loss_possible = true; }
                     if pending_launch.is_some() || gate_receipt.is_some() {
                         let result = LaunchResult { request: state.launch_request.clone(), identity: state.identity.clone(), error: Some("Launch cancelled by Stop; metadata may still be pending".into()) };

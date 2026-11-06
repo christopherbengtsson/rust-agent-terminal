@@ -119,6 +119,8 @@ pub fn metadata(state: &Observation) -> Box<Observation> {
     saved.formatted = String::new();
     saved.decoded = None;
     saved.history = None;
+    saved.discovery = None;
+    saved.adoption_pending = false;
     saved.cleanup = None;
     saved.cleanup_message = None;
     saved.durable_commits.clear();

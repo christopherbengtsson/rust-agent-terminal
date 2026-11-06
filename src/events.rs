@@ -4,6 +4,11 @@ use serde::{Deserialize, Serialize};
 use crate::git::Worktree;
 
 pub enum Event {
+    DiscoveryCompleted {
+        request: u64,
+        repository: std::path::PathBuf,
+        result: Result<Vec<Worktree>, String>,
+    },
     WorktreesLoaded(Result<Vec<Worktree>, String>),
 }
 
@@ -45,6 +50,7 @@ pub enum Effect {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Request {
+    Discover { request: u64, repository: Vec<u8> },
     Adopt(Vec<u8>),
     Launch(String),
     LaunchClaude(String),
@@ -84,6 +90,14 @@ pub struct LaunchResult {
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Observation {
+    #[serde(default)]
+    pub git_jobs_protocol: u32,
+    #[serde(default)]
+    pub discovery: Option<crate::git::Discovery>,
+    #[serde(default)]
+    pub adoption_pending: bool,
+    #[serde(default)]
+    pub checkout_identity: Option<crate::git::CheckoutIdentity>,
     #[serde(default)]
     pub connection_lost: bool,
     #[serde(default)]
