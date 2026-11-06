@@ -805,7 +805,7 @@ A add · U setup · h history · w/Esc back · d detach · q quit"
                 &compact_help
             } else {
                 compact_help = format!(
-                    "q quit s stop h history S text / find B chats {}\nN create  O receipt  U setup  w workspaces  f diff  E LIVE  d detach",
+                    "q quit s stop h history S text / find B chats {}\nN create O receipt U setup w spaces f diff E LIVE d detach",
                     if app.session.lifecycle == crate::session::Lifecycle::Running {
                         "Enter attach"
                     } else {
