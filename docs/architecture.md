@@ -640,6 +640,21 @@ uses `/proc` boot/start fields for fixtures; it establishes no native macOS
 compatibility. See [the crash-window proof](proofs/09-launch-reconciliation.md)
 for the exact boundaries, simulated boot evidence and limitations.
 
+### Partial creation ownership (Milestone 2 ticket 02)
+
+A single bounded creation worker immediately retains a successfully spawned
+child, its PTY pair and unopened launch gate. The supervisor reserves that
+in-flight attempt while servicing Screen, Stop and same-request queries. Stop
+cancels release intent; a late creation result must return for verified cleanup
+before shutdown or replacement can finish. Child and master ownership transfer
+before fallible identity/input/capture setup. Failed scope capture retains the
+actual child for an explicit Stop retry. Input and capture install before the
+authorization command is queued; a setup error drops release authority and
+retains its error. Native status polling begins after installation, including
+execution whose durable result is still pending. The existing live-descendant
+cleanup and durable launch/recovery machinery remain authoritative. See the
+[fixture proof and native limitations](proofs/m2-02-partial-spawn-ownership.md).
+
 ### Claude semantic observations (ticket 10)
 
 `native_status` owns a bounded passive invocation-local hook channel. Correlated

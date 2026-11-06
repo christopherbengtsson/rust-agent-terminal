@@ -267,6 +267,8 @@ impl Drop for Fixture {
                     .to_string_lossy()
                     .starts_with("proof-storage-")
                     || entry.file_name() == "proof-launch-receipt"
+                    || entry.file_name() == "proof-launch-creation"
+                    || entry.file_name() == "proof-launch-setup"
                 {
                     let _ = std::fs::remove_file(entry.path());
                 }
@@ -5279,4 +5281,232 @@ fn native_process_outcomes_survive_cleanup_reload_and_explicit_resume() {
         );
         control.request(serde_json::json!("Shutdown"));
     }
+}
+
+#[test]
+fn partial_spawn_failure_keeps_gated_process_owned_until_stop() {
+    for boundary in [
+        "before-scope",
+        "after-create",
+        "before-input",
+        "before-capture",
+        "before-authorization",
+    ] {
+        let fixture = Fixture::new();
+        let mut dashboard = fixture.open();
+        dashboard.wait("Discovery complete");
+        dashboard.send(b"a");
+        dashboard.wait("Adopted");
+        dashboard.kill();
+        let mut control = Controller::connect(&fixture);
+        std::fs::write(fixture.state().join("proof-launch-setup"), boundary).unwrap();
+        let failed = control.request(serde_json::json!({"Launch":"partial-create"}));
+        assert!(
+            failed["error"]
+                .as_str()
+                .unwrap_or("")
+                .contains("Injected launch setup failure"),
+            "{failed}"
+        );
+        assert!(!failed["screen"].as_str().unwrap().contains("fixture>"));
+        let pid = failed["execution"]["pid"]
+            .as_i64()
+            .expect("owned gated process");
+        control.request(serde_json::json!("Stop"));
+        cleanup_wait15(&mut control, |state| {
+            matches!(state["lifecycle"].as_str(), Some("Stopped" | "Failed"))
+                && state["metadata_pending"] == false
+        });
+        assert!(
+            !Command::new("/bin/ps")
+                .args(["-p", &pid.to_string(), "-o", "stat="])
+                .output()
+                .unwrap()
+                .stdout
+                .iter()
+                .any(|b| !b.is_ascii_whitespace())
+        );
+        // Shutdown's confirmed receipt also establishes the final capture and
+        // metadata barrier, independently of the earlier process-stop receipt.
+        control.request(serde_json::json!("Shutdown"));
+        cleanup_wait15(&mut control, |state| state["stopped"] == true);
+        drop(control);
+        std::fs::remove_file(fixture.state().join("proof-launch-setup")).unwrap();
+        let mut dashboard = fixture.open();
+        dashboard.wait("Adopted:");
+        dashboard.kill();
+        let mut control = Controller::connect(&fixture);
+        let replacement = control.request(serde_json::json!({"Launch":"after-partial"}));
+        assert!(replacement["error"].is_null(), "{replacement}");
+        cleanup_wait15(&mut control, |state| {
+            state["screen"].as_str().unwrap().contains("fixture>")
+        });
+        control.request(serde_json::json!("Shutdown"));
+    }
+}
+
+#[test]
+fn stop_during_outstanding_creation_never_releases_late_gated_process() {
+    let fixture = Fixture::new();
+    let mut dashboard = fixture.open();
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted");
+    dashboard.kill();
+    let mut control = Controller::connect(&fixture);
+    let pause = fixture.state().join("proof-launch-creation");
+    std::fs::write(&pause, "pause").unwrap();
+    control.request_now(serde_json::json!({"Launch":"cancel-creation"}));
+    let ready = pause.with_extension("ready");
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while !ready.exists() {
+        assert!(
+            Instant::now() < deadline,
+            "creation worker did not reach gated child"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let provisional = control.request_now(serde_json::json!({"Launch":"cancel-creation"}));
+    assert!(
+        provisional["launch_result"].is_null(),
+        "same request remains provisional: {provisional}"
+    );
+    let query = control.request_now(serde_json::json!({"QueryLaunch":"cancel-creation"}));
+    assert!(
+        query["launch_result"].is_null(),
+        "query must not manufacture a failure: {query}"
+    );
+    let pid = std::fs::read_to_string(&ready)
+        .unwrap()
+        .parse::<i32>()
+        .unwrap();
+    let started = Instant::now();
+    let stopping = control.request_now(serde_json::json!("Stop"));
+    assert!(started.elapsed() < Duration::from_secs(1));
+    assert_eq!(stopping["lifecycle"], "Stopping");
+    assert_eq!(stopping["stopped"], false);
+    assert!(
+        stopping["error"]
+            .as_str()
+            .unwrap()
+            .contains("cleanup pending")
+    );
+    let refused = control.request_now(serde_json::json!({"Launch":"replacement-too-soon"}));
+    assert!(refused["error"].is_string(), "{refused}");
+    std::fs::remove_file(pause).unwrap();
+    let stopped = cleanup_wait15(&mut control, |state| {
+        state["lifecycle"] == "Stopped" && state["metadata_pending"] == false
+    });
+    assert!(!stopped["screen"].as_str().unwrap().contains("fixture>"));
+    assert!(
+        !Command::new("/bin/ps")
+            .args(["-p", &pid.to_string(), "-o", "stat="])
+            .output()
+            .unwrap()
+            .stdout
+            .iter()
+            .any(|b| !b.is_ascii_whitespace())
+    );
+    let result = control.request(serde_json::json!({"QueryLaunch":"cancel-creation"}));
+    assert!(
+        result["launch_result"]["error"]
+            .as_str()
+            .unwrap()
+            .contains("cancelled")
+    );
+    control.request(serde_json::json!("Shutdown"));
+}
+
+#[test]
+fn partial_spawn_cleanup_failure_retains_reservation_and_retries() {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = Fixture::new();
+    let tools = fixture.temp.path().join("partial-tools");
+    std::fs::create_dir(&tools).unwrap();
+    let ps = tools.join("ps");
+    std::fs::write(&ps, "#!/bin/sh\nexit 1\n").unwrap();
+    std::fs::set_permissions(&ps, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let path = std::env::join_paths(
+        std::iter::once(tools).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+    )
+    .unwrap();
+    let mut dashboard =
+        Dashboard::open_with_path(&fixture.repository, &fixture.state(), Some(&path));
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted");
+    dashboard.kill();
+    let mut control = Controller::connect(&fixture);
+    std::fs::write(fixture.state().join("proof-launch-setup"), "after-create").unwrap();
+    let failed = control.request(serde_json::json!({"Launch":"partial-cleanup"}));
+    let pid = failed["execution"]["pid"].as_i64().unwrap();
+    control.request(serde_json::json!("Stop"));
+    let blocked = cleanup_wait15(&mut control, |state| state["lifecycle"] == "StopFailed");
+    assert_eq!(blocked["execution"]["pid"], pid);
+    let refused = control.request(serde_json::json!({"Launch":"partial-cleanup-replacement"}));
+    assert!(refused["error"].is_string());
+    assert_eq!(refused["execution"]["pid"], pid);
+    std::fs::remove_file(&ps).unwrap();
+    std::os::unix::fs::symlink("/bin/ps", ps).unwrap();
+    control.request(serde_json::json!("Stop"));
+    let cleaned = cleanup_wait15(&mut control, |state| {
+        state["lifecycle"] == "Stopped" && state["metadata_pending"] == false
+    });
+    assert!(cleaned["execution"].is_null());
+    assert!(!cleaned["screen"].as_str().unwrap().contains("fixture>"));
+    control.request(serde_json::json!("Shutdown"));
+}
+
+#[test]
+fn failed_capture_installation_never_borrows_previous_sessions_eof_proof() {
+    let fixture = Fixture::new();
+    let mut dashboard = fixture.open();
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted");
+    dashboard.kill();
+    let mut control = Controller::connect(&fixture);
+    control.request(serde_json::json!({"Launch":"completed-capture"}));
+    cleanup_wait15(&mut control, |state| {
+        state["screen"].as_str().unwrap().contains("fixture>")
+    });
+    control.request(serde_json::json!("Stop"));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let page = cleanup_page15(&mut control);
+        if page["cleanup"]["entries"][0]["eligible"] == true {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "previous capture must settle: {page}"
+        );
+    }
+    std::fs::write(fixture.state().join("proof-launch-setup"), "before-capture").unwrap();
+    let failed = control.request(serde_json::json!({"Launch":"capture-not-installed"}));
+    let id = failed["session_identity"]["session"].clone();
+    control.request(serde_json::json!("Stop"));
+    cleanup_wait15(&mut control, |state| {
+        matches!(state["lifecycle"].as_str(), Some("Stopped" | "Failed"))
+            && state["metadata_pending"] == false
+    });
+    control.request(serde_json::json!("Shutdown"));
+    cleanup_wait15(&mut control, |state| state["stopped"] == true);
+    drop(control);
+    let mut dashboard = fixture.open();
+    dashboard.wait("Adopted:");
+    dashboard.kill();
+    let mut control = Controller::connect(&fixture);
+    let page = cleanup_page15(&mut control);
+    let entry = page["cleanup"]["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["id"] == id)
+        .unwrap();
+    assert_eq!(
+        entry["eligible"], false,
+        "no reader observed this session's EOF: {page}"
+    );
+    control.request(serde_json::json!("Shutdown"));
 }
