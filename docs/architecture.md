@@ -309,3 +309,24 @@ never writes raw child controls to the outer terminal. One queued snapshot
 resynchronizes lagging dashboards; this is ephemeral screen state rather than
 retained history. Framed transport is capped at 4 MiB for bounded styled snapshots.
 See [the proof and visual comparison](proofs/04-session-screen.md).
+
+
+## Dashboard recovery (ticket 07)
+
+The supervisor issues a launch-request identity before any launch and includes it
+in greetings and observations. App restores it after reopening. Every accepted
+launch request retains its original success or failure in a lifetime result map;
+`QueryLaunch` and same-ID launch retries recover that result without executing.
+An explicit launch after an acknowledged outcome creates a fresh request. The map
+has 1024 entries, request IDs have a 128-byte bound, and capacity exhaustion fails
+closed without evicting outcomes. These are owner-lifetime records pending ticket
+08 durability; they make no cross-supervisor execution guarantee. Unknown request
+queries explain uncertainty rather than automatically replaying a launch.
+
+Control-command observations use reliable bounded delivery; only periodic screen
+snapshots may coalesce. Reconnection synchronizes ticket 04's bounded styled screen
+and output-byte boundary, then resumes polling while the same child keeps draining.
+Client death releases the controlling connection without stopping children. A live
+controller continues to exclude every competing dashboard. See the
+[reconnect proof](proofs/07-dashboard-reconnect.md). Supervisor failure, uncertain
+survivors and launch reconciliation belong to ticket 09.

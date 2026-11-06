@@ -633,3 +633,83 @@ fn lost_failed_launch_result_is_recovered_without_executing_after_adoption() {
     assert_eq!(retry["lifecycle"], "Idle");
     recovered.request(serde_json::json!("Shutdown"));
 }
+
+#[test]
+fn streaming_child_keeps_screen_sequence_identity_and_resize_after_dashboard_death() {
+    let fixture = Fixture::new();
+    let mut dashboard = fixture.open();
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted");
+    dashboard.send(b"l");
+    let original = dashboard.wait("fixture>");
+    let pid = original
+        .split("pid=")
+        .nth(1)
+        .unwrap()
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .to_owned();
+    dashboard.send(b"stream\r");
+    dashboard.wait("stream: 0");
+    dashboard.kill();
+    let mut recovered = Controller::connect(&fixture);
+    let identity = recovered.greeting["identity"].clone();
+    let mut previous = recovered.greeting["output_bytes"].as_u64().unwrap();
+    let start = previous;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let snapshot = recovered.request(serde_json::json!("Screen"));
+        let sequence = snapshot["output_bytes"].as_u64().unwrap();
+        assert!(sequence >= previous, "snapshots cannot go backwards");
+        assert_eq!(snapshot["identity"], identity);
+        previous = sequence;
+        if snapshot["screen"]
+            .as_str()
+            .unwrap()
+            .contains("stream: 0199")
+        {
+            assert_eq!(
+                snapshot["screen"]
+                    .as_str()
+                    .unwrap()
+                    .matches("stream: 0199")
+                    .count(),
+                1
+            );
+            break;
+        }
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(
+        previous > start,
+        "child must continue producing after takeover"
+    );
+    let resized = recovered.request(serde_json::json!({"Resize":{"rows":18,"cols":64}}));
+    assert_eq!(
+        (resized["rows"].as_u64(), resized["cols"].as_u64()),
+        (Some(18), Some(64))
+    );
+    recovered.request(serde_json::json!({"Input":b"size\r"}));
+    loop {
+        let snapshot = recovered.request(serde_json::json!("Screen"));
+        if snapshot["screen"].as_str().unwrap().contains("size: 64x18") {
+            break;
+        }
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    fixture.assert_one_owner_and_child();
+    drop(recovered);
+    let mut reopened = fixture.open();
+    reopened.wait("stream: 0199");
+    reopened.send(b"identity\r");
+    reopened.wait(&format!("same-child pid={pid}"));
+    reopened.send(&[0x1d]);
+    reopened.wait("Focus: dashboard");
+    reopened.send(b"r");
+    reopened.wait("Project / worktrees (1)");
+    reopened.send(b"q");
+}
