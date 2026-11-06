@@ -28,11 +28,20 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct HistoryPage {
     pub identity: String,
+    #[serde(default)]
+    pub session: String,
+    #[serde(default)]
+    pub committed: u64,
     pub checkout: String,
     pub lifecycle: Lifecycle,
     #[serde(default)]
     pub process_exit: Option<crate::events::ProcessExit>,
+    /// Escaped raw bytes; retained separately from the readable projection.
     pub text: String,
+    #[serde(default)]
+    pub readable: Option<crate::history::ReadablePage>,
+    #[serde(default)]
+    pub projection_preparing: bool,
     pub offset: u64,
     pub next: Option<u64>,
 }
@@ -283,6 +292,7 @@ pub enum Command {
     History(usize, u64),
     HistoryTarget {
         target: String,
+        request: uuid::Uuid,
         index: usize,
         session: Option<String>,
         offset: u64,
@@ -309,7 +319,7 @@ pub enum Completion {
     Committed(Operation),
     Failed(Operation, String),
     History(HistoryPage),
-    HistoryTarget(String, std::result::Result<HistoryPage, String>),
+    HistoryTarget(String, uuid::Uuid, std::result::Result<HistoryPage, String>),
     Error(&'static str, String),
 }
 pub struct RestoredSession {
@@ -460,9 +470,9 @@ impl Worker {
                         Command::Prepare(Snapshot { operation, state, checkout, task, workspace_name }) => store.fault("prepare").and_then(|_| store.save_named(&state, checkout, task, workspace_name)).map(|_| Completion::Committed(operation)),
                         Command::Authorize(Snapshot { operation, state, checkout, task, workspace_name }) => store.fault("authorize").and_then(|_| store.save_named(&state, checkout, task, workspace_name)).map(|_| Completion::Committed(operation)),
                         Command::Save(Snapshot { operation, state, checkout, task, workspace_name }) => store.fault("save").and_then(|_| store.save_named(&state, checkout, task, workspace_name)).map(|_| Completion::Committed(operation)),
-                        Command::HistoryTarget { target, index, session, offset } => {
-                            let page = if let Some(id) = session { store.history_session(&id, offset) } else { store.history(index, offset) };
-                            Ok(Completion::HistoryTarget(target, page.map_err(|error| error.to_string())))
+                        Command::HistoryTarget { target, request, index, session, offset } => {
+                            let page = store.start_readable(target.clone(), request, index, session, offset);
+                            Ok(Completion::HistoryTarget(target, request, page.map_err(|error| error.to_string())))
                         },
                         Command::History(index, offset) => store.history(index, offset).map(Completion::History),
                         Command::HistorySession(id, offset) => store.history_session(&id, offset).map(Completion::History),
@@ -517,6 +527,8 @@ impl Worker {
                     }
                     if tx.send(event).is_err() { break; }
                 }
+                if let Some(event) = store.readable_step()
+                    && tx.send(event).is_err() { break; }
                 if capacity_since.elapsed() >= Duration::from_secs(1) {
                     status.lock().unwrap().capacity = crate::cleanup::Capacity::sample(&store.directory);
                     capacity_since = Instant::now();
@@ -600,7 +612,19 @@ enum CleanupJob {
     List(crate::cleanup::Page, std::fs::ReadDir),
     Delete(String, std::fs::ReadDir),
 }
+struct HistoryJob {
+    target: String,
+    request: uuid::Uuid,
+    session: String,
+    page: HistoryPage,
+    position: u64,
+    end: u64,
+    projection: crate::history::Projection,
+    readable: crate::history::ReadablePage,
+}
 struct Store {
+    history_jobs: std::collections::VecDeque<HistoryJob>,
+    history_checkpoints: std::collections::VecDeque<(String, u64, crate::history::Projection)>,
     cleanup_job: Option<CleanupJob>,
     directory_handle: File,
     directory: PathBuf,
@@ -731,6 +755,8 @@ impl Store {
             tx.commit()?;
         }
         let mut store = Self {
+            history_jobs: Default::default(),
+            history_checkpoints: Default::default(),
             cleanup_job: None,
             directory_handle,
             directory,
@@ -851,6 +877,8 @@ impl Store {
             [id],
         )?;
         tx.commit()?;
+        self.history_checkpoints
+            .retain(|(session, _, _)| session != id);
         self.cleanup_job = Some(CleanupJob::Delete(
             id.into(),
             std::fs::read_dir(&self.directory)?,
@@ -1415,6 +1443,127 @@ impl Store {
         }
         Ok(())
     }
+    /// Schedule a derivative read; raw retrieval remains its existing bounded seam.
+    fn start_readable(
+        &mut self,
+        target: String,
+        request: uuid::Uuid,
+        index: usize,
+        session: Option<String>,
+        offset: u64,
+    ) -> Result<HistoryPage> {
+        self.history_jobs.retain(|job| job.target != target);
+        if self.history_jobs.len() >= 16 {
+            return Err("Readable history queue full; retry the selected passage".into());
+        }
+        let mut page = if let Some(id) = session {
+            self.history_session(&id, offset)?
+        } else {
+            self.history(index, offset)?
+        };
+        let session = page.session.clone();
+        let durable: u64 = self.db.query_row(
+            "SELECT durable FROM sessions WHERE id=?1 AND history_state='retained'",
+            [&session],
+            |row| row.get(0),
+        )?;
+        let end = page.next.unwrap_or(durable);
+        let (position, projection) = self
+            .history_checkpoints
+            .iter()
+            .filter(|(id, position, _)| id == &session && *position <= page.offset)
+            .max_by_key(|(_, position, _)| *position)
+            .map(|(_, position, projection)| (*position, projection.clone()))
+            .unwrap_or_default();
+        page.projection_preparing = true;
+        self.history_jobs.push_back(HistoryJob {
+            target,
+            request,
+            session,
+            page: page.clone(),
+            position,
+            end,
+            projection,
+            readable: Default::default(),
+        });
+        Ok(page)
+    }
+    /// At most 32 KiB of replay and one bounded page of output per worker turn.
+    /// Capture, control, cleanup and flush keep their turns between replay slices.
+    fn readable_step(&mut self) -> Option<Completion> {
+        let mut job = self.history_jobs.pop_front()?;
+        let result = (|| -> Result<bool> {
+            let durable: Option<u64> = self
+                .db
+                .query_row(
+                    "SELECT durable FROM sessions WHERE id=?1 AND history_state='retained'",
+                    [&job.session],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if durable.is_none_or(|durable| durable < job.end) {
+                self.history_checkpoints
+                    .retain(|(id, _, _)| id != &job.session);
+                return Err("Selected history was deleted or is no longer committed".into());
+            }
+            let end = (job.position + 32768).min(job.end);
+            let raw = self.read_raw(&job.session, job.position, end)?;
+            job.projection.feed(
+                &raw,
+                job.position,
+                job.page.offset..job.end,
+                &mut job.readable,
+            );
+            job.position = end;
+            self.history_checkpoints
+                .push_back((job.session.clone(), end, job.projection.clone()));
+            while self.history_checkpoints.len() > 64 {
+                self.history_checkpoints.pop_front();
+            }
+            Ok(end == job.end)
+        })();
+        match result {
+            Ok(false) => {
+                self.history_jobs.push_back(job);
+                None
+            }
+            Ok(true) => {
+                job.projection
+                    .preview(job.end, job.page.offset..job.end, &mut job.readable);
+                job.readable.raw_start = job.page.offset;
+                job.readable.raw_end = job.end;
+                job.readable.committed = job.page.committed;
+                job.page.readable = Some(job.readable);
+                job.page.projection_preparing = false;
+                Some(Completion::HistoryTarget(
+                    job.target,
+                    job.request,
+                    Ok(job.page),
+                ))
+            }
+            Err(error) => Some(Completion::HistoryTarget(
+                job.target,
+                job.request,
+                Err(error.to_string()),
+            )),
+        }
+    }
+    fn read_raw(&self, id: &str, mut position: u64, end: u64) -> Result<Vec<u8>> {
+        let mut raw = Vec::with_capacity((end - position) as usize);
+        while position < end {
+            let mut file = OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_NOFOLLOW)
+                .open(self.file(id, position / CHUNK))?;
+            file.seek(SeekFrom::Start(position % CHUNK))?;
+            let length = (end - position).min(CHUNK - position % CHUNK);
+            let mut bytes = vec![0; length as usize];
+            file.read_exact(&mut bytes)?;
+            raw.extend(bytes);
+            position += length;
+        }
+        Ok(raw)
+    }
     fn history(&self, index: usize, offset: u64) -> Result<HistoryPage> {
         let (id, identity, durable, json): (String, String, u64, String) = self
             .db
@@ -1464,11 +1613,15 @@ impl Store {
             .collect();
         let state: Observation = decode_record(&json)?;
         Ok(HistoryPage {
+            session: id,
+            committed: durable,
             identity,
             checkout: state.adopted.unwrap_or_default(),
             lifecycle: state.lifecycle,
             process_exit: state.process_exit,
             text,
+            readable: None,
+            projection_preparing: false,
             offset,
             next: (end < durable).then_some(end),
         })
@@ -1513,7 +1666,11 @@ fn decode_record(json: &str) -> Result<Observation> {
 mod concurrent_tests {
     use super::*;
     fn saved(worker: &Worker, session: &str) {
+        saved_at(worker, session, None);
+    }
+    fn saved_at(worker: &Worker, session: &str, checkout: Option<&Path>) {
         let state = Observation {
+            adopted: checkout.map(|path| path.display().to_string()),
             session_identity: Some(crate::events::SessionIdentity {
                 session: session.into(),
                 task: uuid::Uuid::new_v4().to_string(),
@@ -1526,7 +1683,7 @@ mod concurrent_tests {
             .commands
             .send(Command::Save(Snapshot::new(
                 &state,
-                None,
+                checkout,
                 &state.session_identity.as_ref().unwrap().task,
             )))
             .unwrap();
@@ -1537,6 +1694,223 @@ mod concurrent_tests {
                 _ => {}
             }
         }
+    }
+    fn projected(worker: &Worker, session: &str, offset: u64) -> HistoryPage {
+        let request = uuid::Uuid::new_v4();
+        worker
+            .commands
+            .send(Command::HistoryTarget {
+                target: "readable-test".into(),
+                request,
+                index: 0,
+                session: Some(session.into()),
+                offset,
+            })
+            .unwrap();
+        loop {
+            if let Completion::HistoryTarget(target, actual, result) =
+                worker.events.recv_timeout(Duration::from_secs(5)).unwrap()
+                && target == "readable-test"
+                && actual == request
+            {
+                let page = result.unwrap();
+                if !page.projection_preparing {
+                    return page;
+                }
+            }
+        }
+    }
+    fn capture_bytes(worker: &Worker, session: &str, raw: &[u8]) {
+        let capture = worker.capture_for(session).unwrap();
+        for bytes in raw.chunks(4096) {
+            capture.accept(bytes.len());
+            capture
+                .send((session.into(), bytes.to_vec(), Instant::now()), None)
+                .unwrap();
+        }
+        let operation = final_operation(session);
+        worker
+            .commands
+            .send(Command::Flush(operation.clone()))
+            .unwrap();
+        committed(worker, &operation);
+    }
+    #[test]
+    fn readable_committed_history_replays_across_pages_and_chunks_after_restart_without_a_checkout()
+    {
+        let root = tempfile::tempdir().unwrap();
+        let session = uuid::Uuid::new_v4().to_string();
+        let mut raw = b"before\n\x1b]52;c;".to_vec();
+        raw.extend(vec![b'H'; 70000]);
+        raw.extend("\x07Prompt café\n\x1b[32mAnswer\x1b[0m\ncommand output\n".as_bytes());
+        let (worker, _) = Worker::start(root.path()).unwrap();
+        let checkout = root.path().join("removed-checkout");
+        std::fs::create_dir(&checkout).unwrap();
+        saved_at(&worker, &session, Some(&checkout));
+        capture_bytes(&worker, &session, &raw);
+        let offset = raw.len() as u64 / PAGE * PAGE;
+        let page = projected(&worker, &session, offset);
+        let readable = page.readable.unwrap();
+        assert_eq!(readable.text, "Prompt café\nAnswer\ncommand output\n");
+        assert_eq!(readable.passages[0].raw_start, 70015);
+        assert_eq!(page.checkout, checkout.display().to_string());
+        assert_eq!(page.committed, raw.len() as u64);
+        std::fs::remove_dir(&checkout).unwrap();
+        drop(worker);
+        thread::sleep(Duration::from_millis(20));
+        // An uncommitted tail must never appear in either display.
+        let mut tail = OpenOptions::new()
+            .append(true)
+            .open(root.path().join(format!("{session}-00000001.transcript")))
+            .unwrap();
+        tail.write_all(b"UNCOMMITTED-SECRET").unwrap();
+        let (worker, _) = Worker::start(root.path()).unwrap();
+        let restored = projected(&worker, &session, offset);
+        assert!(!checkout.exists());
+        assert_eq!(restored.checkout, checkout.display().to_string());
+        assert_eq!(restored.readable.unwrap().text, readable.text);
+        assert!(!restored.text.contains("UNCOMMITTED"));
+        // Exact retained output is independent of the derivative text.
+        assert_eq!(
+            std::fs::read(root.path().join(format!("{session}-00000000.transcript"))).unwrap(),
+            raw[..65536]
+        );
+    }
+    #[test]
+    fn deleting_history_cancels_replay_and_cannot_resurrect_checkpointed_text() {
+        let root = tempfile::tempdir().unwrap();
+        let (worker, _) = Worker::start(root.path()).unwrap();
+        let session = uuid::Uuid::new_v4().to_string();
+        let other = uuid::Uuid::new_v4().to_string();
+        saved(&worker, &session);
+        saved(&worker, &other);
+        capture_bytes(&worker, &session, &vec![b'x'; 200000]);
+        capture_bytes(&worker, &other, b"other retained answer\n");
+        let seal = Operation {
+            purpose: Purpose::Seal,
+            ..final_operation(&session)
+        };
+        worker.commands.send(Command::Seal(seal.clone())).unwrap();
+        committed(&worker, &seal);
+        let request = uuid::Uuid::new_v4();
+        worker
+            .commands
+            .send(Command::HistoryTarget {
+                target: "deleting-reader".into(),
+                request,
+                index: 0,
+                session: Some(session.clone()),
+                offset: 190000,
+            })
+            .unwrap();
+        worker
+            .commands
+            .send(Command::Delete(session.clone()))
+            .unwrap();
+        let mut cancelled = false;
+        let mut deleted = false;
+        while !cancelled || !deleted {
+            match worker.events.recv_timeout(Duration::from_secs(5)).unwrap() {
+                Completion::HistoryTarget(target, actual, Err(error))
+                    if target == "deleting-reader" && actual == request =>
+                {
+                    assert!(error.contains("deleted") || error.contains("committed"));
+                    cancelled = true;
+                }
+                Completion::Deleted(id) if id == session => deleted = true,
+                Completion::HistoryTarget(_, actual, Ok(page)) if actual == request => {
+                    assert!(page.projection_preparing)
+                }
+                Completion::Error(kind, error) => panic!("{kind}: {error}"),
+                _ => {}
+            }
+        }
+        assert_eq!(
+            projected(&worker, &other, 0).readable.unwrap().text,
+            "other retained answer\n"
+        );
+        worker
+            .commands
+            .send(Command::HistoryTarget {
+                target: "deleted-reader".into(),
+                request,
+                index: 0,
+                session: Some(session),
+                offset: 0,
+            })
+            .unwrap();
+        loop {
+            if let Completion::HistoryTarget(target, actual, result) =
+                worker.events.recv_timeout(Duration::from_secs(5)).unwrap()
+                && target == "deleted-reader"
+                && actual == request
+            {
+                assert!(result.is_err());
+                break;
+            }
+        }
+    }
+    #[test]
+    #[ignore = "explicit current native committed corpus qualification; no child is launched"]
+    fn qualify_readable_native_committed_corpus() {
+        let source = PathBuf::from(
+            std::env::var_os("RAT_HISTORY_CORPUS").expect("RAT_HISTORY_CORPUS required"),
+        );
+        let expected = std::env::var("RAT_HISTORY_MARKER").expect("RAT_HISTORY_MARKER required");
+        let output = std::env::var("RAT_HISTORY_OUTPUT").expect("RAT_HISTORY_OUTPUT required");
+        let command = std::env::var("RAT_HISTORY_COMMAND").expect("RAT_HISTORY_COMMAND required");
+        let db = Connection::open_with_flags(
+            source.join("history.sqlite3"),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .unwrap();
+        let (session, durable): (String, u64) = db.query_row("SELECT id,durable FROM sessions WHERE history_state='retained' ORDER BY rowid DESC LIMIT 1", [], |row| Ok((row.get(0)?, row.get(1)?))).unwrap();
+        let mut raw = Vec::new();
+        while raw.len() < durable as usize {
+            let bytes = std::fs::read(source.join(format!(
+                "{session}-{:08}.transcript",
+                raw.len() as u64 / CHUNK
+            )))
+            .unwrap();
+            raw.extend_from_slice(&bytes[..bytes.len().min(durable as usize - raw.len())]);
+        }
+        let root = tempfile::tempdir().unwrap();
+        let (worker, _) = Worker::start(root.path()).unwrap();
+        saved(&worker, &session);
+        capture_bytes(&worker, &session, &raw);
+        let mut pages = Vec::new();
+        let mut offset = 0;
+        loop {
+            let page = projected(&worker, &session, offset);
+            let next = page.next;
+            pages.push(page);
+            let Some(next) = next else {
+                break;
+            };
+            offset = next;
+        }
+        let text = pages
+            .iter()
+            .map(|page| page.readable.as_ref().unwrap().text.as_str())
+            .collect::<String>();
+        assert!(
+            text.contains(&expected),
+            "native response marker missing: {text}"
+        );
+        assert!(
+            text.contains(&command),
+            "native visible command missing: {text}"
+        );
+        assert!(
+            text.contains(&output),
+            "native command output missing: {text}"
+        );
+        let directory = PathBuf::from(
+            std::env::var_os("RAT_HISTORY_EVIDENCE").expect("RAT_HISTORY_EVIDENCE required"),
+        );
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(directory.join(format!("{expected}-readable.json")), serde_json::to_vec_pretty(&serde_json::json!({"source_state":source,"source_session":session,"source_committed":durable,"pages":pages})).unwrap()).unwrap();
+        std::fs::write(directory.join(format!("{expected}-committed.raw")), raw).unwrap();
     }
     #[test]
     fn independent_capture_prefixes_and_scoped_final_flush() {

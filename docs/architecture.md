@@ -648,8 +648,8 @@ waiting and takes no screen lock during storage backpressure. The sole worker
 retains its current block on append failure. Fixed 65536-byte files rotate by
 stable UUID plus ordinal, independently of checkout paths. A 16-slot control
 queue and 16-slot completion queue are separate from append traffic. Metadata
-messages omit native screen buffers; bounded 2048-byte history pages are escaped
-before UI delivery. A stalled disk does not run on the dashboard/supervisor loop;
+messages omit native screen buffers. Raw history pages cover at most 2048 bytes
+and remain escaped before UI delivery. A stalled disk does not run on the dashboard/supervisor loop;
 shutdown remains pending while the sole worker is unavailable. This is bounded
 backpressure, not a claim that an agent stops all non-output work.
 
@@ -661,9 +661,27 @@ A stopped runtime drains to PTY EOF before the final flush; quit additionally
 waits for lifecycle metadata completion. Read/flush errors remain visible.
 Recovered history reads only committed extents; a surviving uncommitted tail is
 not counted or overwritten. Raw keys and paste are not copied into state.
-Chronological text retains escaped terminal operations rather than discarding
-redrawn/alternate-screen content. Reading requires neither the checkout nor the
-original native conversation. Power-loss, full-volume and sustained resource
+The raw view retains escaped terminal operations and redrawn/alternate-screen
+content. The default readable derivative uses `history::Projection`, independent
+of native records, paths and naming. The incremental UTF-8/control parser keeps
+bounded line state (2048 scalar positions), at most four UTF-8 bytes and 32 CSI
+parameter bytes; control-string bodies are never retained or executed. Horizontal
+cursor/CR/backspace/erase edits affect the current line; vertical redraws become
+separate passages, so duplicates, fragments and geometry artifacts remain possible.
+The last page line is a provisional preview, explicitly marked in passage metadata.
+
+A readable request first receives the escaped raw page with a preparing flag.
+The sole worker then replays at most 32 KiB per turn, interleaving capture, control,
+cleanup and flush; completion retains owner and request UUIDs so late results and
+errors cannot replace another selection. At most 16 jobs and 64 parser checkpoints
+are kept across all sessions; checkpoints are derivative, process-local and rebuild
+on restart. Cold distant reads can require many bounded turns. Checkpoint keys use
+session/raw position in the current projection version; only immutable committed
+prefixes are eligible. Every turn rechecks retention/committed extent and deletion
+intent evicts matching checkpoints. A readable result carries projection version,
+source raw range and committed extent; passages map UTF-8 text byte ranges to raw
+ranges under the same stable session UUID. Search/index scheduling remains ticket 11.
+Reading requires neither the checkout nor the original native conversation. Power-loss, full-volume and sustained resource
 capacity proof remain separate gates; see `docs/proofs/08-durable-history.md`.
 
 ### Durable launch authorization and explicit reconciliation (ticket 09)

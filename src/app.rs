@@ -20,6 +20,7 @@ pub struct App {
     selecting_checkout: bool,
     pub attached: bool,
     pub history_open: bool,
+    pub history_raw: bool,
     pub cleanup_open: bool,
     pub cleanup_selected: usize,
     pub cleanup_preview: Option<crate::cleanup::Entry>,
@@ -56,6 +57,7 @@ impl App {
             selecting_checkout: false,
             attached: false,
             history_open: false,
+            history_raw: false,
             cleanup_open: false,
             cleanup_selected: 0,
             cleanup_preview: None,
@@ -494,6 +496,11 @@ impl App {
                 }
                 _ => {}
             }
+            return None;
+        }
+        if self.history_open && key.modifiers.is_empty() && key.code == KeyCode::Char('v') {
+            self.history_raw = !self.history_raw;
+            self.history_scroll = 0;
             return None;
         }
         if key.modifiers.is_empty()
