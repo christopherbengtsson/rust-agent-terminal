@@ -64,6 +64,7 @@ pub(super) struct AgentSession {
     shutdown: bool,
     retry_requested: bool,
     pending_history: Option<uuid::Uuid>,
+    history_query: Option<(usize, Option<String>, u64)>,
 }
 #[derive(Default)]
 struct Launch {
@@ -143,6 +144,7 @@ impl AgentSession {
             shutdown: false,
             retry_requested: false,
             pending_history: None,
+            history_query: None,
             launch: Launch::default(),
             execution: Execution {
                 write_errors,
@@ -184,7 +186,7 @@ impl AgentSession {
         let directory = directory.as_path();
         use crate::persistence::Completion;
         match event {
-            Completion::Registry(_) | Completion::Registered(..) => {
+            Completion::Registry(_) | Completion::Registered(..) | Completion::Selected(..) => {
                 unreachable!("registry completions are supervisor-owned")
             }
             Completion::Retried | Completion::Sealed => {}
@@ -195,6 +197,7 @@ impl AgentSession {
                 ));
                 self.state.history = None;
                 self.pending_history = None;
+                self.history_query = None;
                 self.state.history_index = 0;
                 if self
                     .state
@@ -309,6 +312,7 @@ impl AgentSession {
             Completion::History(page) => self.state.history = Some(page),
             Completion::HistoryTarget(target, request, result) => {
                 if target == self.state.control_target && self.pending_history == Some(request) {
+                    self.pending_history = None;
                     match result {
                         Ok(page) => self.state.history = Some(page),
                         Err(error) => {
@@ -471,7 +475,12 @@ impl AgentSession {
                 .map(|identity| identity.session.as_str()),
         );
         self.state.capacity = progress.capacity.clone();
-        if self.history.capture_started_here && !self.history.history_sealed {
+        // Seal retires the storage registration before its completion arrives.
+        // Final flush has already fixed these counters; keep them while sealing.
+        if self.history.capture_started_here
+            && !self.history.history_sealed
+            && !self.history.seal_pending
+        {
             self.state.accepted_bytes = progress.accepted;
             self.state.written_bytes = progress.written;
             self.state.storage_wait_millis = progress
@@ -1205,17 +1214,11 @@ impl AgentSession {
                         .set_size(rows.try_into().unwrap(), cols.try_into().unwrap());
                 }
                 Request::HistorySession { session, offset } => {
-                    let request = uuid::Uuid::new_v4();
-                    storage.commands.try_send(crate::persistence::Command::HistoryTarget { target: self.state.control_target.clone(), request, index: 0, session: Some(session), offset }).map_err(|error| format!("History busy: {error}; retry"))?;
-                    self.pending_history = Some(request);
-                    self.state.history = None;
+                    self.request_history(0, Some(session), offset, storage)?;
                 }
                 Request::History { index, offset } => {
-                    let request = uuid::Uuid::new_v4();
                     self.state.history_index = index;
-                    storage.commands.try_send(crate::persistence::Command::HistoryTarget { target: self.state.control_target.clone(), request, index, session: if index == 0 { self.state.session_identity.as_ref().map(|identity| identity.session.clone()) } else { None }, offset }).map_err(|e| format!("History busy: {e}; retry"))?;
-                    self.pending_history = Some(request);
-                    self.state.history = None;
+                    self.request_history(index, if index == 0 { self.state.session_identity.as_ref().map(|identity| identity.session.clone()) } else { None }, offset, storage)?;
                 }
                 Request::Screen => {}
                 Request::Cleanup { page } => {
@@ -1356,6 +1359,36 @@ impl AgentSession {
         }
     }
 
+    fn request_history(
+        &mut self,
+        index: usize,
+        session: Option<String>,
+        offset: u64,
+        storage: &crate::persistence::Worker,
+    ) -> Result<(), String> {
+        let query = (index, session.clone(), offset);
+        let unchanged = self.history_query.as_ref() == Some(&query);
+        if unchanged && self.pending_history.is_some() {
+            return Ok(());
+        }
+        let request = uuid::Uuid::new_v4();
+        storage
+            .commands
+            .try_send(crate::persistence::Command::HistoryTarget {
+                target: self.state.control_target.clone(),
+                request,
+                index,
+                session,
+                offset,
+            })
+            .map_err(|error| format!("History busy: {error}; retry"))?;
+        self.pending_history = Some(request);
+        self.history_query = Some(query);
+        if !unchanged {
+            self.state.history = None;
+        }
+        Ok(())
+    }
     pub(super) fn observation(&mut self) -> Observation {
         // Reuse the bounded cached projection when no output/geometry changed.
         // A polling supervisor must not format the same screen on every pass.
@@ -1377,6 +1410,30 @@ impl AgentSession {
     }
     pub(super) fn report_error(&mut self, error: String) {
         self.state.error = Some(error);
+    }
+    pub(super) fn clear_error(&mut self) {
+        if !self.metadata_failed {
+            self.state.error = None;
+        }
+    }
+    pub(super) fn recorded_launch(&self, request: &str) -> Option<LaunchResult> {
+        if self.launch.outcome_reply && self.state.launch_request == request {
+            return None;
+        }
+        self.launches.get(request).cloned()
+    }
+    pub(super) fn pending_launch_request(&self, request: &str) -> bool {
+        self.state.launch_request == request
+            && (self.launch.pending_launch.is_some()
+                || self.launch.creating.is_some()
+                || self.launch.created.is_some()
+                || self.launch.gate_receipt.is_some()
+                || self.launch.outcome_reply)
+    }
+    pub(super) fn remember_launch(&mut self, result: LaunchResult) {
+        self.launches
+            .entry(result.request.clone())
+            .or_insert(result);
     }
     pub(super) fn adopt(
         &mut self,
@@ -1455,6 +1512,52 @@ impl Drop for AgentSession {
 mod readable_history_tests {
     use super::*;
     use crate::persistence::{Completion, HistoryPage, Worker};
+
+    #[test]
+    fn repeated_history_poll_retains_the_inflight_reply_and_completed_page() {
+        let directory = tempfile::tempdir().unwrap();
+        let (worker, restored) = Worker::start(directory.path()).unwrap();
+        let mut owner = AgentSession::restore(directory.path(), restored, &worker).unwrap();
+        let poll = || Request::History {
+            index: 0,
+            offset: 0,
+        };
+        owner.handle(poll(), &worker, false);
+        let Completion::HistoryTarget(target, request, _) =
+            worker.events.recv_timeout(Duration::from_secs(3)).unwrap()
+        else {
+            panic!("expected history reply")
+        };
+        owner.handle(poll(), &worker, false);
+        owner.complete(
+            Completion::HistoryTarget(
+                target,
+                request,
+                Ok(HistoryPage {
+                    text: "retained raw page".into(),
+                    ..Default::default()
+                }),
+            ),
+            &worker,
+        );
+        assert_eq!(
+            owner
+                .observation()
+                .history
+                .as_ref()
+                .map(|page| page.text.as_str()),
+            Some("retained raw page")
+        );
+        owner.handle(poll(), &worker, false);
+        assert_eq!(
+            owner
+                .observation()
+                .history
+                .as_ref()
+                .map(|page| page.text.as_str()),
+            Some("retained raw page")
+        );
+    }
 
     #[test]
     fn late_readable_results_and_errors_cannot_replace_a_newer_selected_passage() {

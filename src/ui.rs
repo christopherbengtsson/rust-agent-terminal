@@ -71,7 +71,7 @@ impl Ui {
             " History cleanup · oldest sealed stopped sessions first ".to_owned()
         } else if app.history_open {
             format!(
-                " History · {} · v raw/readable · [/] page ",
+                " Retained history · {} · v raw/readable · [/] page ",
                 if app.history_raw {
                     "escaped raw"
                 } else {
