@@ -77,8 +77,11 @@ observed boundaries without removing the original assertions:
   title retains the existing “Retained history” wording, and a selected tombstone
   still reports “No retained session” with its explicit identity scope.
 
-The first repair aggregate tested source `0104e03`, whose product binary SHA-256
-was `2d919defdc5b8f71656a54de67818eecd9b579fcc851a58228a5adf09e73bfce`.
+The first repair aggregate tested product source `0104e03`. A regular `cargo build`
+ran after the aggregate began and rebuilt the product artifact under the same
+source; a single unchanged binary for the entire run was not established.
+The later recorded product SHA-256 was
+`2d919defdc5b8f71656a54de67818eecd9b579fcc851a58228a5adf09e73bfce`.
 Build, format and warnings-denied all-target Clippy passed. The all-target test
 command exited 101: units 61 passed/2 ignored; ownership 72 passed/4 failed/2 ignored
 in 477.13 seconds. Every original failing case except the stopped-history readable
@@ -105,8 +108,9 @@ Cached replies are passed through the existing launch handler without duplicatin
 other owners' outcome caches. All 63 active unit tests passed with 2 ignored;
 build, format and warnings-denied all-target Clippy passed for this checkpoint.
 
-The unchanged first-repair product binary was hash-checked while those additional
-unit tests were developed in the separate test harness. Its aggregate result
+That recorded first-repair product hash stayed unchanged while those additional
+unit tests were developed in the separate test harness, after the earlier regular
+build. The source-fixed aggregate result
 remains failed. The corrected full aggregate and final integration review are
 still required; no new native-tool or milestone-completion claim follows from
 these fixture and state checks.
