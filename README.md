@@ -6,9 +6,9 @@ A Rust terminal workspace for coding agents. The product name is undecided;
 [implementation milestones](docs/milestones.md).
 
 The dashboard discovers real Git worktrees and can explicitly adopt a checkout
-and launch an interactive scripted PTY fixture. This is a supervisor/terminal
-prototype: Claude Code, Codex CLI, durable history, recovery, and GitHub workflows
-are not supported yet. The first release targets macOS; fixture tests do not
+and explicitly launch Claude Code (`c`) or a scripted PTY fixture (`l`). Claude
+launch is experimental; its full compatibility gate remains open. Codex CLI,
+durable history, recovery, and GitHub workflows are not supported yet. The first release targets macOS; fixture tests do not
 establish native-agent compatibility.
 
 ## Run
@@ -31,8 +31,9 @@ Errors appear in the dashboard, where you can retry or quit.
 | `k` / Up | Select previous worktree |
 | `r` | Refresh worktrees in the background |
 | `a` | Explicitly adopt the selected usable checkout |
+| `c` | Launch installed Claude Code directly in the adopted checkout (experimental) |
 | `l` | Launch the scripted PTY fixture in the adopted checkout |
-| Enter | Attach to the existing fixture |
+| Enter | Attach to the existing managed session |
 | Ctrl-] | Return from attached focus to dashboard navigation |
 | `s` | In dashboard focus, stop the fixture and keep the dashboard open |
 | `d` | In dashboard focus, detach and exit while preserving execution |
@@ -84,7 +85,7 @@ Symlink checkout aliases and paths inside a checkout adopt its canonical Git
 worktree root. A new launch while running is refused; Enter attaches to the existing
 child. The surviving supervisor retains launch-request outcomes: reconnect
 recovers the original request and its success or failure, and retrying that exact
-request does not execute again. An explicit `l` after an acknowledged outcome is
+request does not execute again. An explicit `c` or `l` after an acknowledged outcome is
 a new request. This recovery applies to dashboard loss; supervisor loss needs the
 separate crash-reconciliation work. See the [reconnect proof](docs/proofs/07-dashboard-reconnect.md).
 
@@ -121,3 +122,13 @@ cargo test --locked --all-targets
 
 CI runs these checks on pull requests on macOS and Linux. Tests create isolated
 temporary repositories and do not require agent accounts or GitHub access.
+
+Claude Code launch uses `claude` from the supervisor's inherited PATH and the
+existing native login. Install Claude Code and run `claude auth login` in your
+usual terminal if missing or unauthenticated, then reopen the dashboard if PATH
+changed. Authentication/setup prompts remain in the native CLI. A failed spawn
+retains the adopted checkout and discovery; `c` is an explicit retry. A running
+session refuses replacement regardless of the selected launch choice. Launch is
+experimental: see [the native proof](docs/proofs/05-claude-native.md) for the exact
+version and unresolved scenarios. Native tool usage can consume your account's
+allowance. No credential copying or product authentication store is used.
