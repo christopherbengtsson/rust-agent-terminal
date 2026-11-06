@@ -12,6 +12,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
         mpsc::{self, Receiver, SyncSender},
     },
     thread,
@@ -65,33 +66,49 @@ pub struct Capture {
     progress: Arc<Mutex<Progress>>,
 }
 impl Capture {
-    pub fn send(&self, block: (String, Vec<u8>, Instant)) -> std::result::Result<(), ()> {
-        let size = block.1.len();
-        {
-            let mut p = self.progress.lock().unwrap();
-            p.accepted += size as u64;
-            p.pending_bytes += size;
-            p.pending_high_water = p.pending_high_water.max(p.pending_bytes);
-        }
-        match self.sender.try_send(block) {
-            Ok(()) => Ok(()),
-            Err(mpsc::TrySendError::Disconnected(_)) => Err(()),
-            Err(mpsc::TrySendError::Full(block)) => {
-                let since = Instant::now();
-                {
-                    let mut p = self.progress.lock().unwrap();
-                    p.backpressure_count += 1;
-                    p.producer_wait = Some(since);
+    pub fn accept(&self, size: usize) {
+        let mut p = self.progress.lock().unwrap();
+        p.accepted += size as u64;
+        p.pending_bytes += size;
+        p.pending_high_water = p.pending_high_water.max(p.pending_bytes);
+    }
+    /// Return ownership to the sole PTY reader when Stop needs terminal drain.
+    /// Retrying a retained block transfers ownership without accepting it twice.
+    pub fn send(
+        &self,
+        mut block: (String, Vec<u8>, Instant),
+        stop: Option<&AtomicBool>,
+    ) -> std::result::Result<Option<(String, Vec<u8>, Instant)>, ()> {
+        let since = Instant::now();
+        let mut waiting = false;
+        loop {
+            match self.sender.try_send(block) {
+                Ok(()) => break,
+                Err(mpsc::TrySendError::Disconnected(_)) => return Err(()),
+                Err(mpsc::TrySendError::Full(retained)) => {
+                    block = retained;
+                    if !waiting {
+                        let mut p = self.progress.lock().unwrap();
+                        p.backpressure_count += 1;
+                        p.producer_wait = Some(since);
+                        waiting = true;
+                    }
+                    if stop.is_some_and(|stop| stop.load(Ordering::Acquire)) {
+                        let mut p = self.progress.lock().unwrap();
+                        p.backpressure_micros += since.elapsed().as_micros() as u64;
+                        p.producer_wait = None;
+                        return Ok(Some(block));
+                    }
+                    thread::sleep(Duration::from_millis(5));
                 }
-                let result = self.sender.send(block).map_err(|_| ());
-                {
-                    let mut p = self.progress.lock().unwrap();
-                    p.backpressure_micros += since.elapsed().as_micros() as u64;
-                    p.producer_wait = None;
-                }
-                result
             }
         }
+        if waiting {
+            let mut p = self.progress.lock().unwrap();
+            p.backpressure_micros += since.elapsed().as_micros() as u64;
+            p.producer_wait = None;
+        }
+        Ok(None)
     }
 }
 pub fn metadata(state: &Observation) -> Box<Observation> {
