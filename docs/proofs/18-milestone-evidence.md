@@ -174,7 +174,6 @@ not a claim that an already mapped supervisor changed on rebuild.
 | [Normal native approval](screens/18-claude-approval-dashboard.cells.png) |160×40; exact command and one-time choices in native pane.|
 | [Small Claude question](screens/18-claude-small-attached.cells.png) |60×18; attached identity/focus/actions; aged evidence correctly Unknown; clipping requires native navigation.|
 | [Small Codex question](screens/18-codex-small-attached.cells.png) |60×18; native numbered choices remain visible; long footer clips, dashboard escape stays visible.|
-| [Native interrupted](screens/18-claude-interrupt-dashboard.cells.png) |160×40; actual current acknowledgment and interrupted label.|
 | [Supervisor connection failure](screens/18-claude-supervisor-failure.cells.png) |160×40; last-seen Running identified as unknown, actionable local detach guidance.|
 | [Interrupted replacement refusal](screens/18-codex-replacement-blocked.cells.png) |160×40; uncertainty/reboot guidance, no automatic child.|
 | [Normal cleanup](screens/18-claude-normal-cleanup.cells.png) |160×40; sealed stopped histories eligible; current interrupted segment unavailable.|
@@ -193,3 +192,11 @@ UID/start/argv for both restored owners and their honest refused Shutdown
 (stopped=false) before task-harness-only SIGTERM. Both owners and all known
 native/heartbeat PIDs were then absent. This disposal is not product
 reconciliation, and preserved uncertainty was not cleared or history deleted.
+
+The interruption driver's search for fresh streamed output cleared its outer
+collector before the prompt. Its retained native observation proves the actual
+acknowledgment, but the corresponding incremental raster lacks the initial full
+dashboard frame and is excluded from whole-dashboard screenshots. The archive
+retains the raw/observation boundary; no missing cells were reconstructed from a
+different invocation. The other linked whole captures retained their initial
+frame.
