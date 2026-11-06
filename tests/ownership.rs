@@ -3560,6 +3560,21 @@ fn paced_session_measurement17() {
     }
     dashboard.send(b"\r");
     dashboard.wait("Focus: session");
+    let mut last_commit = 0u64;
+    let collect = |state: &serde_json::Value, last: &mut u64| {
+        for commit in state["durable_commits"].as_array().unwrap() {
+            let seq = commit["sequence"].as_u64().unwrap();
+            if seq > *last {
+                assert_eq!(
+                    seq,
+                    *last + 1,
+                    "telemetry gap invalidates full distribution"
+                );
+                log(serde_json::json!({"kind":"commit","commit":commit}));
+                *last = seq;
+            }
+        }
+    };
     dashboard.send(format!("pace17 1 {attached_ms} 65536\r").as_bytes());
     dashboard.wait("pace17 run=1");
     for sample in 0..attach_samples {
@@ -3585,6 +3600,26 @@ fn paced_session_measurement17() {
         "pace17-complete run=1",
         Duration::from_millis(attached_ms + 8000),
     );
+    log(
+        serde_json::json!({"kind":"parser-cost","mode":"attached","batches_totalus_maxus":*dashboard.parse_cost.lock().unwrap()}),
+    );
+    drop(dashboard);
+    pids.lock().unwrap().truncate(3);
+    let control = Controller::connect(&fixture);
+    let identity = control.greeting["identity"].clone();
+    assert_eq!(
+        control.greeting["execution"]["pid"].as_u64(),
+        Some(u64::from(child))
+    );
+    collect(&control.greeting, &mut last_commit);
+    log(serde_json::json!({"kind":"phase","mode":"attached-complete","state":control.greeting}));
+    fixture.assert_one_owner_and_child();
+    drop(control);
+    dashboard = LiveDashboard::new(fixture.reopen_after_release("Process: Running"));
+    dashboard.wait("Focus: session");
+    pids.lock()
+        .unwrap()
+        .push(dashboard.dashboard.child.process_id().unwrap());
     dashboard.send(format!("pace17 2 {phase_ms} 65536\r").as_bytes());
     dashboard.wait("pace17 run=2");
     dashboard.send(&[0x1d]);
@@ -3621,22 +3656,11 @@ fn paced_session_measurement17() {
     drop(dashboard);
     pids.lock().unwrap().truncate(3);
     let mut control = Controller::connect(&fixture);
-    let identity = control.greeting["identity"].clone();
-    let mut last_commit = 0u64;
-    let collect = |state: &serde_json::Value, last: &mut u64| {
-        for commit in state["durable_commits"].as_array().unwrap() {
-            let seq = commit["sequence"].as_u64().unwrap();
-            if seq > *last {
-                assert_eq!(
-                    seq,
-                    *last + 1,
-                    "telemetry gap invalidates full distribution"
-                );
-                log(serde_json::json!({"kind":"commit","commit":commit}));
-                *last = seq;
-            }
-        }
-    };
+    assert_eq!(control.greeting["identity"], identity);
+    assert_eq!(
+        control.greeting["execution"]["pid"].as_u64(),
+        Some(u64::from(child))
+    );
     collect(&control.greeting, &mut last_commit);
     log(serde_json::json!({"kind":"phase","mode":"healthy-complete","state":control.greeting}));
     for (run, mode, rate, delay) in [
@@ -3728,6 +3752,10 @@ fn paced_session_measurement17() {
             control = Controller::connect(&fixture);
         }
         assert_eq!(control.greeting["identity"], identity);
+        assert_eq!(
+            control.greeting["execution"]["pid"].as_u64(),
+            Some(u64::from(child))
+        );
         fixture.assert_one_owner_and_child();
         if delay.is_some() {
             std::fs::remove_file(fixture.state().join("proof-storage-write")).unwrap();

@@ -36,7 +36,9 @@ component bounds, not total-process RSS or total retained-disk promises.
 
 The 1024-entry commit ring records every successful data-bearing transcript
 `File::sync_all` followed by SQLite FULL transaction commit (SQLite fullfsync
-concerns its own files). Sequence gaps invalidate a complete distribution;
+concerns its own files). The dashboard yields its controlling connection at each healthy phase boundary
+so the collector reads every commit before the ring can wrap. Reopening verifies
+the same identity and child. Sequence gaps invalidate a complete distribution;
 last-counter polling is insufficient. Failed appends no longer mint repeated
 unchanged-prefix completions. Oldest accepted age includes capture waiting for
 the committed batch, not a per-byte exhaustive latency trace. Idle/no-data gaps
