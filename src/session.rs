@@ -1453,6 +1453,13 @@ pub fn scripted_child() -> io::Result<()> {
                         thread::sleep(Duration::from_millis(5));
                     }
                     print!("fixture> ");
+                } else if line == b"osc13" {
+                    let mut stdout = io::stdout().lock();
+                    stdout.write_all(b"\x1b]2;")?;
+                    for _ in 0..2048 {
+                        stdout.write_all(&[b'q'; 4096])?;
+                    }
+                    stdout.write_all(b"\x07osc13-complete\r\nfixture> ")?;
                 } else if line == b"flood13" {
                     flood_run += 1;
                     let start_ns = fixture_clock()?;
