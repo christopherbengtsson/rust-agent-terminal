@@ -1,0 +1,32 @@
+{
+  "lifecycle": "Running",
+  "status": {
+    "state": "Approval",
+    "evidence": "open permission request + current Codex 0.167.0 modal",
+    "reason": "30s bounded native approval evidence; support gate open",
+    "recent": [
+      "PreModelRequest:01a1b119-13f4-7152-aced-3bbf8d20edf7::",
+      "PostModelRequest:01a1b119-13f4-7152-aced-3bbf8d20edf7::",
+      "Stop:01a1b119-13f4-7152-aced-3bbf8d20edf7::",
+      "UserPromptSubmit:01a1b119-244c-7902-9097-37df032e785e::",
+      "PreModelRequest:01a1b119-244c-7902-9097-37df032e785e::",
+      "PostModelRequest:01a1b119-244c-7902-9097-37df032e785e::",
+      "PreToolUse:01a1b119-244c-7902-9097-37df032e785e:request_user_input:call_0839a4e98ce041489f89d07290bc5a99",
+      "PostToolUse:01a1b119-244c-7902-9097-37df032e785e:request_user_input:call_0839a4e98ce041489f89d07290bc5a99",
+      "PreModelRequest:01a1b119-244c-7902-9097-37df032e785e::",
+      "PostModelRequest:01a1b119-244c-7902-9097-37df032e785e::",
+      "Stop:01a1b119-244c-7902-9097-37df032e785e::",
+      "UserPromptSubmit:01a1b119-b6ad-7d82-8635-fa32b5ead73c::",
+      "PreModelRequest:01a1b119-b6ad-7d82-8635-fa32b5ead73c::",
+      "PostModelRequest:01a1b119-b6ad-7d82-8635-fa32b5ead73c::",
+      "PreToolUse:01a1b119-b6ad-7d82-8635-fa32b5ead73c:Bash:exec-b4bf88b3-6b4a-4f7e-ad1e-f4f07d6b8d0b",
+      "PermissionRequest:01a1b119-b6ad-7d82-8635-fa32b5ead73c:Bash:"
+    ]
+  },
+  "screen": "› Use request_user_input to ask me to choose alpha or beta. Do not run commands, read files or write f…\n    answer: Alpha\n \n• You chose alpha.\n \n  Worked for 37s • 14:43                                                                                \n \n \n› Run exactly printf codex-status-gated > status-codex-gated-marker using require_escalated permission\n  and a justification so I can approve it once. Do not run other commands or write any other files.\n \n \n• I’ll request approval for that exact command.\n \n• Running printf codex-status-gated > status-codex-gated-marker\n \n \n  Would you like to run the following command?\n \n  Environment: local\n \n  Reason: Do you approve running this exact command to create status-codex-gated-marker?\n \n  $ printf codex-status-gated > status-codex-gated-marker\n \n \n› 1. Yes, proceed (y)                                                                                   \n  2. Yes, and don't ask again for commands that start with `printf codex-status-gated > status-codex-\n     gated-marker` (p)\n  3. No, and tell Codex what to do differently (esc)\n \n  Press enter to confirm or esc to cancel                                                               ",
+  "identity": "task=93a1c122-2643-43d1-b113-12f531c8cf90 session=edb9095d-770d-480e-a709-dac73ee98232 request=c20f82f2-3c2d-43e1-a2ce-5a373da109ab",
+  "agent": "Codex CLI",
+  "rows": 32,
+  "cols": 104,
+  "output_bytes": 69338
+}

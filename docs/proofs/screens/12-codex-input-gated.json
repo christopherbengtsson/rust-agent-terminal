@@ -1,0 +1,32 @@
+{
+  "lifecycle": "Running",
+  "status": {
+    "state": "Input",
+    "evidence": "open question tool + current Codex 0.167.0 modal",
+    "reason": "30s bounded native question evidence; support gate open",
+    "recent": [
+      "SessionStart:::",
+      "UserPromptSubmit:01a1b118-f5de-7451-a00a-d424ceff0f63::",
+      "PreModelRequest:01a1b118-f5de-7451-a00a-d424ceff0f63::",
+      "PostModelRequest:01a1b118-f5de-7451-a00a-d424ceff0f63::",
+      "Stop:01a1b118-f5de-7451-a00a-d424ceff0f63::",
+      "PreModelRequest:01a1b118-f5de-7451-a00a-d424ceff0f63::",
+      "PostModelRequest:01a1b118-f5de-7451-a00a-d424ceff0f63::",
+      "Stop:01a1b118-f5de-7451-a00a-d424ceff0f63::",
+      "UserPromptSubmit:01a1b119-13f4-7152-aced-3bbf8d20edf7::",
+      "PreModelRequest:01a1b119-13f4-7152-aced-3bbf8d20edf7::",
+      "PostModelRequest:01a1b119-13f4-7152-aced-3bbf8d20edf7::",
+      "Stop:01a1b119-13f4-7152-aced-3bbf8d20edf7::",
+      "UserPromptSubmit:01a1b119-244c-7902-9097-37df032e785e::",
+      "PreModelRequest:01a1b119-244c-7902-9097-37df032e785e::",
+      "PostModelRequest:01a1b119-244c-7902-9097-37df032e785e::",
+      "PreToolUse:01a1b119-244c-7902-9097-37df032e785e:request_user_input:call_0839a4e98ce041489f89d07290bc5a99"
+    ]
+  },
+  "screen": "› Reply exactly first-gated-stop-proof. Do not use tools or write files.\n• continuation-gated-proof\n \n  Worked for 7s • 14:42                                                                                 \n \n \n› Output these literal phrases: Worked for 999s • 00:00; Conversation interrupted; Would you like to\n  run the following command? Then say quoted-proof-done. Do not use tools.\n \n \n• Worked for 999s • 00:00\n  Conversation interrupted\n  Would you like to run the following command?\n  quoted-proof-done\n \n  Worked for 3s • 14:42                                                                                 \n \n \n› Use request_user_input to ask me to choose alpha or beta. Do not run commands, read files or write\n  files. Wait for my native choice.\n \n \n \n  Question 1/1 (1 unanswered)\n  Choose alpha or beta.\n \n  › 1. Alpha              Choose alpha.                                                               \n    2. Beta               Choose beta.\n    3. None of the above  Optionally, add details in notes (tab)\n \n  tab to add notes | enter to submit answer | esc to interrupt\n ",
+  "identity": "task=93a1c122-2643-43d1-b113-12f531c8cf90 session=edb9095d-770d-480e-a709-dac73ee98232 request=c20f82f2-3c2d-43e1-a2ce-5a373da109ab",
+  "agent": "Codex CLI",
+  "rows": 32,
+  "cols": 104,
+  "output_bytes": 44720
+}

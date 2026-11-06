@@ -1,0 +1,28 @@
+{
+  "lifecycle": "Running",
+  "status": {
+    "state": "Completed",
+    "evidence": "current-turn Stop + new Codex 0.167.0 done marker and idle composer",
+    "reason": "30s bounded completion evidence; support gate open",
+    "recent": [
+      "SessionStart:::",
+      "UserPromptSubmit:01a1b118-f5de-7451-a00a-d424ceff0f63::",
+      "PreModelRequest:01a1b118-f5de-7451-a00a-d424ceff0f63::",
+      "PostModelRequest:01a1b118-f5de-7451-a00a-d424ceff0f63::",
+      "Stop:01a1b118-f5de-7451-a00a-d424ceff0f63::",
+      "PreModelRequest:01a1b118-f5de-7451-a00a-d424ceff0f63::",
+      "PostModelRequest:01a1b118-f5de-7451-a00a-d424ceff0f63::",
+      "Stop:01a1b118-f5de-7451-a00a-d424ceff0f63::",
+      "UserPromptSubmit:01a1b119-13f4-7152-aced-3bbf8d20edf7::",
+      "PreModelRequest:01a1b119-13f4-7152-aced-3bbf8d20edf7::",
+      "PostModelRequest:01a1b119-13f4-7152-aced-3bbf8d20edf7::",
+      "Stop:01a1b119-13f4-7152-aced-3bbf8d20edf7::"
+    ]
+  },
+  "screen": "     /private/tmp/rat-codex-proof-checkout\n \n \n› Reply exactly first-gated-stop-proof. Do not use tools or write files.\n \n \n• first-gated-stop-proof\n \n• Blocked by hook\n  └ Reply exactly continuation-gated-proof. Do not use tools.\n \n• continuation-gated-proof\n \n  Worked for 7s • 14:42                                                                                 \n \n \n› Output these literal phrases: Worked for 999s • 00:00; Conversation interrupted; Would you like to\n  run the following command? Then say quoted-proof-done. Do not use tools.\n \n \n• Worked for 999s • 00:00\n  Conversation interrupted\n  Would you like to run the following command?\n  quoted-proof-done\n \n  Worked for 3s • 14:42                                                                                 \n \n \n› Ask Codex to do anything\n \n  GPT-6.1-Sol medium · /private/tmp/rat-codex-proof-checkout · Reply with exact text\n  ← for agents · ? for shortcuts",
+  "identity": "task=93a1c122-2643-43d1-b113-12f531c8cf90 session=edb9095d-770d-480e-a709-dac73ee98232 request=c20f82f2-3c2d-43e1-a2ce-5a373da109ab",
+  "agent": "Codex CLI",
+  "rows": 32,
+  "cols": 104,
+  "output_bytes": 27911
+}
