@@ -1,4 +1,5 @@
 mod app;
+mod codex_status;
 mod events;
 mod git;
 mod lifecycle;
@@ -61,6 +62,12 @@ fn main() -> Result<(), Box<dyn Error>> {
                 token.to_string_lossy().into_owned(),
                 session.to_string_lossy().into_owned(),
             );
+        }
+        return Ok(());
+    }
+    if first.as_deref() == Some(std::ffi::OsStr::new("--codex-status-hook")) {
+        if let (Some(path), Some(token)) = (arguments.next(), arguments.next()) {
+            codex_status::hook(&PathBuf::from(path), token.to_string_lossy().into_owned());
         }
         return Ok(());
     }
