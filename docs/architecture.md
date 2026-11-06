@@ -91,6 +91,95 @@ agent work or background commands have stopped. See [the history and cleanup
 decision](adr/0004-preserve-history-with-explicit-cleanup.md).
 The foundation writes no product state; selection lasts only for this run.
 
+## Execution-machine boundary (direction; local execution today)
+
+The first release runs locally on macOS. Keeping the option of a later VPS
+execution machine means preserving ownership boundaries during local feature
+work; it does not make remote execution a release requirement. This section is
+the authoritative guidance for that direction. Existing ADRs retain their
+specific ownership, evidence, durability and reconciliation decisions. A new ADR
+is unnecessary while no remote deployment or protocol choice is being made.
+
+### Boundaries to preserve as features grow
+
+- **Supervisor interface:** machine-specific execution belongs behind the
+  supervisor's request/observation interface. The supervisor and its workers own
+  agent startup, PTYs, native-tool adapters, execution reservations and cleanup.
+  The dashboard owns interaction and renders observations; it requests effects
+  without reaching into the execution machine's processes or filesystem.
+- **Checkout ownership:** repository discovery, canonicalization, Git commands,
+  worktree mutation and checkout-file access belong on the machine holding the
+  checkout. A returned checkout path describes that machine's filesystem; it is
+  not evidence that the dashboard can open it. Preserve original path bytes
+  within that owner and keep display labels separate from filesystem operands.
+- **Identity and effects:** use explicit requests and observations with stable
+  project/task/session identities as those models arrive. A path, PID, row index
+  or connection is not a durable identity. Identify recoverable mutations by
+  request identity and their target, so a reply can be attributed to the intended
+  operation rather than whichever row is selected when it arrives. Keep bounded
+  dispatch, saturation errors and durable completion visible to App.
+- **Uncertainty and recovery:** connection loss makes current execution unknown;
+  retain the last observation as historical context rather than infer stop or
+  success. Recover a lost reply by querying the original request's outcome before
+  retrying a mutation. Unavailable outcomes remain uncertain until reconciled.
+  Launch already follows [ADR 0005](adr/0005-reconcile-uncertain-session-launches.md);
+  later mutations need their own completion/recovery semantics. This is not a
+  claim of exactly-once execution. GitHub publication still requires the explicit
+  human preview/submission boundary and reconciliation of uncertain remote writes.
+- **Editor artifacts:** diff generation belongs with the checkout or pinned
+  review context. Return diff content and comparison identity (Working, WholeTask
+  or Review, including revisions where applicable), allowing the dashboard to
+  materialize an artifact for its configured editor without a local checkout.
+  An execution-machine temporary filename alone is not a consumable artifact.
+  Local editor scratch files and terminal handoff belong with the dashboard;
+  edited review text returns through an explicit draft-save operation. This
+  direction covers inspection/comment editing, not remote source-file editing.
+- **Host policy:** keep supervisor acquisition/startup and endpoint selection in
+  the client/bootstrap boundary, storage-directory selection in startup, durable
+  state I/O in the supervisor's persistence worker, and OS process evidence and
+  signaling in execution-side helpers. Native tools and `gh` use authentication
+  on the machine running them; the dashboard must not assume its own login or
+  credential paths are available there. Keep dashboard terminal/editor handling
+  and macOS notifications with the dashboard. Retain existing native credentials
+  rather than adding credential storage or copying secrets between machines.
+
+### Current local assumptions and gaps
+
+The session seam already has explicit `Request`/`Observation` messages and durable
+task/session/launch-request IDs. The supervisor owns PTYs, launch deduplication,
+history and process recovery. App retains attribution on connection loss, revokes
+semantic confidence and exposes unknown process state. Recovery currently means
+detaching locally and reopening, not automatic reconnection. Launch outcome
+recovery does not provide a general outcome protocol for all commands.
+
+The implementation still assumes a shared local host in these places:
+
+- `main` starts `GitWorker` beside the dashboard using the CLI repository path;
+  App retains refresh selection by `Worktree.path`. `Request::Adopt` sends path
+  bytes for supervisor-side Git-root resolution/canonicalization. Stable
+  registered-project/worktree identity and execution-side discovery remain future
+  work; moving discovery behind the supervisor is not implemented here.
+- `session::transport` validates a local private state directory, starts the same
+  executable with `setsid`, and connects to its Unix socket. Election and the
+  single-controller policy are local-user policies under
+  [ADR 0001](adr/0001-user-wide-supervisor.md), not multi-host ownership rules.
+- `main` chooses `$HOME/Library/Application Support/rat/proof` or an explicit
+  `--state-dir`. SQLite, transcript files, launch gates and native hook sockets
+  use the execution host's local filesystem. Native tools inherit supervisor
+  PATH/authentication; recovery and child cleanup rely on host boot/start identity
+  and OS-specific process evidence. Linux fixtures do not qualify VPS support.
+- Some requests target the single currently adopted session implicitly, and
+  history browsing uses an index. Those local prototype conveniences are not a
+  complete stable-ID interface for multiple projects or machines. GitHub workflows
+  and editor/diff artifacts are planned; no implemented artifact contract or
+  checkout-independent editor integration is claimed.
+
+Apply these boundaries when changing their owners, documenting any remaining
+local assumption. Continue with concrete local modules and existing workers;
+defer remote transport, provider abstractions, containers and extra crates until
+remote execution is explicitly scoped and its deployment/recovery trade-offs can
+be decided with evidence.
+
 ## Native-session interaction baseline (planned)
 
 This is the design baseline for Milestone 1, not a description of implemented
