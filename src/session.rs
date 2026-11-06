@@ -342,12 +342,15 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let mut checkout = restored
         .checkout
         .map(|bytes| PathBuf::from(std::ffi::OsString::from_vec(bytes)));
-    storage
-        .commands
-        .try_send(crate::persistence::Command::Save(
-            crate::persistence::Snapshot::new(&state, checkout.as_deref(), &task_identity),
-        ))?;
-    let mut save_pending = 1usize;
+    let mut writes = crate::persistence::Obligations::default();
+    writes.send(
+        &storage.commands,
+        crate::persistence::Command::Save(crate::persistence::Snapshot::new(
+            &state,
+            checkout.as_deref(),
+            &task_identity,
+        )),
+    )?;
     let mut pending_launch: Option<Request> = None;
     let mut prepared_ready = false;
     let mut creating: Option<CreatingExecution> = None;
@@ -357,11 +360,15 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let mut partial_gate: Option<UnixListener> = None;
     let mut gate_receipt: Option<Receiver<crate::recovery::Receipt>> = None;
     let mut outcome_reply = false;
+    let mut outcome_operation = None;
+    let mut result_failed = false;
     state.metadata_pending = true;
     let mut metadata_failed = false;
+    let mut metadata_error: Option<String> = None;
     let mut flush_pending = false;
     let mut final_flush = false;
     let mut history_sealed = false;
+    let mut seal_pending = false;
     let mut capture_started_here = false;
     let mut capture_done: Option<Receiver<()>> = None;
     let stop_drain = Arc::new(AtomicBool::new(false));
@@ -401,35 +408,96 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                         .commands
                         .try_send(crate::persistence::Command::Cleanup(0));
                 }
-                Completion::Prepared(request) => {
-                    save_pending = save_pending.saturating_sub(1);
-                    prepared_ready = !cancelled_launch
-                        && request == state.launch_request
-                        && pending_launch.is_some();
-                }
-                Completion::Authorized(request) => {
-                    save_pending = save_pending.saturating_sub(1);
-                    if !cancelled_launch
-                        && request == state.launch_request
-                        && let Some(release) = gate_release.take()
-                    {
-                        let _ = release.try_send(());
+                Completion::Committed(operation) => {
+                    if !writes.complete(&operation) {
+                        continue;
                     }
-                }
-                Completion::Saved => {
-                    save_pending = save_pending.saturating_sub(1);
-                    if save_pending == 0 {
-                        if metadata_failed {
+                    let current = operation.matches(&state);
+                    if current {
+                        match operation.purpose {
+                            crate::persistence::Purpose::Prepare => {
+                                prepared_ready = !cancelled_launch && pending_launch.is_some();
+                            }
+                            crate::persistence::Purpose::Authorize if !cancelled_launch => {
+                                if let Some(release) = gate_release.take() {
+                                    let _ = release.try_send(());
+                                }
+                            }
+                            crate::persistence::Purpose::FinalFlush => {
+                                flush_pending = false;
+                                final_flush = true;
+                            }
+                            crate::persistence::Purpose::Seal => {
+                                seal_pending = false;
+                                history_sealed = true;
+                            }
+                            crate::persistence::Purpose::LaunchResult
+                                if outcome_operation.as_ref() == Some(&operation) =>
+                            {
+                                crate::recovery::crash_barrier(directory, "after-result");
+                                outcome_operation = None;
+                                outcome_reply = false;
+                                result_failed = false;
+                            }
+                            _ => {}
+                        }
+                    }
+                    if current
+                        && !matches!(
+                            operation.purpose,
+                            crate::persistence::Purpose::FinalFlush
+                                | crate::persistence::Purpose::Seal
+                        )
+                        && !writes.metadata_pending()
+                        && !result_failed
+                    {
+                        if metadata_failed && metadata_error.as_ref() == state.error.as_ref() {
                             state.error = None;
                         }
                         metadata_failed = false;
+                        metadata_error = None;
+                    }
+                }
+                Completion::Failed(operation, error) => {
+                    if !writes.complete(&operation) || !operation.matches(&state) {
+                        continue;
+                    }
+                    match operation.purpose {
+                        crate::persistence::Purpose::Prepare
+                        | crate::persistence::Purpose::Authorize => {
+                            metadata_failed = true;
+                            pending_launch = None;
+                            prepared_ready = false;
+                            gate_release = None;
+                        }
+                        crate::persistence::Purpose::LaunchResult
+                            if outcome_operation.as_ref() == Some(&operation) =>
+                        {
+                            metadata_failed = true;
+                            outcome_operation = None;
+                            result_failed = true;
+                        }
+                        crate::persistence::Purpose::FinalFlush => {
+                            flush_pending = false;
+                            final_flush = false;
+                        }
+                        crate::persistence::Purpose::Seal => {
+                            seal_pending = false;
+                            history_sealed = false;
+                        }
+                        _ => {
+                            metadata_failed = true;
+                        }
+                    }
+                    shutdown = false;
+                    state.error = Some(format!(
+                        "Launch/storage outcome not durable: {error}; stop or repair storage before retrying"
+                    ));
+                    if metadata_failed {
+                        metadata_error = state.error.clone();
                     }
                 }
                 Completion::History(page) => state.history = Some(page),
-                Completion::Flushed => {
-                    flush_pending = false;
-                    final_flush = true;
-                }
                 Completion::Error(kind, error) => {
                     if kind == "cleanup" {
                         state.cleanup_message = Some(format!(
@@ -440,20 +508,6 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     if kind == "history" {
                         state.error = Some(error);
                         continue;
-                    }
-                    if kind == "metadata" {
-                        save_pending = save_pending.saturating_sub(1);
-                        metadata_failed = true;
-                        pending_launch = None;
-                        prepared_ready = false;
-                        gate_release = None;
-                    }
-                    if outcome_reply || pending_launch.is_none() {
-                        outcome_reply = false;
-                        state.metadata_pending = true;
-                        state.error = Some(format!(
-                            "Launch/storage outcome not durable: {error}; stop or repair storage before retrying"
-                        ));
                     }
                     flush_pending = false;
                     shutdown = false;
@@ -523,26 +577,28 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             };
             launches.insert(result.request.clone(), result.clone());
             state.launch_result = Some(result);
-            match storage.commands.try_send(crate::persistence::Command::Save(
-                crate::persistence::Snapshot::new(&state, checkout.as_deref(), &task_identity),
-            )) {
-                Ok(()) => {
-                    save_pending += 1;
+            match writes.send(
+                &storage.commands,
+                crate::persistence::Command::Save(crate::persistence::Snapshot::result(
+                    &state,
+                    checkout.as_deref(),
+                    &task_identity,
+                )),
+            ) {
+                Ok(operation) => {
+                    outcome_operation = Some(operation);
                     outcome_reply = true;
                 }
                 Err(error) => {
                     metadata_failed = true;
+                    result_failed = true;
+                    outcome_reply = true;
                     state.error = Some(format!(
                         "Launch outcome not durable: {error}; reconcile before replacement"
                     ));
+                    metadata_error = state.error.clone();
                 }
             }
-        }
-        if outcome_reply && save_pending == 0 && !metadata_failed {
-            crate::recovery::crash_barrier(directory, "after-result");
-            outcome_reply = false;
-            state.metadata_pending = false;
-            screen.lock().unwrap().snapshot(&mut state);
         }
         if let Some(done) = &capture_done
             && done.try_recv().is_ok()
@@ -551,19 +607,31 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             capture_done = None;
         }
         if retry_requested {
-            let command = if metadata_failed {
-                crate::persistence::Command::Save(crate::persistence::Snapshot::new(
-                    &state,
-                    checkout.as_deref(),
-                    &task_identity,
-                ))
-            } else {
-                crate::persistence::Command::Retry
-            };
-            if storage.commands.try_send(command).is_ok() {
-                if metadata_failed {
-                    save_pending += 1;
+            if metadata_failed {
+                let snapshot = if result_failed {
+                    crate::persistence::Snapshot::result(
+                        &state,
+                        checkout.as_deref(),
+                        &task_identity,
+                    )
+                } else {
+                    crate::persistence::Snapshot::new(&state, checkout.as_deref(), &task_identity)
+                };
+                if let Ok(operation) = writes.send(
+                    &storage.commands,
+                    crate::persistence::Command::Save(snapshot),
+                ) {
+                    if result_failed {
+                        outcome_operation = Some(operation);
+                        outcome_reply = true;
+                    }
+                    retry_requested = false;
                 }
+            } else if storage
+                .commands
+                .try_send(crate::persistence::Command::Retry)
+                .is_ok()
+            {
                 retry_requested = false;
             }
         }
@@ -589,7 +657,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
         state.sync_commit_micros = progress.last_flush_micros;
         state.accepted_to_durable_millis = progress.accepted_to_durable_millis;
 
-        state.metadata_pending = save_pending > 0
+        state.metadata_pending = writes.metadata_pending()
             || metadata_failed
             || pending_launch.is_some()
             || creating.is_some()
@@ -605,15 +673,21 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             && eof
             && !flush_pending
             && !final_flush
-            && storage
-                .commands
-                .try_send(crate::persistence::Command::Flush)
+            && writes
+                .send(
+                    &storage.commands,
+                    crate::persistence::Command::Flush(crate::persistence::Operation::new(
+                        &state,
+                        crate::persistence::Purpose::FinalFlush,
+                    )),
+                )
                 .is_ok()
         {
             flush_pending = true;
         }
         if capture_started_here
             && !history_sealed
+            && !seal_pending
             && final_flush
             && !state.metadata_pending
             && child.is_none()
@@ -625,20 +699,22 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                 state.lifecycle,
                 Lifecycle::Stopped | Lifecycle::Exited | Lifecycle::Failed
             )
-            && let Some(id) = state
-                .session_identity
-                .as_ref()
-                .map(|identity| identity.session.clone())
-            && storage
-                .commands
-                .try_send(crate::persistence::Command::Seal(id))
+            && state.session_identity.is_some()
+            && writes
+                .send(
+                    &storage.commands,
+                    crate::persistence::Command::Seal(crate::persistence::Operation::new(
+                        &state,
+                        crate::persistence::Purpose::Seal,
+                    )),
+                )
                 .is_ok()
         {
-            history_sealed = true;
+            seal_pending = true;
         }
         state.stopped = shutdown
             && final_flush
-            && save_pending == 0
+            && writes.is_empty()
             && !metadata_failed
             && pending_launch.is_none()
             && creating.is_none()
@@ -693,23 +769,23 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                 };
                 state.execution = None;
                 final_flush = false;
-                if storage
-                    .commands
-                    .try_send(crate::persistence::Command::Save(
-                        crate::persistence::Snapshot::new(
+                if writes
+                    .send(
+                        &storage.commands,
+                        crate::persistence::Command::Save(crate::persistence::Snapshot::new(
                             &state,
                             checkout.as_deref(),
                             &task_identity,
-                        ),
-                    ))
+                        )),
+                    )
                     .is_ok()
                 {
-                    save_pending += 1;
                     state.metadata_pending = true;
                 } else {
                     metadata_failed = true;
                     state.metadata_pending = true;
                     state.error = Some("Lifecycle metadata not saved; retry quit".into());
+                    metadata_error = state.error.clone();
                     shutdown = false;
                 }
             }
@@ -750,15 +826,18 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
         {
             let mut saved = state.clone();
             saved.native_conversation = Some(id.to_owned());
-            if storage
-                .commands
-                .try_send(crate::persistence::Command::Save(
-                    crate::persistence::Snapshot::new(&saved, checkout.as_deref(), &task_identity),
-                ))
+            if writes
+                .send(
+                    &storage.commands,
+                    crate::persistence::Command::Save(crate::persistence::Snapshot::new(
+                        &saved,
+                        checkout.as_deref(),
+                        &task_identity,
+                    )),
+                )
                 .is_ok()
             {
                 state.native_conversation = saved.native_conversation;
-                save_pending += 1;
                 state.metadata_pending = true;
             }
         }
@@ -899,22 +978,26 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             _ => None,
         };
         let result = (|| -> Result<(), Box<dyn std::error::Error>> {
+            // A provisional launch owns its result slot until the matching
+            // result commit. Another launch/query cannot replace its request or
+            // result with a cached or newly rejected request in the meantime.
+            if !continuing
+                && creating.is_some()
+                && launch_request.is_some()
+                && launch_request.as_deref() != Some(state.launch_request.as_str())
+            {
+                deferred = true;
+                state.error = Some("Process creation still owns a launch reservation; Stop cancels intent, then wait for cleanup".into());
+                return Ok(());
+            }
             if !continuing
                 && (pending_launch.is_some()
                     || creating.is_some()
                     || gate_receipt.is_some()
                     || outcome_reply)
-                && launch_request.as_deref() == Some(state.launch_request.as_str())
+                && (launch_request.is_some() || matches!(request, Request::QueryLaunch(_)))
             {
                 deferred = true;
-                return Ok(());
-            }
-            if matches!(&request, Request::QueryLaunch(id) if id == &state.launch_request)
-                && (pending_launch.is_some()
-                    || creating.is_some()
-                    || gate_receipt.is_some()
-                    || outcome_reply)
-            {
                 return Ok(());
             }
             if let Some(recorded) = &recorded {
@@ -1030,8 +1113,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                         state.process_exit = None;
                         state.launch_result = None;
                         state.lifecycle = Lifecycle::Interrupted;
-                        storage.commands.try_send(crate::persistence::Command::Prepare(crate::persistence::Snapshot::new(&state, Some(path), &task_identity)))?;
-                        save_pending += 1;
+                        writes.send(&storage.commands, crate::persistence::Command::Prepare(crate::persistence::Snapshot::new(&state, Some(path), &task_identity)))?;
                         pending_launch = Some(if resume { Request::Resume(request) } else if claude { Request::LaunchClaude(request) } else if codex { Request::LaunchCodex(request) } else { Request::Launch(request) });
                         deferred = true;
                         return Ok(());
@@ -1211,10 +1293,10 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     });
                     launch_setup_fault(directory, "before-input")?;
                     let mut sink = master.as_ref().unwrap().lock().unwrap().take_writer()?;
-                    let (input, writes) = mpsc::sync_channel::<Vec<u8>>(32);
+                    let (input, input_writes) = mpsc::sync_channel::<Vec<u8>>(32);
                     let errors = write_errors.clone();
                     thread::spawn(move || {
-                        while let Ok(bytes) = writes.recv() {
+                        while let Ok(bytes) = input_writes.recv() {
                             if let Err(error) = sink.write_all(&bytes) {
                                 let _ = errors.try_send(error.to_string());
                                 break;
@@ -1226,6 +1308,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     state.stopped = false;
                     state.history_index = 0;
                     history_sealed = false;
+                    seal_pending = false;
                     let session = state.session_identity.as_ref().ok_or("Missing prepared identity")?.session.clone();
                     let capture = storage.output.clone();
                     launch_setup_fault(directory, "before-capture")?;
@@ -1288,8 +1371,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                         stopping = Some(crate::lifecycle::stop(child.take().unwrap(), owned_scope.as_ref().unwrap().clone()));
                         return Err("Launch cancelled by Stop before authorization".into());
                     }
-                    storage.commands.try_send(crate::persistence::Command::Authorize(crate::persistence::Snapshot::new(&state, Some(path), &task_identity)))?;
-                    save_pending += 1;
+                    writes.send(&storage.commands, crate::persistence::Command::Authorize(crate::persistence::Snapshot::new(&state, Some(path), &task_identity)))?;
                     deferred = true;
                 }
                 Request::Input(bytes) => {
@@ -1444,20 +1526,31 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             state.launch_result = Some(result);
         }
         if save && !deferred {
-            match storage.commands.try_send(crate::persistence::Command::Save(
-                crate::persistence::Snapshot::new(&state, checkout.as_deref(), &task_identity),
-            )) {
-                Ok(()) => {
-                    save_pending += 1;
+            let snapshot = if fresh_launch {
+                crate::persistence::Snapshot::result(&state, checkout.as_deref(), &task_identity)
+            } else {
+                crate::persistence::Snapshot::new(&state, checkout.as_deref(), &task_identity)
+            };
+            match writes.send(
+                &storage.commands,
+                crate::persistence::Command::Save(snapshot),
+            ) {
+                Ok(operation) => {
                     state.metadata_pending = true;
                     if fresh_launch {
+                        outcome_operation = Some(operation);
                         outcome_reply = true;
                     }
                 }
                 Err(error) => {
                     metadata_failed = true;
+                    if fresh_launch {
+                        result_failed = true;
+                        outcome_reply = true;
+                    }
                     state.metadata_pending = true;
                     state.error = Some(format!("Metadata not saved: {error}; retry"));
+                    metadata_error = state.error.clone();
                     shutdown = false;
                 }
             }
@@ -1474,7 +1567,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             );
         }
         if !continuing && controller.is_some() {
-            state.metadata_pending = save_pending > 0
+            state.metadata_pending = writes.metadata_pending()
                 || metadata_failed
                 || pending_launch.is_some()
                 || creating.is_some()

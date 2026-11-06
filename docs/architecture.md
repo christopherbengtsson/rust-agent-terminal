@@ -775,9 +775,14 @@ agent work or descendants.
 Prepare/Authorize/result persistence now return honest provisional observations
 (`metadata_pending`, no launch_result) so the existing half-duplex client can
 send Stop, Shutdown, Screen and RetryStorage. The supervisor continues admitting
-and servicing connections throughout these stages. Prepared/Authorized events
-carry request identity; Stop cancels only the current owner's pending intent
-and drops its release sender. Late commits cannot start a canceled request.
+and servicing connections throughout these stages. Durable session commands and
+success/failure completions carry operation UUID, session UUID when available,
+request identity and purpose (preparation, authorization, launch result, metadata,
+final flush or history sealing). The supervisor tracks each accepted operation;
+a duplicate or altered completion cannot retire another operation. Preparation
+and authorization require the current session/request, and launch acknowledgement
+requires the exact result operation rather than a global pending-write count.
+Stop cancels only the current owner's pending intent and drops its release sender. Late commits cannot start a canceled request.
 Authorization must still commit before gate release, and only committed results
 are acknowledged. Restored uncertain execution remains reserved and cannot be
 cleared by Stop. Same-request durable outcomes and unknown-request recovery
@@ -899,3 +904,29 @@ follow the same bounded drain, final flush, seal and explicit-next-launch barrie
 as successful exits. The original reason is persisted independently of transient
 control/storage errors and returned with readable history; reload never turns a
 fully cleaned failed session into uncertain execution or restarts coding.
+
+
+### Milestone 2 durable-operation attribution (ticket 01)
+
+Final flush and history sealing use the same attributed completion boundary.
+Shutdown waits for every pending operation, and final flush must settle before
+finished capture is replaced. Capture obligations remain distinct from the wire's
+metadata-pending flag. Sealing becomes
+confirmed only after its matching commit, rather than when its command is queued.
+A failed launch-result write remains provisional through unrelated metadata saves.
+Explicit storage retry saves the current stopped/running facts under a new result
+operation, without authorizing a new native launch. A provisional result retains
+its request slot, so another launch/query cannot replace it before completion.
+A successful metadata retry clears only its own diagnostic, preserving newer
+execution/input errors.
+
+This change keeps the existing public Request/Observation representation and
+SQLite schema. Operation UUIDs are private in-process writer identities, not a new
+wire protocol or a durable replay log. The sole-owner lock is acquired before
+opening/migrating storage; an existing live owner is never migrated underneath or
+replaced. Existing same-request launch outcomes and conservative restored process
+evidence remain the restart boundary. Therefore this ticket introduces no
+incompatible message to send to a live Milestone 1 owner. Later changes that add
+requests or migrate records must detect incompatible live owners before using
+those capabilities; unchanged wire compatibility does not establish that future
+handshake. See [the ticket evidence](proofs/m2-01-durable-session-operations.md).
