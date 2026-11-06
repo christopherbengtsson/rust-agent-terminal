@@ -2836,11 +2836,64 @@ fn mismatched_result_completions_leave_live_execution_and_result_provisional() {
         "unmatched errors cannot overwrite execution facts: {pending}"
     );
     fixture.assert_one_owner_and_child();
+    // Native controls belong to the same live owner while the exact result
+    // completion is held. Neither a snapshot nor another metadata save can
+    // acknowledge that provisional result.
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        let screen = controller.request_now(serde_json::json!("Screen"));
+        if screen["screen"].as_str().unwrap().contains("fixture>") {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "native fixture did not become ready: {screen}"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    controller.request_now(serde_json::json!({"Resize":{"rows":19,"cols":73}}));
+    controller.request_now(serde_json::json!({"Input":b"size\r".to_vec()}));
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        let screen = controller.request_now(serde_json::json!("Screen"));
+        assert_eq!(screen["metadata_pending"], true);
+        assert!(screen["launch_result"].is_null());
+        assert_eq!(screen["execution"], pending["execution"]);
+        if screen["screen"].as_str().unwrap().contains("size: 73x19") {
+            assert_eq!(screen["rows"], 19);
+            assert_eq!(screen["cols"], 73);
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "provisional controls stalled: {screen}"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    controller.request_now(serde_json::json!("Stop"));
+    let deadline = Instant::now() + Duration::from_secs(4);
+    loop {
+        let stopped = controller.request_now(serde_json::json!("Screen"));
+        assert_eq!(stopped["metadata_pending"], true);
+        assert!(stopped["launch_result"].is_null());
+        assert_eq!(stopped["session_identity"], pending["session_identity"]);
+        if stopped["lifecycle"] == "Stopped" {
+            assert!(stopped["execution"].is_null());
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "provisional Stop stalled: {stopped}"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
     std::fs::remove_file(hold).unwrap();
     let settled = controller.request(serde_json::json!({"QueryLaunch":"attributed-result"}));
     assert_eq!(settled["launch_result"]["request"], "attributed-result");
     assert!(settled["launch_result"]["error"].is_null());
-    assert_eq!(settled["execution"], pending["execution"]);
+    assert_eq!(settled["session_identity"], pending["session_identity"]);
+    assert_eq!(settled["lifecycle"], "Stopped");
+    assert!(settled["execution"].is_null());
     controller.request(serde_json::json!("Shutdown"));
 }
 
