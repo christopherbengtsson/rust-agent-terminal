@@ -1,0 +1,69 @@
+test sustained_capture_crosses_caps_while_attached_focused_detached_and_lagged ... ok
+test unavailable_native_recovery_retains_history_until_explicit_new_conversation ... ok
+test launch_crash_windows_retain_request_and_require_explicit_reconciliation ... ok
+test storage_authorization_and_result_stalls_allow_stop_without_late_execution ... ok
+test unsafe_state_directory_is_explained_without_changing_discovery ... ok
+test version_one_metadata_migrates_through_real_supervisor_without_losing_history ... ok
+test storage_delayed_writes_and_sync_keep_control_and_defer_saved_boundary ... ok
+
+failures:
+
+---- failed_final_storage_commit_keeps_quit_visible_until_explicit_retry stdout ----
+
+thread 'failed_final_storage_commit_keeps_quit_visible_until_explicit_retry' (34068915) panicked at tests/ownership.rs:81:13:
+missing ["readonly database"]: ┌ Reviews ───────────────────────────────────────────┐┌ Scripted PTY · Focus: dashboard · Process: Stopped · semantic status: unknown ─────────────────────────┐
+│Unavailable · milestone 1                           ││Scripted PTY · pid=30271 · cwd=/private/tmp/.tmpTRlo1V/checkout with spaces                             │
+└────────────────────────────────────────────────────┘│λ                                                                                                       │
+┌ Agent terminal · Worktrees ────────────────────────┐│fixture> received: pending-final-history-08                                                             │
+│Repository: /private/tmp/.tmpTRlo1V/checkout with   ││bytes: 70656e64696e672d66696e616c2d686973746f72792d3038                                                 │
+└────────────────────────────────────────────────────┘│fixture>                                                                                                │
+┌ Project / worktrees (1) ───────────────────────────┐│                                                                                                        │
+│> └ main  /private/tmp/.tmpTRlo1V/checkout with spac││                                                                                                        │
+│    └ managed session · unknown                     ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+└────────────────────────────────────────────────────┘│                                                                                                        │
+┌ Selection ─────────────────────────────────────────┐│                                                                                                        │
+│Path: /private/tmp/.tmpTRlo1V/checkout with spaces  ││                                                                                                        │
+│Branch: main  HEAD:                                 ││                                                                                                        │
+│0000000000000000000000000000000000000000            ││                                                                                                        │
+│                                                    ││                                                                                                        │
+└────────────────────────────────────────────────────┘└────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌ Status · semantic status: unknown · execution not running ───────────────────────────────────────────────────────────────────────────────────────────────────┐
+│Stopped during capture trouble: unread agent output may have been lost. Accepted bytes retained; y retry history.                                             │
+│History capture blocked: disk I/O error; output retained; repair storage then press y to retry or s to stop                                                   │
+│Pending 102 bytes · y retry / s stop                                                                                                                          │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+q quit/stop · y retry history · v resume · c new Claude · x new Codex · a adopt · Enter attach · g cleanup · h history · s stop · d detach · j/k · r refresh    
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- storage_saturation_keeps_navigation_retry_stop_and_exact_retained_bytes stdout ----
+
+thread 'storage_saturation_keeps_navigation_retry_stop_and_exact_retained_bytes' (34095685) panicked at tests/ownership.rs:3007:5:
+capture must not exceed completed emission writes
+
+
+failures:
+    failed_final_storage_commit_keeps_quit_visible_until_explicit_retry
+    storage_saturation_keeps_navigation_retry_stop_and_exact_retained_bytes
+
+test result: FAILED. 49 passed; 2 failed; 2 ignored; 0 measured; 0 filtered out; finished in 363.22s
+
+error: test failed, to rerun pass `--test ownership`
+
