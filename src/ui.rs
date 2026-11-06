@@ -65,7 +65,9 @@ impl Ui {
             reviews,
         );
         let focus = if app.attached { "session" } else { "dashboard" };
-        let title = if app.history_open {
+        let title = if app.cleanup_open {
+            " History cleanup · oldest sealed stopped sessions first ".to_owned()
+        } else if app.history_open {
             " Retained history · controls escaped · n/p session · [/] page ".to_owned()
         } else if frame.area().width < 80 || frame.area().height < 22 {
             let tag = app
@@ -98,7 +100,51 @@ impl Ui {
             session,
         );
         let viewport = Self::session_viewport(frame.area());
-        if app.history_open {
+        if app.cleanup_open {
+            let mut text = String::new();
+            if let Some(preview) = &app.cleanup_preview {
+                text.push_str(&format!("Confirm selected history deletion\n{}\nCheckout: {}\nDelete only this managed transcript segment ({} allocated bytes).\nPreserve checkout files, task working changes, native conversation records, metadata/request outcomes and other sessions.\nSpace recovery is not guaranteed. D deletes this UUID; Esc cancels.\n", visible(&preview.identity), visible(&preview.checkout), preview.bytes.map_or("unknown".into(), |bytes| bytes.to_string())));
+            } else if let Some(page) = &app.session.cleanup {
+                text.push_str(
+                    "History cleanup — explicit retention; Enter previews selected history\n",
+                );
+                if page.entries.is_empty() {
+                    text.push_str("No retained transcript history on this page.\n");
+                }
+                for (index, entry) in page.entries.iter().enumerate() {
+                    let age =
+                        entry
+                            .created
+                            .map_or("unknown (legacy timestamp)".into(), |created| {
+                                let now = std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .map_or(created, |time| time.as_secs());
+                                format!("{} seconds", now.saturating_sub(created))
+                            });
+                    text.push_str(&format!(
+                        "{} {}\n  age {} · {} allocated bytes · {}\n",
+                        if app.cleanup_selected == index {
+                            ">"
+                        } else {
+                            " "
+                        },
+                        visible(&entry.identity),
+                        age,
+                        entry
+                            .bytes
+                            .map_or("unavailable".into(), |bytes| bytes.to_string()),
+                        visible(&entry.status)
+                    ));
+                }
+                text.push_str(&format!("Page {} · n/p page · Esc back\n", page.index + 1));
+            } else {
+                text.push_str("Loading history cleanup; scanning storage in bounded batches…\n");
+            }
+            if let Some(message) = &app.session.cleanup_message {
+                text.push_str(&visible(message));
+            }
+            frame.render_widget(Paragraph::new(text).wrap(Wrap { trim: false }), viewport);
+        } else if app.history_open {
             let text = app
                 .session
                 .history
@@ -301,6 +347,24 @@ impl Ui {
         } else {
             message
         };
+        let message = if let Some(cleanup) = &app.session.cleanup_message {
+            format!("{}\n{message}", visible(cleanup))
+        } else {
+            message
+        };
+        let message = if app.session.capacity.low() {
+            format!(
+                "Low storage: {} bytes available (warning below 1 GiB) · g cleanup · y retry / s stop\n{message}",
+                app.session.capacity.available.unwrap_or(0)
+            )
+        } else if let Some(error) = &app.session.capacity.error {
+            format!(
+                "Storage capacity unavailable: {} · g cleanup\n{message}",
+                visible(error)
+            )
+        } else {
+            message
+        };
         let message = if app.session.capture_loss_possible {
             format!(
                 "Stopped during capture trouble: unread agent output may have been lost. Accepted bytes retained; y retry history.\n{message}"
@@ -343,7 +407,12 @@ impl Ui {
             status,
         );
         let compact_help;
-        let help_text = if !app.attached
+        let help_text = if app.cleanup_open
+            && !app.attached
+            && (frame.area().width < 80 || frame.area().height < 22)
+        {
+            "j/k select · n/p page · Enter preview · D delete\nEsc cancel · g refresh · y retry · s stop · q quit"
+        } else if !app.attached
             && app.session.lifecycle == crate::session::Lifecycle::Interrupted
             && (frame.area().width < 80 || frame.area().height < 22)
         {
@@ -362,7 +431,7 @@ impl Ui {
                 &compact_help
             } else {
                 compact_help = format!(
-                    "a adopt · c/x new Claude/Codex · v resume · Enter attach\nq quit/stop · d detach · Process: {} · status: {}",
+                    "a adopt · c/x new Claude/Codex · v resume · Enter attach\ng cleanup · q quit/stop · d detach · Process: {} · status: {}",
                     if app.session.connection_lost {
                         format!("unknown (last seen {:?})", app.session.lifecycle)
                     } else {
@@ -451,6 +520,98 @@ fn visible(text: &str) -> String {
 mod tests {
     use super::*;
     use ratatui::{Terminal, backend::TestBackend};
+
+    #[test]
+    fn cleanup_renders_unknown_age_physical_size_preview_and_low_space_recovery_controls() {
+        let mut app = App::new("repo".into());
+        app.cleanup_open = true;
+        app.session.capacity.available = Some(0);
+        let entry = crate::cleanup::Entry {
+            id: "selected-session".into(),
+            identity: "task=task15 session=selected-session".into(),
+            bytes: Some(8192),
+            status: "incomplete deletion; explicitly retry".into(),
+            eligible: true,
+            ..Default::default()
+        };
+        app.session.cleanup = Some(crate::cleanup::Page {
+            entries: vec![entry.clone()],
+            ..Default::default()
+        });
+        let mut terminal = Terminal::new(TestBackend::new(160, 40)).unwrap();
+        terminal
+            .draw(|frame| Ui::default().draw(frame, &app))
+            .unwrap();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(text.contains("unknown (legacy timestamp)"));
+        assert!(text.contains("8192 allocated bytes"));
+        assert!(text.contains("task=task15"));
+        assert!(text.contains("Low storage"));
+        assert!(text.contains("incomplete deletion"));
+        app.cleanup_preview = Some(entry);
+        for (width, height) in [(160, 40), (70, 20)] {
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+            terminal
+                .draw(|frame| Ui::default().draw(frame, &app))
+                .unwrap();
+            let text: String = terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect();
+            assert!(text.contains("Confirm selected history deletion"));
+            assert!(text.contains("Esc cancel"));
+            assert!(text.contains("D delete"));
+        }
+    }
+
+    #[test]
+    fn storage_warning_has_an_exact_threshold_and_unknown_capacity_is_honest() {
+        let mut app = App::new("repo".into());
+        for (bytes, warning) in [
+            (0, true),
+            (1_073_741_823, true),
+            (1_073_741_824, false),
+            (u64::MAX, false),
+        ] {
+            app.session.capacity.available = Some(bytes);
+            let mut terminal = Terminal::new(TestBackend::new(160, 40)).unwrap();
+            terminal
+                .draw(|frame| Ui::default().draw(frame, &app))
+                .unwrap();
+            let text: String = terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect();
+            assert_eq!(text.contains("Low storage"), warning);
+        }
+        app.session.capacity.available = None;
+        app.session.capacity.error = Some("capacity read failed".into());
+        let mut terminal = Terminal::new(TestBackend::new(160, 40)).unwrap();
+        terminal
+            .draw(|frame| Ui::default().draw(frame, &app))
+            .unwrap();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(text.contains("Storage capacity unavailable"));
+        assert!(!text.contains("Low storage"));
+    }
 
     #[test]
     fn stopped_capture_fault_keeps_possible_loss_and_retry_visible() {
