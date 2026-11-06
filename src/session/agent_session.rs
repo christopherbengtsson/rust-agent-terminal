@@ -820,7 +820,7 @@ impl AgentSession {
                 return Err("Launch reconciliation pending; wait for durable outcome".into());
             }
             match request {
-                Request::RenameWorkspace { .. } | Request::Session { .. } | Request::SelectSession(_) | Request::Discover { .. } | Request::Adopt(_) | Request::Register(_) => unreachable!("workspace requests are supervisor-owned"),
+                Request::InspectWorking { .. } | Request::RenameWorkspace { .. } | Request::Session { .. } | Request::SelectSession(_) | Request::Discover { .. } | Request::Adopt(_) | Request::Register(_) => unreachable!("workspace requests are supervisor-owned"),
                 Request::Reconcile => {
                     if self.execution.child.is_some() || self.execution.stopping.is_some() { return Err("Session owned by current supervisor; stop it normally".into()); }
                     if let Some(evidence) = &self.state.execution { evidence.reconcile()?; }

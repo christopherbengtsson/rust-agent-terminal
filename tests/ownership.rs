@@ -6782,3 +6782,220 @@ fn keyboard_switches_live_workspaces_and_reconnects_in_normal_and_small_ptys() {
         state = control.request(serde_json::json!("Screen"));
     }
 }
+
+#[test]
+fn working_diff_dashboard_inspects_and_refreshes_real_files_in_normal_and_small_ptys() {
+    let fixture = Fixture::new();
+    let git = |args: &[&str]| {
+        let result = Command::new("git")
+            .arg("-C")
+            .arg(&fixture.repository)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+    };
+    git(&["config", "user.name", "Test"]);
+    git(&["config", "user.email", "test@example.com"]);
+    std::fs::write(fixture.repository.join("zeta"), "base\n").unwrap();
+    git(&["add", "zeta"]);
+    git(&["commit", "-qm", "initial"]);
+    std::fs::write(fixture.repository.join("zeta"), "staged\n").unwrap();
+    git(&["add", "zeta"]);
+    std::fs::write(fixture.repository.join("zeta"), "unstaged\n").unwrap();
+    std::fs::write(fixture.repository.join("alpha"), "first file\n").unwrap();
+    std::fs::write(fixture.repository.join("beta"), "first response\n").unwrap();
+    for (cols, rows) in [(160, 40), (60, 18)] {
+        let mut dashboard = Dashboard::open_geometry(
+            &fixture.repository,
+            &fixture.state(),
+            None,
+            None,
+            rows,
+            cols,
+        );
+        dashboard.wait_any(&["Discovery complete", "Adopted:"]);
+        dashboard.send(b"a");
+        dashboard.wait("Adopted:");
+        dashboard.send(b"w");
+        dashboard.wait(" / Workspace ");
+        dashboard.send(b"f");
+        dashboard.wait("first file");
+        dashboard.send(b"j");
+        dashboard.wait("first response");
+        std::fs::write(
+            fixture.repository.join("beta"),
+            "agent changes while inspecting\n",
+        )
+        .unwrap();
+        dashboard.send(b"r");
+        let screen = dashboard.wait("agent changes while inspecting");
+        assert!(screen.contains("Working"), "{screen}");
+        assert!(screen.contains("Snapshot; not live"), "{screen}");
+        assert!(screen.contains("new file"), "{screen}");
+        assert!(screen.contains("r refresh"), "{screen}");
+        if cols == 160 {
+            assert!(screen.contains("Reviews"));
+        }
+        if let Some(directory) = std::env::var_os("RAT_DIFF_EVIDENCE") {
+            std::fs::create_dir_all(&directory).unwrap();
+            std::fs::write(
+                Path::new(&directory).join(format!("m2-13-working-pty-{cols}.txt")),
+                &screen,
+            )
+            .unwrap();
+            let mut cells = Vec::new();
+            for row in 0..rows {
+                for col in 0..cols {
+                    let cell = dashboard.screen.screen().cell(row, col).unwrap();
+                    cells.push(serde_json::json!({"row":row,"col":col,"text":cell.contents(),"fg":format!("{:?}",cell.fgcolor()),"bg":format!("{:?}",cell.bgcolor()),"bold":cell.bold(),"wide":cell.is_wide_continuation()}));
+                }
+            }
+            std::fs::write(Path::new(&directory).join(format!("m2-13-working-pty-{cols}.json")),serde_json::to_vec_pretty(&serde_json::json!({"source":"actual dashboard outer PTY, agent-like concurrent filesystem edits; no coding child launched","cols":cols,"rows":rows,"cells":cells,"hide_cursor":true})).unwrap()).unwrap();
+        }
+        dashboard.send(b"j");
+        dashboard.wait("Staged · HEAD to index");
+        dashboard.send(b"\x1b[6~");
+        dashboard.wait("Unstaged · index to working files");
+        dashboard.send(b"\x1b");
+        dashboard.wait("Focus: dashboard");
+        dashboard.send(b"f");
+        dashboard.wait("first file");
+        dashboard.send(b"q");
+        dashboard.child.wait().unwrap();
+        std::fs::write(fixture.repository.join("beta"), "first response\n").unwrap();
+    }
+}
+
+#[test]
+fn working_diff_jobs_are_workspace_owned_read_only_bounded_and_stop_cancellable() {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = Fixture::new();
+    let bin = fixture.temp.path().join("diff-bin");
+    std::fs::create_dir(&bin).unwrap();
+    let slow = fixture.temp.path().join("slow-diff");
+    let wrapper = bin.join("git");
+    std::fs::write(
+        &wrapper,
+        format!(
+            "#!/bin/sh\nif [ -f '{}' ]; then /bin/sleep 10; fi\nexec /usr/bin/git \"$@\"\n",
+            slow.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let mut paths = vec![bin];
+    paths.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap()));
+    let mut owner = Command::new(env!("CARGO_BIN_EXE_agent-terminal"))
+        .arg("--supervisor")
+        .arg(fixture.state())
+        .env("PATH", std::env::join_paths(paths).unwrap())
+        .spawn()
+        .unwrap();
+    struct Owner<'a>(&'a mut std::process::Child);
+    impl Drop for Owner<'_> {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    let _owner = Owner(&mut owner);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !fixture.state().join("supervisor.sock").exists() {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let mut control = Controller::connect(&fixture);
+    control.request(serde_json::json!({"Adopt":fixture.repository.as_os_str().as_encoded_bytes()}));
+    let adopted = cleanup_wait15(&mut control, |state| {
+        state["registry"]["selected"].is_string() && state["registry_pending"] == false
+    });
+    let workspace = adopted["registry"]["selected"].as_str().unwrap();
+    std::fs::write(fixture.repository.join("new\nfile"), "visible text\n").unwrap();
+    let inspect = |request: &str| serde_json::json!({"InspectWorking":{"request":request,"workspace":workspace,"selected":null}});
+    control.request(inspect("first"));
+    let snapshot = cleanup_wait15(&mut control, |state| {
+        state["working_diff"]["request"] == "first"
+    });
+    assert_eq!(snapshot["working_diff"]["workspace"], workspace);
+    assert_eq!(
+        snapshot["working_diff"]["result"]["Ok"]["files"][0]["state"],
+        "new file"
+    );
+    assert!(
+        snapshot["working_diff"]["result"]["Ok"]["content"]
+            .as_str()
+            .unwrap()
+            .contains("visible text")
+    );
+    assert!(
+        snapshot["identity"].is_null(),
+        "inspection never launches a session"
+    );
+    let target = adopted["control_target"].clone();
+    let rejected=control.request_now(serde_json::json!({"Session":{"target":target,"session":null,"command":inspect("invalid-envelope")}}));
+    assert!(
+        rejected["error"]
+            .as_str()
+            .unwrap()
+            .contains("Invalid targeted session command")
+    );
+    assert_eq!(rejected["working_diff"]["request"], "first");
+    std::fs::write(&slow, b"slow Git").unwrap();
+    let start = Instant::now();
+    control.request_now(inspect("slow"));
+    let screen = control.request_now(serde_json::json!("Screen"));
+    assert!(
+        start.elapsed() < Duration::from_millis(500),
+        "Git work blocked controller: {screen}"
+    );
+    control.request_now(inspect("busy"));
+    let busy = cleanup_wait15(&mut control, |state| {
+        state["working_diff"]["request"] == "busy"
+    });
+    assert!(
+        busy["working_diff"]["result"]["Err"]
+            .as_str()
+            .unwrap()
+            .contains("busy")
+    );
+    let start = Instant::now();
+    control.request_now(
+        serde_json::json!({"Session":{"target":target,"session":null,"command":"Stop"}}),
+    );
+    let cancelled = cleanup_wait15(&mut control, |state| {
+        state["working_diff"]["request"] == "slow"
+    });
+    assert!(
+        cancelled["working_diff"]["result"]["Err"]
+            .as_str()
+            .unwrap()
+            .contains("cancelled")
+    );
+    assert!(
+        start.elapsed() < Duration::from_secs(1),
+        "Stop waited for Git"
+    );
+    control.request(inspect("timeout"));
+    let timeout = cleanup_wait15(&mut control, |state| {
+        state["working_diff"]["request"] == "timeout"
+    });
+    assert!(
+        timeout["working_diff"]["result"]["Err"]
+            .as_str()
+            .unwrap()
+            .contains("timed out")
+    );
+    std::fs::remove_file(slow).unwrap();
+    control.request(inspect("retry"));
+    let retry = cleanup_wait15(&mut control, |state| {
+        state["working_diff"]["request"] == "retry"
+    });
+    assert!(retry["working_diff"]["result"]["Ok"].is_object());
+    control.request_now(serde_json::json!("Shutdown"));
+    cleanup_wait15(&mut control, |state| state["stopped"] == true);
+}

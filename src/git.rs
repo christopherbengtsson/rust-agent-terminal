@@ -77,7 +77,10 @@ fn run_git(
     )
 }
 
-fn run_git_command(command: &mut Command, cancelled: &AtomicBool) -> Result<Vec<u8>, String> {
+pub(crate) fn run_git_command(
+    command: &mut Command,
+    cancelled: &AtomicBool,
+) -> Result<Vec<u8>, String> {
     command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -334,7 +337,10 @@ pub struct CheckoutIdentity {
     pub common_dir: PathBuf,
 }
 
-fn resolve_checkout(path: &Path, cancelled: &AtomicBool) -> Result<CheckoutIdentity, String> {
+pub(crate) fn resolve_checkout(
+    path: &Path,
+    cancelled: &AtomicBool,
+) -> Result<CheckoutIdentity, String> {
     let canonical = path.canonicalize().map_err(|e| {
         format!("Checkout unavailable: {e}; refresh and choose an existing checkout")
     })?;

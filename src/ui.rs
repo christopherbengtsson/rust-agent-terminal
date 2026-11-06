@@ -65,7 +65,9 @@ impl Ui {
             reviews,
         );
         let focus = if app.attached { "session" } else { "dashboard" };
-        let title = if app.cleanup_open {
+        let title = if let Some(view) = &app.diff {
+            format!(" Working · {} ", crate::working_diff::printable(&view.name))
+        } else if app.cleanup_open {
             " History cleanup · oldest sealed stopped sessions first ".to_owned()
         } else if app.history_open {
             format!(
@@ -106,7 +108,9 @@ impl Ui {
             session,
         );
         let viewport = Self::session_viewport(frame.area());
-        if app.workspaces_open || app.project_input.is_some() {
+        if let Some(view) = &app.diff {
+            draw_working_diff(frame, viewport, view);
+        } else if app.workspaces_open || app.project_input.is_some() {
             let items = app
                 .session
                 .registry
@@ -539,7 +543,12 @@ impl Ui {
             );
         }
         let compact_help;
-        let help_text = if app.first_prompt.is_some() || app.rename_workspace.is_some() {
+        let help_text = if app.diff.is_some()
+            && !app.attached
+            && (frame.area().width < 80 || frame.area().height < 22)
+        {
+            "j/k file · arrows scroll · r refresh · f/Esc back\ns stop · q quit · d detach · PgUp/PgDn"
+        } else if app.first_prompt.is_some() || app.rename_workspace.is_some() {
             app.keyboard_help()
         } else if !app.attached
             && app.project_input.is_some()
@@ -577,7 +586,7 @@ A add · h history · w/Esc back · d detach · q quit"
                 &compact_help
             } else {
                 compact_help = format!(
-                    "w workspaces · A add · a adopt · c/x new · C/X prompt · R rename · Enter attach\nv resume · g cleanup · q quit/stop · d detach · {} {}",
+                    "f Working diff · w workspaces · A add · a adopt · c/x new · C/X prompt · R rename · Enter attach\nv resume · g cleanup · q quit/stop · d detach · {} {}",
                     if app.session.connection_lost {
                         format!("unknown (last seen {:?})", app.session.lifecycle)
                     } else {
@@ -592,6 +601,136 @@ A add · h history · w/Esc back · d detach · q quit"
         };
         frame.render_widget(Paragraph::new(help_text), help);
     }
+}
+
+fn draw_working_diff(frame: &mut Frame, area: Rect, view: &crate::working_diff::View) {
+    let compact = area.width < 70 || area.height < 18;
+    let snapshot = view.snapshot.as_ref();
+    let freshness = if view.loading {
+        "Refreshing; previous snapshot"
+    } else if view.error.is_some() {
+        "Refresh failed; previous snapshot"
+    } else {
+        "Snapshot; not live"
+    };
+    let request = snapshot.map_or(view.request.as_str(), |snapshot| snapshot.request.as_str());
+    let checkout = snapshot
+        .map(|snapshot| crate::working_diff::printable(&snapshot.checkout.root.to_string_lossy()))
+        .unwrap_or_else(|| "resolving…".into());
+    let identity = format!(
+        "Workspace {}\nCheckout {}\nRequest {}\n{}{}",
+        crate::working_diff::printable(&view.workspace),
+        checkout,
+        request,
+        freshness,
+        snapshot
+            .map(|snapshot| format!(
+                " · {}{}",
+                snapshot.captured_millis,
+                if snapshot.changed_during_capture {
+                    " · changed during capture; refresh"
+                } else {
+                    " · r refresh"
+                }
+            ))
+            .unwrap_or_default()
+    );
+    let [identity_area, error_area, body] = Layout::vertical([
+        Constraint::Length(4),
+        Constraint::Length(if view.error.is_some() { 2 } else { 0 }),
+        Constraint::Min(1),
+    ])
+    .areas(area);
+    frame.render_widget(Paragraph::new(identity), identity_area);
+    if let Some(error) = &view.error {
+        frame.render_widget(
+            Paragraph::new(error.as_str())
+                .style(Style::default().fg(Color::Yellow))
+                .wrap(Wrap { trim: false }),
+            error_area,
+        );
+    }
+    let Some(snapshot) = snapshot else {
+        frame.render_widget(
+            Paragraph::new(if view.loading {
+                "Loading Working comparison…"
+            } else {
+                "Comparison unavailable; r retries. Esc returns."
+            }),
+            body,
+        );
+        return;
+    };
+    let (files_area, content_area) = if compact {
+        let [files, content] = Layout::vertical([
+            Constraint::Length(if snapshot.files.is_empty() { 0 } else { 3 }),
+            Constraint::Min(1),
+        ])
+        .areas(body);
+        (files, content)
+    } else {
+        let [files, content] =
+            Layout::horizontal([Constraint::Percentage(32), Constraint::Min(1)]).areas(body);
+        (files, content)
+    };
+    let items = snapshot
+        .files
+        .iter()
+        .map(|file| {
+            ListItem::new(vec![
+                Line::from(file.label()),
+                Line::from(format!("  {}", file.state)),
+            ])
+        })
+        .collect::<Vec<_>>();
+    let selected = snapshot
+        .files
+        .iter()
+        .position(|file| Some(&file.path) == view.selected.as_ref());
+    let mut state = ListState::default().with_selected(selected);
+    let title = if snapshot.omitted > 0 {
+        format!("Files: {} omitted; status limit", snapshot.omitted)
+    } else {
+        format!("Files ({}) · j/k", snapshot.files.len())
+    };
+    frame.render_stateful_widget(
+        List::new(items)
+            .block(Block::default().title(title))
+            .highlight_symbol("> ")
+            .highlight_style(Style::default().fg(Color::Cyan)),
+        files_area,
+        &mut state,
+    );
+    let content = if view.selected == snapshot.selected {
+        snapshot.content.as_str()
+    } else {
+        "Loading selected file; previous patch withheld."
+    };
+    let lines = content
+        .lines()
+        .map(|line| {
+            let color = if line.starts_with('+') {
+                Color::Green
+            } else if line.starts_with('-') {
+                Color::LightRed
+            } else if line.starts_with("@@") {
+                Color::Cyan
+            } else {
+                Color::Gray
+            };
+            Line::styled(line, Style::default().fg(color))
+        })
+        .collect::<Vec<_>>();
+    frame.render_widget(
+        Paragraph::new(lines)
+            .scroll((view.scroll, view.horizontal))
+            .block(Block::default().title(format!(
+                "Content · line {} · column {}",
+                view.scroll as usize + 1,
+                view.horizontal as usize + 1
+            ))),
+        content_area,
+    );
 }
 
 fn color(color: vt100::Color) -> Color {

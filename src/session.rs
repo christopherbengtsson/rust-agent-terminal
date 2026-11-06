@@ -97,7 +97,8 @@ fn transport(
     let mut greeting: Observation = serde_json::from_slice(&read_frame(&mut reader)?)?;
     decode_screen(&mut greeting);
     if greeting.control_denied {
-        if greeting.git_jobs_protocol != 1
+        if greeting.diff_protocol != 1
+            || greeting.git_jobs_protocol != 1
             || greeting.registry_protocol != 1
             || greeting.sessions_protocol != 1
             || greeting.prompt_naming_protocol != 1
@@ -134,7 +135,8 @@ fn transport(
         }
         return Ok(());
     }
-    if greeting.git_jobs_protocol != 1
+    if greeting.diff_protocol != 1
+        || greeting.git_jobs_protocol != 1
         || greeting.registry_protocol != 1
         || greeting.sessions_protocol != 1
         || greeting.prompt_naming_protocol != 1
@@ -525,6 +527,7 @@ impl Sessions {
                         | Request::Register(_)
                         | Request::RenameWorkspace { .. }
                         | Request::Discover { .. }
+                        | Request::InspectWorking { .. }
                 ) {
                     self.report_error("Invalid targeted session command".into());
                     return;
@@ -656,6 +659,8 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let mut discovery: Option<crate::git::GitWorker> = None;
     let mut pending_discovery: Option<(u64, PathBuf)> = None;
     let mut discovery_result = None;
+    let mut diff_job: Option<crate::working_diff::Job> = None;
+    let mut diff_result = None;
     let mut adoption_pending = false;
     let mut quitting = false;
     let mut subscriber_frame_high_water = 0;
@@ -663,6 +668,11 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let mut delivery: Option<Delivery> = None;
     let mut pending = Vec::new();
     loop {
+        if diff_job.as_ref().is_some_and(|job| job.is_finished())
+            && let Some(job) = diff_job.take()
+        {
+            diff_result = job.result.try_recv().ok();
+        }
         if adoption
             .as_ref()
             .is_some_and(|job| !adoption_pending && job.is_finished())
@@ -754,6 +764,8 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
         session.advance(&storage, adoption.is_some());
         let mut state = session.observation();
         state.subscriber_frame_high_water = subscriber_frame_high_water;
+        state.diff_protocol = 1;
+        state.working_diff = diff_result.clone();
         state.git_jobs_protocol = 1;
         state.registry_protocol = 1;
         state.prompt_naming_protocol = 1;
@@ -766,6 +778,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             && quitting
             && adoption.is_none()
             && discovery.is_none()
+            && diff_job.is_none()
             && registry_operation.is_none();
         if state.stopped && controller.is_none() {
             fs::remove_file(&socket)?;
@@ -778,6 +791,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     incoming.set_nonblocking(true)?;
                     if controller.is_some() {
                         let refusal = Observation {
+                            diff_protocol: 1,
                             git_jobs_protocol: 1,
                             registry_protocol: 1,
                             sessions_protocol: 1,
@@ -863,7 +877,55 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                 continue;
             }
         };
+        if matches!(&request, Request::Session {command, ..} if matches!(**command, Request::Stop))
+            && let Some(job) = &diff_job
+        {
+            job.cancel();
+        }
         match request {
+            Request::InspectWorking {
+                request,
+                workspace,
+                selected,
+            } => {
+                let result = (|| -> Result<(), String> {
+                    if request.len() > 128
+                        || workspace.len() > 256
+                        || selected
+                            .as_ref()
+                            .is_some_and(|path| path.len() > 32768 || path.contains(&0))
+                    {
+                        return Err("Invalid or oversized comparison identity/path".into());
+                    }
+                    if diff_job.is_some() {
+                        return Err("Comparison job busy; retry refresh".into());
+                    }
+                    let known = registry
+                        .workspaces
+                        .iter()
+                        .find(|known| known.id == workspace)
+                        .ok_or("Workspace unavailable; refresh registry")?;
+                    let checkout = known.checkout.as_ref().ok_or("Checkout identity unavailable; explicitly adopt an existing checkout first")?;
+                    diff_job = Some(
+                        crate::working_diff::Job::start(
+                            checkout.clone(),
+                            workspace.clone(),
+                            request.clone(),
+                            selected,
+                        )
+                        .map_err(|error| error.to_string())?,
+                    );
+                    diff_result = None;
+                    Ok(())
+                })();
+                if let Err(error) = result {
+                    diff_result = Some(crate::working_diff::Response {
+                        workspace,
+                        request,
+                        result: Err(error),
+                    });
+                }
+            }
             Request::Discover {
                 request,
                 repository,
@@ -956,6 +1018,9 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             Request::Stop | Request::Shutdown => {
+                if let Some(job) = &diff_job {
+                    job.cancel();
+                }
                 if let Some(job) = &adoption {
                     job.cancel();
                 }
@@ -978,6 +1043,8 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
         }
         let mut state = session.observation();
         state.subscriber_frame_high_water = subscriber_frame_high_water;
+        state.diff_protocol = 1;
+        state.working_diff = diff_result.clone();
         state.git_jobs_protocol = 1;
         state.registry_protocol = 1;
         state.prompt_naming_protocol = 1;
@@ -990,6 +1057,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             && quitting
             && adoption.is_none()
             && discovery.is_none()
+            && diff_job.is_none()
             && registry_operation.is_none();
         if controller.is_some() {
             delivery = Some(Delivery::new(&mut state)?);
