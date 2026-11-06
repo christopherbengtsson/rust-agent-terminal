@@ -2,15 +2,16 @@
 
 Status: ready-for-agent
 Blocked by: 11
+Resolved: yes
 
 **What to build:** Identify Codex work needing attention using demonstrated native signals, preserving unknown whenever evidence is unavailable.
 
-- [ ] For the tested Codex version, demonstrate PTY-compatible evidence for working, input, approval, turn completion and interruption; record sources, validity conditions and limitations for each.
-- [ ] The dashboard distinguishes semantic state, process liveness, connection status and stopped/failed execution. Completion does not archive the task.
-- [ ] Absent, invalid or unreliable signals produce unknown. Silence and failed intermediate commands do not invent attention, completion or session failure.
-- [ ] Use the shared fixture/state-event contract to verify visible transitions, missing-evidence handling and continued activity after a failed child command, without an adapter-specific mock framework.
-- [ ] Record separate real macOS evidence for every required Codex signal. Evidence available only outside native PTY mode cannot pass the gate; unresolved signals remain explicit proof failures.
-- [ ] Use readable text labels alongside color and document exact supported versions and limitations.
+- [x] For the tested Codex version, demonstrate PTY-compatible evidence for working, input, approval, turn completion and interruption; record sources, validity conditions and limitations for each.
+- [x] The dashboard distinguishes semantic state, process liveness, connection status and stopped/failed execution. Completion does not archive the task.
+- [x] Absent, invalid or unreliable signals produce unknown. Silence and failed intermediate commands do not invent attention, completion or session failure.
+- [x] Use the shared fixture/state-event contract to verify visible transitions, missing-evidence handling and continued activity after a failed child command, without an adapter-specific mock framework.
+- [x] Record separate real macOS evidence for every required Codex signal. Evidence available only outside native PTY mode cannot pass the gate; unresolved signals remain explicit proof failures.
+- [x] Use readable text labels alongside color and document exact supported versions and limitations.
 
 ## Comments
 
@@ -34,3 +35,11 @@ Blocked by: 11
   cleanup checkpoint a3841db is ready for the integrating agent to merge and
   verify; that agent owns the final checks and completion decision. No native
   status signal remains an unresolved proof gap in the declared scenarios.
+
+- Integrated verification completed on `6da639d`: formatting, locked build, and
+  all-target warnings-denied Clippy passed. The identical source tree passed
+  all-target tests: 21 unit tests, 29 ownership/history/resource scenarios,
+  scripted interaction/status, and screen integration. The ignored restoration
+  probe was exercised by its parent test. The earlier cleanup and diagnostic
+  formatting failures are fixed. Ticket 12 is resolved for the declared Codex
+  0.167.0 native scenarios; broader release validation remains separate.
