@@ -290,7 +290,7 @@ terminal guard without sending Shutdown. Client EOF merely releases control.
 
 A termination worker owns the child while stopping. The live supervisor captures
 the gated helper's UID/start identity before authorization and tracks verified
-descendants across process groups on a worker (20 ms sampling, 1024 retained
+descendants across process groups on a worker (100 ms sampling, 1024 retained
 identities). Before termination it freezes the leader and each verified child
 generation, requires stopped-state evidence and a second inventory adding no new
 members. TERM remains pending while frozen; KILL follows after 500 ms, without

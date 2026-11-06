@@ -66,7 +66,7 @@ for graceful native shutdown. Managed captured history still has its separate
 EOF/durable-flush boundary. Inventory, identity or bound failures remain visible
 and retryable with `s`/`q`; they never count as confirmed cleanup.
 
-Live ancestry is sampled every 20 ms, with at most 1024 retained identities per
+Live ancestry is sampled every 100 ms, with at most 1024 retained identities per
 session. Inventories cap at 8192 processes, 1 MiB and 500 ms; closure has a 500 ms
 budget inside the existing two-second deadline. Unrelated processes outside that
 ancestry are excluded. Deliberate double-fork/reparent escape between samples is
