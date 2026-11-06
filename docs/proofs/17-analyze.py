@@ -23,12 +23,17 @@ def distribution(values):
     return {'n': len(ordered), **{f'p{p}': ordered[min(len(ordered)-1, (len(ordered)*p+99)//100-1)] for p in (50, 90, 95, 99)}, 'min': ordered[0], 'max': ordered[-1]}
 
 runs = {}
+emission = collections.defaultdict(lambda: {'records':0,'bytes':0,'max_write_us':0,'write_us':0})
 for line in (root / 'proof-emitted17.jsonl').open():
     value = json.loads(line)
+    if 'record' in value:
+        emitted=emission[value['run']]
+        assert value['record']==emitted['records'], 'missing/duplicate producer ledger record'
+        emitted['records']+=1;emitted['bytes']+=value['bytes'];emitted['max_write_us']=max(emitted['max_write_us'],value['write_us']);emitted['write_us']+=value['write_us']
     if value.get('kind') == 'complete':
         runs[value['run']] = value
 inputs = {v['nonce']: v for v in map(json.loads, (root/'proof-input17.jsonl').open())}
-report = {'manifest': events[0], 'runs': runs, 'latency_us': {}, 'rss_KiB': {}, 'raw_continuity': []}
+report = {'manifest': events[0], 'runs': runs, 'emission':dict(emission), 'latency_us': {}, 'rss_KiB': {}, 'raw_continuity': []}
 for kind in ('navigation', 'attach'):
     for mode in sorted({e['mode'] for e in events if e['kind'] == kind}):
         samples = [e for e in events if e['kind'] == kind and e['mode'] == mode]
@@ -63,6 +68,7 @@ for run_id, run in runs.items():
         report['rss_KiB'][f'run{run_id}/pid{pid}'] = {'command': samples[0][2], 'samples':len(samples), 'sampled_peak':max(s[1] for s in samples),'steady':distribution([s[1] for s in steady]),'first_middle_last_median':[statistics.median([s[1] for s in w]) if w else None for w in windows]}
 commits = [e['commit'] for e in events if e['kind']=='commit']
 assert [c['sequence'] for c in commits] == list(range(1,len(commits)+1)), 'missing commit observations'
+assert all(b['prefix']>a['prefix'] for a,b in zip(commits,commits[1:])), 'unchanged/regressing data-bearing prefix'
 report['commits'] = {'count':len(commits),'interval_us': distribution([b['completed_micros']-a['completed_micros'] for a,b in zip(commits,commits[1:])]),'oldest_accepted_us':distribution([c['oldest_accepted_micros'] for c in commits]),'sync_commit_us':distribution([c['sync_commit_micros'] for c in commits])}
 # Classify intervals only when both endpoints fall within a healthy producer run.
 # Worker-relative origin differs from the common kernel clock: use per-run prefix
@@ -107,22 +113,63 @@ for session in report['raw_continuity']:
     for run, ranges in session['record_prefix_ranges'].items():
         intervals=[]; ages=[]; sync=[]
         for a,b in zip(commits,commits[1:]):
-            if ranges[0]<=a['prefix']<=b['prefix']<=ranges[1]:
+            if ranges[0]<a['prefix']<b['prefix']<=ranges[1]:
                 intervals.append(b['completed_micros']-a['completed_micros']);ages.append(b['oldest_accepted_micros']);sync.append(b['sync_commit_micros'])
         report['commits'][f'run{run}']={'interval_us':distribution(intervals),'oldest_accepted_us':distribution(ages),'sync_commit_us':distribution(sync)}
+        selected=[c for c in commits if ranges[0]<c['prefix']<=ranges[1]]
+        if len(selected)>1:
+            report['commits'][f'run{run}']['persisted_Bps_between_observed_commits']=(selected[-1]['prefix']-selected[0]['prefix'])*1e6/(selected[-1]['completed_micros']-selected[0]['completed_micros'])
     for run, count in session['complete_records'].items():
         if run in runs:
             assert count==runs[run]['records'],f'completed run {run}: emitted/captured record mismatch'
+for session in report['raw_continuity']:
+    for run,count in session['complete_records'].items():
+        if run in emission:
+            emission[run]['ledger_minus_captured_records']=emission[run]['records']-count
+            emission[run]['ledger_minus_captured_bytes']=emission[run]['bytes']-count*1024-session['trailing_incomplete_bytes']
+report['emission_accounting_limit']='Producer ledger follows each completed stdout write; TERM/crash can fall before that ledger write. One at-most-1024-byte in-flight producer record is uncertain. Positive ledger-minus-captured payload bytes are confirmed completed writes missing at capture; captured controls/ACK/startup are separate.'
+# Before/after comparisons include identity, committed extents and SHA256, not
+# uncommitted file tails. No claim about emitted-but-unread kernel bytes.
 crash=root/'crash-before-restore'
 if crash.exists():
     report['crash_raw_continuity']=inspect(crash)
+    after=root/'crash-after-restore'
+    if after.exists():
+        report['after_restore_continuity']=inspect(after)
+        assert report['after_restore_continuity']==report['crash_raw_continuity'], 'durable bytes/hash changed during restore'
     observation=next(e for e in events if e['kind']=='crash')
     report['crash']=observation
     recovered=report['crash_raw_continuity'][-1]['durable']
-    report['crash']['accepted_minus_recovered']=observation['acknowledged']['accepted_bytes']-recovered
+    report['crash']['last_observed_accepted_minus_recovered']=observation['acknowledged']['accepted_bytes']-recovered
+    report['crash']['confirmed_accepted_loss_lower_bound']=max(0,observation['acknowledged']['accepted_bytes']-recovered)
+    report['crash']['counter_limit']='Accepted count is the final acknowledged Screen observation before SIGKILL; raw request/response/kill timestamps bound the sampling gap. Output can advance in that gap, so exact accepted-at-kill loss is unknown; negative observed-minus-recovered means later commits survived, not negative loss.'
     assert recovered>=observation['acknowledged']['durable_bytes']
+fault_start=next((e['started_ns'] for e in events if e['kind']=='fault-window-start'),None)
+fault_stop=next((e['injected_ns'] for e in events if e['kind']=='stop' and e.get('mode')=='full-storage'),None)
+if fault_start and fault_stop:
+    samples=collections.defaultdict(list)
+    for event in events:
+        if event['kind']=='rss' and fault_start<=event['sample_ns']<fault_stop:
+            for line in event['ps'].splitlines():
+                fields=line.split(None,4)
+                if len(fields)==5:samples[fields[0]].append(int(fields[2]))
+    report['fault_rss_KiB']={pid:{'samples':len(values),'distribution':distribution(values),'first_last_median':[statistics.median(values[:10]),statistics.median(values[-10:])]} for pid,values in samples.items()}
 report['disk_samples']=[e for e in events if e['kind']=='disk']
 report['sampler_us']=distribution([e['sampler_us'] for e in events if e['kind']=='rss'])
 report['phases']=[e for e in events if e['kind'] in ('phase','retry','stop','finished')]
+gates={}
+for key, expected in [('navigation/dashboard-focused',events[0]['navigation_samples']),('attach/attached',events[0]['attach_samples'])]:
+    d=report['latency_us'][key]
+    target=100000 if key.startswith('navigation') else 1000000
+    gates[key]={'pass':d['entirely_active']['n']==expected and d['entirely_active'].get('max',target+1)<target,'expected_samples':expected,'active_samples':d['entirely_active']['n'],'target_us':target}
+for run in range(1,5):
+    d=report['commits'].get(f'run{run}',{})
+    gates[f'healthy-storage/run{run}']={'pass':d.get('interval_us',{}).get('n',0)>0 and d['interval_us']['max']<=1000000 and d['oldest_accepted_us']['max']<=1000000,'target_us':1000000}
+for mode in ['slow-storage','full-storage']:
+    d=report['latency_us'].get('navigation/'+mode,{}).get('all',{})
+    gates['navigation/'+mode]={'pass':d.get('n',0)>0 and d.get('max',100001)<100000,'target_us':100000}
+finished=next((e for e in events if e['kind']=='finished'),None)
+gates['harness-final']={'pass':finished is not None and not finished['failures'],'failures':finished['failures'] if finished else ['no final receipt']}
+report['gates']=gates
 (root/'analysis.json').write_text(json.dumps(report,indent=2)+'\n')
 print(json.dumps({key:report[key] for key in ('latency_us','commits','sampler_us','raw_continuity')},indent=2))
