@@ -1805,6 +1805,8 @@ fn paced_fixture(run: u64, duration_ms: u64, rate: u64) -> io::Result<()> {
     let mut sequence = 0u64;
     let mut max_write_us = 0;
     let mut write_us = 0;
+    let mut ledger_us = 0;
+    let mut max_ledger_us = 0;
     while started.elapsed() < Duration::from_millis(duration_ms) {
         let cycle = Instant::now();
         let mut record = format!(
@@ -1822,11 +1824,15 @@ fn paced_fixture(run: u64, duration_ms: u64, rate: u64) -> io::Result<()> {
         max_write_us = max_write_us.max(elapsed);
         write_us += elapsed;
         if let Some(ledger) = ledger.as_mut() {
+            let cost = Instant::now();
             writeln!(
                 ledger,
                 "{}",
                 serde_json::json!({"run":run,"record":sequence,"bytes":1024,"write_us":elapsed,"completed_ns":fixture_clock()?})
             )?;
+            let cost = cost.elapsed().as_micros() as u64;
+            ledger_us += cost;
+            max_ledger_us = max_ledger_us.max(cost);
         }
         sequence += 1;
         if let Some(rest) = period.checked_sub(cycle.elapsed()) {
@@ -1845,7 +1851,7 @@ fn paced_fixture(run: u64, duration_ms: u64, rate: u64) -> io::Result<()> {
         writeln!(
             ledger,
             "{}",
-            serde_json::json!({"kind":"complete","run":run,"records":sequence,"bytes":sequence*1024,"start_ns":start_ns,"finish_ns":finish_ns,"write_us":write_us,"max_write_us":max_write_us})
+            serde_json::json!({"kind":"complete","run":run,"records":sequence,"bytes":sequence*1024,"start_ns":start_ns,"finish_ns":finish_ns,"write_us":write_us,"max_write_us":max_write_us,"ledger_us":ledger_us,"max_ledger_us":max_ledger_us})
         )?;
     }
     Ok(())

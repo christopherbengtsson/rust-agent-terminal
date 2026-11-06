@@ -3228,6 +3228,7 @@ struct LiveDashboard {
     dashboard: Dashboard,
     latest: std::sync::Arc<std::sync::Mutex<(String, u64)>>,
     collector: Option<std::thread::JoinHandle<()>>,
+    parse_cost: std::sync::Arc<std::sync::Mutex<(u64, u64, u64)>>,
 }
 impl LiveDashboard {
     fn new(mut dashboard: Dashboard) -> Self {
@@ -3242,16 +3243,25 @@ impl LiveDashboard {
             measurement_clock(),
         )));
         let screen = latest.clone();
+        let parse_cost = std::sync::Arc::new(std::sync::Mutex::new((0u64, 0u64, 0u64)));
+        let costs = parse_cost.clone();
         let collector = std::thread::spawn(move || {
             while let Ok(bytes) = output.recv() {
+                let since = Instant::now();
                 parser.process(&bytes);
                 *screen.lock().unwrap() = (parser.screen().contents(), measurement_clock());
+                let elapsed = since.elapsed().as_micros() as u64;
+                let mut cost = costs.lock().unwrap();
+                cost.0 += 1;
+                cost.1 += elapsed;
+                cost.2 = cost.2.max(elapsed);
             }
         });
         Self {
             dashboard,
             latest,
             collector: Some(collector),
+            parse_cost,
         }
     }
     fn send(&mut self, bytes: &[u8]) {
@@ -3284,46 +3294,22 @@ impl Drop for LiveDashboard {
     }
 }
 
-// Panic cleanup belongs to this harness, never the developer's default owner.
-struct MeasurementCleanup(PathBuf);
-impl Drop for MeasurementCleanup {
-    fn drop(&mut self) {
-        let output = Command::new("ps")
-            .args(["-Ao", "pid,ppid,command"])
-            .output()
-            .unwrap();
-        let processes = String::from_utf8_lossy(&output.stdout);
-        let executable = env!("CARGO_BIN_EXE_agent-terminal");
-        let owner = processes
-            .lines()
-            .find(|line| {
-                line.contains(executable)
-                    && line.contains("--supervisor")
-                    && line.contains(self.0.to_str().unwrap())
-            })
-            .and_then(|line| line.split_whitespace().next())
-            .and_then(|pid| pid.parse::<i32>().ok());
-        if let Some(owner) = owner {
-            let owner_text = owner.to_string();
-            for line in processes.lines().filter(|line| {
-                line.contains(executable) && line.split_whitespace().nth(1) == Some(&owner_text)
-            }) {
-                if let Some(pid) = line
-                    .split_whitespace()
-                    .next()
-                    .and_then(|pid| pid.parse::<i32>().ok())
-                {
-                    // SAFETY: direct child of the isolated endpoint's owner, with exact executable verification.
-                    unsafe {
-                        libc::kill(pid, libc::SIGKILL);
-                    }
-                }
-            }
-            // SAFETY: endpoint path and exact executable established this harness's owner.
-            unsafe {
-                libc::kill(owner, libc::SIGKILL);
-            }
-        }
+fn measurement_shutdown(control: &mut Controller) -> serde_json::Value {
+    let mut state = control.request(serde_json::json!("Shutdown"));
+    let until = Instant::now() + Duration::from_secs(10);
+    while state["stopped"] != true {
+        assert!(Instant::now() < until, "shutdown unconfirmed: {state}");
+        std::thread::sleep(Duration::from_millis(10));
+        state = control.request(serde_json::json!("Screen"));
+    }
+    assert_eq!(state["capture_pending_bytes"], 0);
+    state
+}
+fn measurement_wait_endpoint_exit(fixture: &Fixture) {
+    let until = Instant::now() + Duration::from_secs(3);
+    while fixture.state().join("supervisor.sock").exists() {
+        assert!(Instant::now() < until);
+        std::thread::sleep(Duration::from_millis(10));
     }
 }
 
@@ -3335,7 +3321,6 @@ fn paced_session_measurement17() {
         atomic::{AtomicBool, Ordering},
     };
     let fixture = Fixture::new();
-    let _cleanup = MeasurementCleanup(fixture.state());
     let preflight = std::env::var_os("RAT_MEASURE17_QUICK").is_some();
     let phase_ms = if preflight { 4000 } else { 60000 };
     let attach_samples = if preflight { 5 } else { 100 };
@@ -3354,7 +3339,7 @@ fn paced_session_measurement17() {
     let log = |value: serde_json::Value| writeln!(raw.lock().unwrap(), "{value}").unwrap();
     // These are run parameters, not product capacity promises.
     log(
-        serde_json::json!({"kind":"manifest","revision":String::from_utf8(Command::new("git").args(["rev-parse","HEAD"]).output().unwrap().stdout).unwrap().trim(),"dirty":!Command::new("git").args(["diff","HEAD","--quiet"]).status().unwrap().success(),"profile":"debug","outer_terminal":"portable-pty + vt100 0.18.1; no graphical terminal/pixel latency","outer_geometry":[40,160],"healthy_duration_ms":phase_ms,"preflight_only":preflight,"healthy_rate_Bps":65536,"record_bytes":1024,"style_mix":"each record: cursor position/erase, green SGR, lambda+CJK UTF8, padded X; raw termios","navigation_samples":navigation_samples,"attach_samples":attach_samples,"rss_period_ms":1000,"lag_ms":phase_ms,"slow_write_ms":50,"fault":"debug write ENOSPC marker, not real volume exhaustion","caps":{"capture_bytes":270336,"storage_commands":16,"storage_events":16,"input_commands":32,"client_requests":32,"client_latest":1,"outer_blocks":8,"outer_block_bytes":4096,"frame_bytes":4194304,"commit_records":1024,"chunk_bytes":65536,"screen_max":[80,200],"scrollback":0},"instrumentation":"continuous latest screen parser/mutex; 1ms observation poll; fixture per-record and input JSONL; bounded commit ring; ps 1s, actual sampler durations recorded"}),
+        serde_json::json!({"kind":"manifest","revision":String::from_utf8(Command::new("git").args(["rev-parse","HEAD"]).output().unwrap().stdout).unwrap().trim(),"dirty":!Command::new("git").args(["diff","HEAD","--quiet"]).status().unwrap().success(),"profile":"debug","outer_terminal":"portable-pty + vt100 0.18.1; no graphical terminal/pixel latency","outer_geometry":[40,160],"healthy_duration_ms":phase_ms,"preflight_only":preflight,"healthy_rate_Bps":65536,"record_bytes":1024,"style_mix":"each record: cursor position/erase, green SGR, lambda+CJK UTF8, padded X; raw termios","navigation_samples":navigation_samples,"attach_samples":attach_samples,"rss_period_ms":1000,"lag_ms":phase_ms,"slow_write_ms":50,"slow_fault_navigation_samples":if preflight {4} else {20},"full_fault_dwell_ms":if preflight {5000} else {30000},"session_geometry_initial":[32,104],"slow_subscriber_geometry":[80,200],"fault":"debug write ENOSPC marker, not real volume exhaustion","caps":{"capture_bytes":270336,"storage_commands":16,"storage_events":16,"input_commands":32,"client_requests":32,"client_latest":1,"outer_blocks":8,"outer_block_bytes":4096,"frame_bytes":4194304,"commit_records":1024,"chunk_bytes":65536,"screen_max":[80,200],"scrollback":0},"instrumentation":"continuous latest screen parser/mutex; 1ms observation poll; fixture per-record and input JSONL; bounded commit ring; ps 1s, actual sampler durations recorded"}),
     );
     let binary_hash = Command::new("shasum")
         .args(["-a", "256", env!("CARGO_BIN_EXE_agent-terminal")])
@@ -3575,6 +3560,9 @@ fn paced_session_measurement17() {
     }
     dashboard.send(b"\r");
     dashboard.wait("pace17-complete run=2");
+    log(
+        serde_json::json!({"kind":"parser-cost","mode":"healthy","batches_totalus_maxus":*dashboard.parse_cost.lock().unwrap()}),
+    );
     drop(dashboard);
     pids.lock().unwrap().truncate(3);
     let mut control = Controller::connect(&fixture);
@@ -3624,6 +3612,47 @@ fn paced_session_measurement17() {
             control = Controller::connect(&fixture);
             assert_eq!(control.greeting["identity"], identity);
             collect(&control.greeting, &mut last_commit);
+        } else if run == 5 {
+            let started = Instant::now();
+            control.request(
+                serde_json::json!({"Input":format!("pace17 {run} {phase_ms} {rate}\r").as_bytes()}),
+            );
+            drop(control);
+            let mut slow = LiveDashboard::new(fixture.reopen_after_release("Focus: dashboard"));
+            pids.lock()
+                .unwrap()
+                .push(slow.dashboard.child.process_id().unwrap());
+            std::thread::sleep(Duration::from_millis(if preflight { 500 } else { 10000 }));
+            for sample in 0..if preflight { 4 } else { 20 } {
+                let (key, expected) = if sample % 2 == 0 {
+                    (b"j", "Branch: other17")
+                } else {
+                    (b"k", "Branch: main")
+                };
+                let before = measurement_clock();
+                slow.send(key);
+                let visible = slow.wait(expected).1;
+                log(
+                    serde_json::json!({"kind":"navigation","mode":"slow-storage","run":5,"sample":sample,"injected_ns":before,"visible_ns":visible,"us":visible.saturating_sub(before)/1000}),
+                );
+                std::thread::sleep(Duration::from_millis(150));
+            }
+            let before = measurement_clock();
+            slow.send(b"\r");
+            let focus = slow.wait("Focus: session").1;
+            slow.send(b"ack17 slow\r");
+            let visible = slow.observe("ACK17 slow ", Duration::from_secs(2));
+            log(
+                serde_json::json!({"kind":"attach","mode":"slow-storage","run":5,"nonce":"slow","injected_ns":before,"focus_ns":focus,"visible_ns":visible.as_ref().map(|s|s.1),"us":visible.as_ref().map(|s|s.1.saturating_sub(before)/1000),"censor_ns":measurement_clock()}),
+            );
+            slow.send(&[0x1d]);
+            slow.wait("Focus: dashboard");
+            if let Some(left) = Duration::from_millis(phase_ms).checked_sub(started.elapsed()) {
+                std::thread::sleep(left);
+            }
+            drop(slow);
+            pids.lock().unwrap().truncate(3);
+            control = Controller::connect(&fixture);
         } else {
             control.request(
                 serde_json::json!({"Input":format!("pace17 {run} {phase_ms} {rate}\r").as_bytes()}),
@@ -3665,7 +3694,7 @@ fn paced_session_measurement17() {
         .push(dashboard.dashboard.child.process_id().unwrap());
     dashboard.send(&[0x1d]);
     dashboard.wait("Focus: dashboard");
-    std::thread::sleep(Duration::from_secs(5));
+    std::thread::sleep(Duration::from_secs(if preflight { 5 } else { 30 }));
     for sample in 0..20 {
         let (key, expected) = if sample % 2 == 0 {
             (b"j", "Branch: other17")
@@ -3681,11 +3710,11 @@ fn paced_session_measurement17() {
     }
     let before = measurement_clock();
     dashboard.send(b"\r");
-    dashboard.wait("Focus: session");
+    let fault_focus = dashboard.wait("Focus: session").1;
     dashboard.send(b"ack17 fault\r");
     let visible = dashboard.observe("ACK17 fault ", Duration::from_secs(2));
     log(
-        serde_json::json!({"kind":"attach","mode":"full-storage","injected_ns":before,"visible_ns":visible.as_ref().map(|s|s.1),"censor_ns":measurement_clock(),"screen":dashboard.latest.lock().unwrap().0}),
+        serde_json::json!({"kind":"attach","mode":"full-storage","nonce":"fault","injected_ns":before,"focus_ns":fault_focus,"visible_ns":visible.as_ref().map(|s|s.1),"censor_ns":measurement_clock(),"screen":dashboard.latest.lock().unwrap().0}),
     );
     dashboard.send(&[0x1d]);
     dashboard.wait("Focus: dashboard");
@@ -3771,7 +3800,10 @@ fn paced_session_measurement17() {
             assert!(Instant::now() < deadline);
         }
     }
-    control.request(serde_json::json!("Shutdown"));
+    let shutdown_ack = measurement_shutdown(&mut control);
+    log(serde_json::json!({"kind":"clean-shutdown-ack","state":shutdown_ack}));
+    drop(control);
+    measurement_wait_endpoint_exit(&fixture);
     done.store(true, Ordering::Relaxed);
     sampler.join().unwrap();
     for entry in std::fs::read_dir(fixture.state()).unwrap() {
@@ -3780,7 +3812,6 @@ fn paced_session_measurement17() {
             std::fs::copy(entry.path(), evidence.join(entry.file_name())).unwrap();
         }
     }
-    drop(control);
     // A new owner/runtime supplies a current-revision paced abrupt-failure run.
     let mut crash_dashboard = LiveDashboard::new(fixture.reopen_after_release("Process: Stopped"));
     crash_dashboard.send(b"l");
@@ -3853,7 +3884,9 @@ fn paced_session_measurement17() {
     log(
         serde_json::json!({"kind":"crash","owner":crash_owner,"child":crash_child,"acknowledged":acknowledged,"restored":restored.greeting,"replacement":refused}),
     );
-    restored.request(serde_json::json!("Shutdown"));
+    measurement_shutdown(&mut restored);
+    drop(restored);
+    measurement_wait_endpoint_exit(&fixture);
     let after = evidence.join("crash-after-restore");
     std::fs::create_dir(&after).unwrap();
     for entry in std::fs::read_dir(fixture.state()).unwrap() {
@@ -3872,7 +3905,6 @@ fn paced_session_measurement17() {
 #[test]
 fn paced_capture_saturation_stop_confirms_without_storage_repair() {
     let fixture = Fixture::new();
-    let _cleanup = MeasurementCleanup(fixture.state());
     let mut dashboard = fixture.open();
     dashboard.wait("Discovery complete");
     dashboard.send(b"a");
@@ -3913,7 +3945,6 @@ fn paced_capture_saturation_stop_confirms_without_storage_repair() {
 #[test]
 fn failed_append_does_not_invent_data_bearing_durable_commits() {
     let fixture = Fixture::new();
-    let _cleanup = MeasurementCleanup(fixture.state());
     let mut dashboard = fixture.open();
     dashboard.wait("Discovery complete");
     dashboard.send(b"a");
