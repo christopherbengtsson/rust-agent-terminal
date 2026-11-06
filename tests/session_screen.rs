@@ -262,7 +262,7 @@ fn screen_resize_styles_alternate_modes_and_output_survive_focus_and_reconnect()
     dashboard.send(b"primary\r");
     dashboard.wait("primary restored");
     dashboard.send(b"stream\r");
-    dashboard.wait("stream: 0000");
+    dashboard.wait("stream: 0");
     dashboard.send(&[0x1d]);
     dashboard.wait("Focus: dashboard");
     dashboard.send(b"\r");

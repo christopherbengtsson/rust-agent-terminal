@@ -82,7 +82,12 @@ One dashboard controls the supervisor at a time. A second dashboard reports the
 existing connection and cannot launch, type into, or stop its session. After a
 controller dies, reopen the dashboard to recover the same fixture and screen.
 Symlink checkout aliases and paths inside a checkout adopt its canonical Git
-worktree root. Repeated launch is refused; Enter attaches to the existing child.
+worktree root. A new launch while running is refused; Enter attaches to the existing
+child. The surviving supervisor retains launch-request outcomes: reconnect
+recovers the original request and its success or failure, and retrying that exact
+request does not execute again. An explicit `l` after an acknowledged outcome is
+a new request. This recovery applies to dashboard loss; supervisor loss needs the
+separate crash-reconciliation work. See the [reconnect proof](docs/proofs/07-dashboard-reconnect.md).
 
 The state directory must be owned by the current user with mode 0700 and cannot
 itself be a symlink. The socket is mode 0600. Concurrent starts use an OS ownership
