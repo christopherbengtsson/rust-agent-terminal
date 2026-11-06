@@ -15,21 +15,61 @@ pub struct Ui {
 
 impl Ui {
     pub fn draw(&mut self, frame: &mut Frame, app: &App) {
-        let [header, list, details, status, help] = Layout::vertical([
-            Constraint::Length(3),
-            Constraint::Min(3),
-            Constraint::Length(6),
-            Constraint::Length(3),
+        frame.render_widget(
+            Block::default().style(Style::default().bg(Color::Rgb(12, 17, 24)).fg(Color::Gray)),
+            frame.area(),
+        );
+        let [body, status, help] = Layout::vertical([
+            Constraint::Min(1),
+            Constraint::Length(5),
             Constraint::Length(1),
         ])
         .areas(frame.area());
-
+        let [sidebar, session] =
+            Layout::horizontal([Constraint::Percentage(34), Constraint::Percentage(66)])
+                .areas(body);
+        let [reviews, header, list, details] = Layout::vertical([
+            Constraint::Length(3),
+            Constraint::Length(3),
+            Constraint::Min(1),
+            Constraint::Length(6),
+        ])
+        .areas(sidebar);
+        frame.render_widget(
+            Paragraph::new("Unavailable · milestone 1").block(
+                Block::bordered()
+                    .border_style(Style::default().fg(Color::Cyan))
+                    .title(" Reviews "),
+            ),
+            reviews,
+        );
+        let title = format!(
+            " Scripted PTY · Focus: {} · semantic status: unknown ",
+            if app.attached { "session" } else { "dashboard" }
+        );
+        let text = if app.session.screen.is_empty() {
+            "Adopt a checkout (a), then launch the fixture (l)."
+        } else {
+            &app.session.screen
+        };
+        frame.render_widget(
+            Paragraph::new(text).block(
+                Block::bordered()
+                    .border_style(Style::default().fg(Color::Cyan))
+                    .title(title),
+            ),
+            session,
+        );
         frame.render_widget(
             Paragraph::new(format!(
                 "Repository: {}",
                 visible(&app.repository.display().to_string())
             ))
-            .block(Block::bordered().title(" Agent terminal · Worktrees "))
+            .block(
+                Block::bordered()
+                    .border_style(Style::default().fg(Color::Cyan))
+                    .title(" Agent terminal · Worktrees "),
+            )
             .wrap(Wrap { trim: false }),
             header,
         );
@@ -44,18 +84,32 @@ impl Ui {
                 if worktree.prunable.is_some() {
                     flags.push_str(" [prunable]");
                 }
-                ListItem::new(format!(
-                    "{}{}  {}",
+                let mut lines = vec![Line::from(format!(
+                    "└ {}{}  {}",
                     visible(worktree.label()),
                     flags,
                     visible(&worktree.path.display().to_string())
-                ))
+                ))];
+                if app.session.adopted.as_deref()
+                    == Some(worktree.path.display().to_string().as_str())
+                {
+                    lines.push(Line::from(if app.session.identity.is_some() {
+                        "  └ scripted session · status unknown"
+                    } else {
+                        "  └ adopted · ready for fixture"
+                    }));
+                }
+                ListItem::new(lines)
             })
             .collect();
         self.list.select(app.selected);
-        let title = format!(" Worktrees ({}) ", app.worktrees.len());
+        let title = format!(" Project / worktrees ({}) ", app.worktrees.len());
         let widget = List::new(items)
-            .block(Block::bordered().title(title))
+            .block(
+                Block::bordered()
+                    .border_style(Style::default().fg(Color::Cyan))
+                    .title(title),
+            )
             .highlight_symbol("> ")
             .highlight_style(
                 Style::default()
@@ -89,39 +143,60 @@ impl Ui {
         };
         frame.render_widget(
             Paragraph::new(detail)
-                .block(Block::bordered().title(" Selection "))
+                .block(
+                    Block::bordered()
+                        .border_style(Style::default().fg(Color::Cyan))
+                        .title(" Selection "),
+                )
                 .wrap(Wrap { trim: false }),
             details,
         );
 
-        let (message, color) = if let Some(error) = &app.error {
-            (
-                format!(
-                    "{} · r to retry. Previous results retained.",
-                    visible(error)
-                ),
-                Color::Red,
-            )
-        } else if app.loading {
-            (
-                "Discovering worktrees… Navigation remains available.".to_owned(),
-                Color::Yellow,
-            )
-        } else {
-            (
-                "Discovery complete. Agent-session integration is the next checkpoint.".to_owned(),
-                Color::Green,
-            )
-        };
+        let (message, color) =
+            if let Some(error) = app.session.error.as_ref().or(app.error.as_ref()) {
+                (
+                    format!(
+                        "{} · r to retry. Previous results retained.",
+                        visible(error)
+                    ),
+                    Color::Red,
+                )
+            } else if let Some(path) = &app.session.adopted {
+                (
+                    format!(
+                        "Adopted: {} · {}",
+                        visible(path),
+                        app.session
+                            .identity
+                            .as_deref()
+                            .unwrap_or("ready to launch scripted fixture")
+                    ),
+                    Color::Cyan,
+                )
+            } else if app.loading {
+                (
+                    "Discovering worktrees… Navigation remains available.".to_owned(),
+                    Color::Yellow,
+                )
+            } else {
+                (
+                    "Discovery complete. No checkout adopted; no child launched.".to_owned(),
+                    Color::Green,
+                )
+            };
         frame.render_widget(
             Paragraph::new(message)
                 .style(Style::default().fg(color))
-                .block(Block::bordered().title(" Status "))
+                .block(
+                    Block::bordered()
+                        .border_style(Style::default().fg(Color::Cyan))
+                        .title(" Status "),
+                )
                 .wrap(Wrap { trim: false }),
             status,
         );
         frame.render_widget(
-            Paragraph::new("j/k ↑/↓ select  ·  r refresh  ·  q/Esc/Ctrl-C quit"),
+            Paragraph::new("j/k select · r refresh · a adopt · l fixture · Enter attach · Ctrl-] dashboard · q quit/stop"),
             help,
         );
     }

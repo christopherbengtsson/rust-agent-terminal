@@ -203,3 +203,31 @@ Implementation must also define and measure memory and queue limits, transcript
 disk growth, persistence throughput, and slow/full-disk behavior under sustained
 output. Include detached sessions and slow subscribers; report the workload and
 resource measurements alongside responsiveness results.
+
+## Scripted PTY prototype (ticket 01)
+
+`session` now contains the fixture runtime, supervisor mode, private Unix-socket
+protocol, and dashboard transport worker. `App::input` owns focus and returns
+explicit refresh/session effects. The event loop dispatches without waiting;
+Git and session workers deliver observations. `App::observe_session` applies
+coherent screen snapshots. The UI places unavailable reviews above the project/
+worktree tree, beside a native-screen pane and visible focus/help.
+
+The supervisor launches only the same executable's scripted-child mode, directly
+in the adopted canonical checkout. Arguments and original Unix path bytes cross
+the socket without shell interpolation. Task/session UUIDs originate in the
+supervisor and the launch-request UUID originates in App; all are in-memory only.
+`portable-pty` 0.9 provides PTYs and `vt100` 0.18 parses incremental output into a
+fixed 100×24 screen with zero scrollback. This proof displays plain parsed cell
+text; terminal cell styling and dynamic viewport synchronization remain future work.
+Commands (32), UI snapshots (1), socket frames (64 KiB), PTY read chunks (4 KiB),
+and input chunks (4 KiB) have finite caps. Slow UI snapshots resynchronize on the
+next poll. Blocking socket, filesystem, child, and PTY work runs outside the UI
+loop. There is no transcript capture or durability claim in this slice.
+
+This is a thin first slice, not completion of the planned interaction baseline.
+Owner election, robust single-controller rejection, launch reconciliation,
+persistence, lifecycle evidence, native adapters, full input encoding, geometry,
+and stop escalation remain follow-on work. Failed shutdown remains visible and
+retryable; no confirmed stop means no successful quit. See
+[the prototype evidence](proofs/01-scripted-pty.md).

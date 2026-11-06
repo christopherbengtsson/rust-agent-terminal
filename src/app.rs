@@ -1,8 +1,21 @@
 use std::path::PathBuf;
 
-use crate::{events::Event, git::Worktree};
+use crate::{
+    events::{Action, Event},
+    git::Worktree,
+    session::{Observation, Request},
+};
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+
+pub enum Effect {
+    Refresh,
+    Session(Request),
+}
 
 pub struct App {
+    pub session: crate::session::Observation,
+    pub attached: bool,
+    pub launch_request: String,
     pub repository: PathBuf,
     pub worktrees: Vec<Worktree>,
     pub selected: Option<usize>,
@@ -13,12 +26,81 @@ pub struct App {
 impl App {
     pub fn new(repository: PathBuf) -> Self {
         Self {
+            session: Default::default(),
+            attached: false,
+            launch_request: uuid::Uuid::new_v4().to_string(),
             repository,
             worktrees: Vec::new(),
             selected: None,
             loading: false,
             error: None,
         }
+    }
+
+    pub fn observe_session(&mut self, observation: Observation) {
+        if observation.identity.is_some() && self.session.identity.is_none() {
+            self.attached = true;
+        }
+        self.session = observation;
+    }
+
+    pub fn input(&mut self, key: KeyEvent) -> Option<Effect> {
+        if key.kind == KeyEventKind::Release {
+            return None;
+        }
+        if self.attached {
+            // Legacy terminals encode Ctrl-] as 0x1d, which Crossterm names Ctrl-5.
+            if key.modifiers.contains(KeyModifiers::CONTROL)
+                && matches!(key.code, KeyCode::Char(']') | KeyCode::Char('5'))
+            {
+                self.attached = false;
+                return None;
+            }
+            let bytes = match key.code {
+                KeyCode::Char(c) if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    vec![(c as u8) & 0x1f]
+                }
+                KeyCode::Char(c) => c.to_string().into_bytes(),
+                KeyCode::Enter => vec![b'\r'],
+                KeyCode::Backspace => vec![127],
+                KeyCode::Tab => vec![b'\t'],
+                KeyCode::Esc => vec![27],
+                _ => return None,
+            };
+            return Some(Effect::Session(Request::Input(bytes)));
+        }
+        match key.code {
+            KeyCode::Char('a') => {
+                let tree = self.current()?;
+                if tree.bare || tree.prunable.is_some() {
+                    self.error = Some(
+                        "Checkout unavailable or bare; refresh and choose a usable checkout".into(),
+                    );
+                    return None;
+                }
+                return Some(Effect::Session(Request::Adopt(crate::session::path_bytes(
+                    &tree.path,
+                ))));
+            }
+            KeyCode::Char('l') => {
+                return Some(Effect::Session(Request::Launch(
+                    self.launch_request.clone(),
+                )));
+            }
+            KeyCode::Enter if self.session.identity.is_some() => {
+                self.attached = true;
+                return None;
+            }
+            _ => {}
+        }
+        match crate::events::action_for_key(key) {
+            Some(Action::Next) => self.next(),
+            Some(Action::Previous) => self.previous(),
+            Some(Action::Refresh) => return Some(Effect::Refresh),
+            Some(Action::Quit) => return Some(Effect::Session(Request::Shutdown)),
+            None => {}
+        }
+        None
     }
 
     pub fn begin_refresh(&mut self) -> bool {

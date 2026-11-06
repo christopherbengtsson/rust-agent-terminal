@@ -1,6 +1,7 @@
 mod app;
 mod events;
 mod git;
+mod session;
 mod terminal;
 mod ui;
 
@@ -16,8 +17,8 @@ use std::{
 use crossterm::event::{self, Event as TerminalEvent};
 
 use crate::{
-    app::App,
-    events::{Action, Event},
+    app::{App, Effect},
+    events::Event,
     git::GitWorker,
     terminal::TerminalGuard,
     ui::Ui,
@@ -25,18 +26,35 @@ use crate::{
 
 fn main() -> Result<(), Box<dyn Error>> {
     let mut arguments = env::args_os().skip(1);
-    let repository = match arguments.next() {
+    let first = arguments.next();
+    if first.as_deref() == Some(std::ffi::OsStr::new("--supervisor")) {
+        return session::supervisor(&PathBuf::from(
+            arguments.next().ok_or("Missing state directory")?,
+        ));
+    }
+    if first.as_deref() == Some(std::ffi::OsStr::new("--scripted-child")) {
+        return Ok(session::scripted_child()?);
+    }
+    let repository = match first {
         Some(argument) if argument == "--help" || argument == "-h" => {
             println!(
-                "Usage: agent-terminal [repository-path]\n\nLists Git worktrees in a keyboard-driven dashboard. Defaults to the current directory.\n\nj/k or arrows: select · r: refresh · q/Esc/Ctrl-C: quit\nAgent sessions are not implemented yet."
+                "Usage: agent-terminal [repository-path]\n\nLists Git worktrees in a keyboard-driven dashboard. Defaults to the current directory.\n\nj/k or arrows: select · r: refresh · q/Esc/Ctrl-C: quit\na adopt · l launch scripted PTY · Enter attach · Ctrl-] dashboard\nPrototype fixture only; native CLI support is unverified."
             );
             return Ok(());
         }
         Some(argument) => PathBuf::from(argument),
         None => env::current_dir()?,
     };
+    let state_directory = match arguments.next() {
+        Some(flag) if flag == "--state-dir" => {
+            PathBuf::from(arguments.next().ok_or("Missing state directory")?)
+        }
+        Some(_) => return Err("Usage: agent-terminal [repository-path] [--state-dir path]".into()),
+        None => PathBuf::from(env::var_os("HOME").ok_or("HOME unavailable")?)
+            .join("Library/Application Support/rat/proof"),
+    };
     if arguments.next().is_some() {
-        return Err("Usage: agent-terminal [repository-path]".into());
+        return Err("Unexpected argument".into());
     }
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
         return Err("The dashboard needs an interactive terminal. Use --help for usage.".into());
@@ -44,6 +62,8 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let worker = GitWorker::start(repository.clone())?;
     let mut app = App::new(repository);
+    let client = session::Client::start(state_directory)?;
+
     refresh(&mut app, &worker);
     let (_guard, mut terminal) = TerminalGuard::enter()?;
     let mut ui = Ui::default();
@@ -62,14 +82,22 @@ fn main() -> Result<(), Box<dyn Error>> {
                 }
             }
         }
+        if let Ok(observation) = client.events.try_recv() {
+            app.observe_session(observation);
+        }
+        if app.session.stopped {
+            break;
+        }
         terminal.draw(|frame| ui.draw(frame, &app))?;
         if event::poll(Duration::from_millis(50))? {
             match event::read()? {
-                TerminalEvent::Key(key) => match events::action_for_key(key) {
-                    Some(Action::Next) => app.next(),
-                    Some(Action::Previous) => app.previous(),
-                    Some(Action::Refresh) => refresh(&mut app, &worker),
-                    Some(Action::Quit) => break,
+                TerminalEvent::Key(key) => match app.input(key) {
+                    Some(Effect::Refresh) => refresh(&mut app, &worker),
+                    Some(Effect::Session(request)) => {
+                        if let Err(error) = client.send(request) {
+                            app.error = Some(error);
+                        }
+                    }
                     None => {}
                 },
                 TerminalEvent::Resize(_, _) => {} // Ratatui queries the new size on draw.

@@ -5,10 +5,11 @@ A Rust terminal workspace for coding agents. The product name is undecided;
 [product requirements](PRODUCT.md), [architecture](docs/architecture.md), and
 [implementation milestones](docs/milestones.md).
 
-The foundation currently discovers and displays real Git worktrees. It supports
-keyboard selection and background refresh. Agent sessions and GitHub workflows
-are subsequent steps; they are not implemented yet. The first release targets
-macOS; Linux is also used for development checks.
+The dashboard discovers real Git worktrees and can explicitly adopt a checkout
+and launch an interactive scripted PTY fixture. This is a supervisor/terminal
+prototype: Claude Code, Codex CLI, durable history, recovery, and GitHub workflows
+are not supported yet. The first release targets macOS; fixture tests do not
+establish native-agent compatibility.
 
 ## Run
 
@@ -29,10 +30,33 @@ Errors appear in the dashboard, where you can retry or quit.
 | `j` / Down | Select next worktree |
 | `k` / Up | Select previous worktree |
 | `r` | Refresh worktrees in the background |
-| `q` / Esc / Ctrl-C | Quit the dashboard |
+| `a` | Explicitly adopt the selected usable checkout |
+| `l` | Launch the scripted PTY fixture in the adopted checkout |
+| Enter | Attach to the existing fixture |
+| Ctrl-] | Return from attached focus to dashboard navigation |
+| `q` / Esc / Ctrl-C | In dashboard focus, stop the fixture and quit |
 
-The Ctrl-C quit binding applies to dashboard focus only. The upcoming attached
-session mode must preserve the native agent's interrupt behavior.
+In attached focus, ordinary characters, Enter, Backspace, Tab, Esc and Ctrl-C
+are forwarded to the fixture PTY. Arrow/function keys, paste and dynamic PTY
+resize are not implemented. Ctrl-] (the same legacy byte as Ctrl-5) returns to
+dashboard focus without stopping the fixture. It is a provisional escape chord,
+not yet validated with either native agent. Ordinary quit waits for the prototype
+supervisor to report that it killed and reaped the fixture.
+
+The supervisor runs as another mode of the same executable, with a private local
+socket under `~/Library/Application Support/rat/proof`. For isolated experiments:
+
+```sh
+cargo run --locked -- /path/to/repository --state-dir /tmp/rat-proof-example
+```
+
+Use one dashboard per isolated state directory. This prototype has no durable
+metadata/history, owner election, stale-endpoint recovery, or guaranteed descendant
+cleanup. Do not use it to run real coding work. A lost dashboard may leave its
+supervisor and fixture running; reconnect to that state directory and quit normally
+to clean up. Do not remove a socket for a running supervisor. The bounded parsed
+screen retains the latest 100×24 cells without scrollback; it is not session history.
+See the [prototype evidence](docs/proofs/01-scripted-pty.md) for measured scope.
 
 ## Development
 
