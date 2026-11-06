@@ -56,6 +56,14 @@ pub enum NativeAgent {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Request {
+    /// Freeze a runtime target when an action is queued. Never resolve it from later selection.
+    Session {
+        target: String,
+        #[serde(default)]
+        session: Option<String>,
+        command: Box<Request>,
+    },
+    SelectSession(String),
     Discover {
         request: u64,
         repository: Vec<u8>,
@@ -123,6 +131,12 @@ pub struct LaunchResult {
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Observation {
+    #[serde(default)]
+    pub sessions_protocol: u32,
+    #[serde(default)]
+    pub control_target: String,
+    #[serde(default)]
+    pub sessions: Vec<SessionSummary>,
     #[serde(default)]
     pub registry_protocol: u32,
     #[serde(default)]
@@ -258,4 +272,17 @@ impl ProcessExit {
             None => format!("exit code {}", self.code),
         }
     }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct SessionSummary {
+    #[serde(default)]
+    pub status: crate::native_status::Status,
+    #[serde(default)]
+    pub reserved: bool,
+    pub target: String,
+    pub task: String,
+    pub session: Option<String>,
+    pub lifecycle: Lifecycle,
+    pub checkout: Option<Vec<u8>>,
 }
