@@ -149,7 +149,10 @@ impl App {
         {
             self.workspace_selected = Some(added.id.clone());
         }
-        if self.workspace_selected.is_none() {
+        if self.workspace_selected.is_none()
+            || (self.session.registry.selected.is_some()
+                && self.session.registry.selected != observation.registry.selected)
+        {
             self.workspace_selected = observation.registry.selected.clone();
         }
         self.session = observation;
@@ -182,8 +185,6 @@ impl App {
                         self.error = Some("Enter an existing local repository path".into());
                         return None;
                     }
-                    self.repository = PathBuf::from(&path);
-                    self.loading = false;
                     self.workspaces_open = true;
                     return Some(Effect::Session(Request::Register(path.into_bytes())));
                 }
@@ -284,11 +285,16 @@ impl App {
                         return None;
                     };
                     use std::os::unix::ffi::OsStringExt;
-                    self.repository = PathBuf::from(std::ffi::OsString::from_vec(path.clone()));
-                    self.loading = false;
                     if key.code == KeyCode::Char('a') {
                         return Some(Effect::Session(Request::Adopt(path.clone())));
                     }
+                    let repository = PathBuf::from(std::ffi::OsString::from_vec(path.clone()));
+                    if repository != self.repository {
+                        self.worktrees.clear();
+                        self.selected = None;
+                    }
+                    self.repository = repository;
+                    self.loading = false;
                     self.workspaces_open = false;
                     return Some(Effect::Refresh);
                 }

@@ -57,6 +57,8 @@ pub(crate) fn record(
         return Ok(());
     }
     let known = state.checkout_identity.as_ref();
+    let recorded_root = known.map(|checkout| crate::session::path_bytes(&checkout.root));
+    let path = path.or(recorded_root.as_deref());
     let project = if let Some(checkout) = known {
         let common = crate::session::path_bytes(&checkout.common_dir);
         let id: Option<String> = db

@@ -489,7 +489,19 @@ impl Ui {
             status,
         );
         let compact_help;
-        let help_text = if app.cleanup_open
+        let help_text = if !app.attached
+            && app.project_input.is_some()
+            && (frame.area().width < 80 || frame.area().height < 22)
+        {
+            "Existing local repository path · Enter register
+Esc cancel · registration never starts an agent"
+        } else if !app.attached
+            && app.workspaces_open
+            && (frame.area().width < 80 || frame.area().height < 22)
+        {
+            "j/k select · [/] project · a adopt · Enter discover
+A add · h history · w/Esc back · d detach · q quit"
+        } else if app.cleanup_open
             && !app.attached
             && (frame.area().width < 80 || frame.area().height < 22)
         {
@@ -513,7 +525,7 @@ impl Ui {
                 &compact_help
             } else {
                 compact_help = format!(
-                    "a adopt · c/x new Claude/Codex · v resume · Enter attach\ng cleanup · q quit/stop · d detach · Process: {} · status: {}",
+                    "w workspaces · A add · a adopt · c/x new · Enter attach\nv resume · g cleanup · q quit/stop · d detach · {} {}",
                     if app.session.connection_lost {
                         format!("unknown (last seen {:?})", app.session.lifecycle)
                     } else {
