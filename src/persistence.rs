@@ -283,6 +283,7 @@ struct Store {
     db: Connection,
     active: Option<(String, File, u64)>,
     total: u64,
+    active_dirty: bool,
     oldest: Option<Instant>,
     origin: Instant,
     sync_micros: u64,
@@ -357,6 +358,7 @@ impl Store {
             db,
             active: None,
             total: 0,
+            active_dirty: false,
             oldest: None,
             origin: Instant::now(),
             sync_micros: 0,
@@ -805,10 +807,11 @@ impl Store {
         }
         file.write_all(&bytes[..count])?;
         *offset += count as u64;
+        self.active_dirty = true;
         Ok(count)
     }
     fn flush(&mut self) -> Result<()> {
-        if self.oldest.is_none() {
+        if !self.active_dirty || self.oldest.is_none() {
             return Ok(());
         }
         self.fault("sync")?;
@@ -822,6 +825,7 @@ impl Store {
             )?;
             tx.commit()?;
             self.total = *offset;
+            self.active_dirty = false;
             self.sync_micros = started.elapsed().as_micros() as u64;
             self.completions += 1;
             self.completed_millis = self.origin.elapsed().as_millis() as u64;
