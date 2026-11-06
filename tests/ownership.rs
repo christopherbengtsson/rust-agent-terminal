@@ -2691,6 +2691,199 @@ fn storage_stalled_prepare_keeps_stop_control_and_never_launches_after_cancel() 
     controller.request(serde_json::json!("Shutdown"));
 }
 
+fn wait_for_completion_injection(fixture: &Fixture) {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let ready = fixture.state().join("proof-storage-completion.ready");
+    while !ready.exists() {
+        assert!(
+            Instant::now() < deadline,
+            "completion injection did not reach the storage boundary"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[test]
+fn mismatched_durable_completions_cannot_create_a_coding_process() {
+    let fixture = Fixture::new();
+    let mut dashboard = fixture.open();
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted");
+    dashboard.kill();
+    let mut controller = Controller::connect(&fixture);
+    let hold = fixture.state().join("proof-storage-completion");
+    std::fs::write(&hold, "prepare").unwrap();
+    controller.request_now(serde_json::json!({"Launch":"attributed-prepare"}));
+    wait_for_completion_injection(&fixture);
+    let pending = controller.request_now(serde_json::json!("Screen"));
+    assert_eq!(
+        pending["metadata_pending"], true,
+        "matching completion is held"
+    );
+    assert_ne!(
+        pending["lifecycle"], "Running",
+        "unmatched successes must not create a process"
+    );
+    assert!(pending["launch_result"].is_null());
+    std::fs::remove_file(hold).unwrap();
+    let launched = controller.request(serde_json::json!({"QueryLaunch":"attributed-prepare"}));
+    assert_eq!(launched["launch_result"]["request"], "attributed-prepare");
+    fixture.assert_one_owner_and_child();
+    controller.request(serde_json::json!("Shutdown"));
+}
+
+#[test]
+fn mismatched_final_capture_completion_cannot_acknowledge_shutdown() {
+    let fixture = Fixture::new();
+    let mut dashboard = fixture.open();
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted");
+    dashboard.kill();
+    let mut controller = Controller::connect(&fixture);
+    controller.request(serde_json::json!({"Launch":"attributed-final"}));
+    let hold = fixture.state().join("proof-storage-completion");
+    std::fs::write(&hold, "flush").unwrap();
+    controller.request(serde_json::json!("Stop"));
+    wait_for_completion_injection(&fixture);
+    controller.request_now(serde_json::json!("Shutdown"));
+    std::thread::sleep(Duration::from_millis(200));
+    let shutdown = controller.request_now(serde_json::json!("Screen"));
+    assert_ne!(
+        shutdown["stopped"], true,
+        "only exact final capture receipt permits shutdown acknowledgement"
+    );
+    std::fs::remove_file(hold).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        let state = controller.request_now(serde_json::json!("Screen"));
+        if state["stopped"] == true {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "final receipt did not settle shutdown: {state}"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[test]
+fn mismatched_result_completions_leave_live_execution_and_result_provisional() {
+    let fixture = Fixture::new();
+    let mut dashboard = fixture.open();
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted");
+    dashboard.kill();
+    let mut controller = Controller::connect(&fixture);
+    let hold = fixture.state().join("proof-storage-completion");
+    std::fs::write(&hold, "result").unwrap();
+    controller.request_now(serde_json::json!({"Launch":"attributed-result"}));
+    wait_for_completion_injection(&fixture);
+    let pending = controller.request_now(serde_json::json!("Screen"));
+    assert_eq!(pending["metadata_pending"], true);
+    assert!(pending["launch_result"].is_null());
+    assert_eq!(pending["lifecycle"], "Running");
+    assert!(
+        pending["error"].is_null(),
+        "unmatched errors cannot overwrite execution facts: {pending}"
+    );
+    fixture.assert_one_owner_and_child();
+    std::fs::remove_file(hold).unwrap();
+    let settled = controller.request(serde_json::json!({"QueryLaunch":"attributed-result"}));
+    assert_eq!(settled["launch_result"]["request"], "attributed-result");
+    assert!(settled["launch_result"]["error"].is_null());
+    assert_eq!(settled["execution"], pending["execution"]);
+    controller.request(serde_json::json!("Shutdown"));
+}
+
+#[test]
+fn duplicate_and_prior_session_completions_cannot_replace_current_execution_facts() {
+    let fixture = Fixture::new();
+    let mut dashboard = fixture.open();
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted");
+    dashboard.kill();
+    let mut controller = Controller::connect(&fixture);
+    let first = controller.request(serde_json::json!({"Launch":"old-attribution"}));
+    controller.request(serde_json::json!("Stop"));
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        let stopped = controller.request_now(serde_json::json!("Screen"));
+        if stopped["lifecycle"] == "Stopped" && stopped["metadata_pending"] == false {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "old capture did not settle: {stopped}"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    std::fs::write(fixture.state().join("proof-storage-replay"), "replay").unwrap();
+    let second = controller.request(serde_json::json!({"Launch":"new-attribution"}));
+    assert_eq!(second["lifecycle"], "Running");
+    assert!(
+        second["error"].is_null(),
+        "stale failure replaced newer execution: {second}"
+    );
+    assert_eq!(second["launch_result"]["request"], "new-attribution");
+    assert_ne!(second["session_identity"], first["session_identity"]);
+    fixture.assert_one_owner_and_child();
+    let replay = controller.request(serde_json::json!({"Launch":"new-attribution"}));
+    assert_eq!(replay["execution"], second["execution"]);
+    assert_eq!(replay["launch_result"], second["launch_result"]);
+    controller.request(serde_json::json!("Shutdown"));
+}
+
+#[test]
+fn lifecycle_metadata_cannot_settle_failed_launch_result_and_retry_keeps_execution_stopped() {
+    let fixture = Fixture::new();
+    let mut dashboard = fixture.open();
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted");
+    dashboard.kill();
+    let mut controller = Controller::connect(&fixture);
+    let fault = fixture.state().join("proof-storage-save");
+    std::fs::write(&fault, "error").unwrap();
+    controller.request_now(serde_json::json!({"Launch":"failed-attributed-result"}));
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        let state = controller.request_now(serde_json::json!("Screen"));
+        if state["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("outcome not durable"))
+        {
+            break;
+        }
+        assert!(Instant::now() < deadline, "missing failed result: {state}");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    std::fs::remove_file(fault).unwrap();
+    controller.request(serde_json::json!("Stop"));
+    std::thread::sleep(Duration::from_millis(800));
+    let stopped = controller.request_now(serde_json::json!("Screen"));
+    assert_eq!(stopped["lifecycle"], "Stopped");
+    assert_eq!(
+        stopped["metadata_pending"], true,
+        "lifecycle metadata cannot discharge the result obligation"
+    );
+    assert!(stopped["launch_result"].is_null());
+    controller.request(serde_json::json!("RetryStorage"));
+    let durable = controller.request(serde_json::json!({"QueryLaunch":"failed-attributed-result"}));
+    assert_eq!(
+        durable["launch_result"]["request"],
+        "failed-attributed-result"
+    );
+    assert!(durable["launch_result"]["error"].is_null());
+    assert_eq!(durable["lifecycle"], "Stopped");
+    assert!(durable["execution"].is_null());
+    controller.request(serde_json::json!("Shutdown"));
+}
+
 fn transcript_bytes14(fixture: &Fixture) -> Vec<u8> {
     let mut paths: Vec<_> = std::fs::read_dir(fixture.state())
         .unwrap()
