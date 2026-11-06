@@ -1981,11 +1981,14 @@ pub fn scripted_child() -> io::Result<()> {
                         let micros = write.elapsed().as_micros();
                         max_write_micros = max_write_micros.max(micros);
                         if let Some(ledger) = ledger.as_mut() {
-                            writeln!(
-                                ledger,
-                                "{}",
+                            // Format the complete bounded receipt before touching
+                            // the file: formatting Value directly into File emits
+                            // many writes that Stop can interrupt inside the JSON.
+                            let receipt = format!(
+                                "{}\n",
                                 serde_json::json!({"record":number,"bytes":record.len(),"write_us":micros,"elapsed_us":since.elapsed().as_micros()})
-                            )?;
+                            );
+                            ledger.write_all(receipt.as_bytes())?;
                         }
                     }
                     writeln!(
