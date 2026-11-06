@@ -1396,7 +1396,13 @@ fn failed_final_storage_commit_keeps_quit_visible_until_explicit_retry() {
     dashboard.send(&[0x1d]);
     dashboard.wait("Focus: dashboard");
     dashboard.send(b"q");
-    dashboard.wait("readonly database");
+    // SQLite can report readonly-database or disk-I/O errors for this real
+    // directory-permission failure. Assert the visible unsaved/retained fault.
+    dashboard.wait_any(&[
+        "History capture blocked:",
+        "History storage failed:",
+        "History sync failed:",
+    ]);
     assert!(
         dashboard.child.try_wait().unwrap().is_none(),
         "failed storage cannot acknowledge quit"
