@@ -280,7 +280,7 @@ impl Snapshot {
     }
 }
 pub enum Command {
-    SelectWorkspace(String),
+    SelectWorkspace(uuid::Uuid, String),
     Capture(CaptureStream),
     Rename(uuid::Uuid, String, String),
     ComparisonBase(uuid::Uuid, String, crate::working_diff::Base),
@@ -308,6 +308,10 @@ pub enum Command {
 }
 #[derive(Clone)]
 pub enum Completion {
+    Selected(
+        uuid::Uuid,
+        std::result::Result<crate::registry::Registry, String>,
+    ),
     Registered(
         uuid::Uuid,
         std::result::Result<crate::registry::Registry, String>,
@@ -453,7 +457,7 @@ impl Worker {
                     status.lock().unwrap().operation = Some((kind, Instant::now()));
                     let operation = match &command { Command::Prepare(snapshot) | Command::Authorize(snapshot) | Command::Save(snapshot) => Some(snapshot.operation.clone()), Command::Flush(operation) | Command::Seal(operation) => Some(operation.clone()), _ => None };
                     let result = match command {
-                        Command::SelectWorkspace(task) => store.select_workspace(&task).map(Completion::Registry),
+                        Command::SelectWorkspace(request, task) => Ok(Completion::Selected(request, store.select_workspace(&task).map_err(|error| error.to_string()))),
                         Command::Capture(..) => unreachable!(),
                         Command::ComparisonBase(id, workspace, base) => Ok(Completion::Registered(id, store.comparison_base(&workspace, &base).map_err(|error| error.to_string()))),
                         Command::Rename(id, workspace, name) => Ok(Completion::Registered(id, store.rename(&workspace, &name).map_err(|error| error.to_string()))),
@@ -1142,16 +1146,23 @@ impl Store {
     ) -> Result<Vec<RestoredSession>> {
         // Existing launch outcomes cap the history population at 1024. Never
         // silently truncate occupancy evidence if a newer/legacy DB exceeds it.
-        let rows = self.db.prepare("SELECT s.id,s.state,w.path,w.task FROM sessions s LEFT JOIN workspace_sessions m ON m.session=s.id LEFT JOIN workspaces w ON w.id=m.workspace ORDER BY s.rowid DESC LIMIT 1025")?
-            .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, Option<Vec<u8>>>(2)?, row.get::<_, Option<String>>(3)?)))?
+        let rows = self.db.prepare("SELECT s.id,s.state,w.path,w.task,s.identity FROM sessions s LEFT JOIN workspace_sessions m ON m.session=s.id LEFT JOIN workspaces w ON w.id=m.workspace ORDER BY s.rowid DESC LIMIT 1025")?
+            .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, Option<Vec<u8>>>(2)?, row.get::<_, Option<String>>(3)?, row.get::<_, String>(4)?)))?
             .collect::<std::result::Result<Vec<_>,_>>()?;
         if rows.len() > 1024 {
             return Err("Retained session recovery exceeds 1024 records; cannot safely omit execution reservations".into());
         }
         let mut latest = std::collections::HashSet::new();
         let mut sessions = Vec::new();
-        for (id, json, path, task) in rows {
-            let state = decode_record(&json)?;
+        for (id, json, path, task, label) in rows {
+            // Older rows may retain their identity only in the dedicated column.
+            // Apply the same validated conversion as registry migration without
+            // rewriting the original retained record merely to restore it.
+            let mut state: Observation = serde_json::from_str(&json)?;
+            if state.session_identity.is_none() && state.identity.is_none() {
+                state.identity = Some(label);
+            }
+            let state = decode_record(&serde_json::to_string(&state)?)?;
             let identity = state
                 .session_identity
                 .as_ref()
@@ -1603,7 +1614,7 @@ impl Store {
         self.history_record((id, identity, durable, json), offset)
     }
     fn history_session(&self, id: &str, offset: u64) -> Result<HistoryPage> {
-        let record = self.db.query_row("SELECT id,identity,durable,state FROM sessions WHERE id=?1 AND history_state='retained'", [id], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?))).optional()?.ok_or("Selected session has no retained transcript")?;
+        let record = self.db.query_row("SELECT id,identity,durable,state FROM sessions WHERE id=?1 AND history_state='retained'", [id], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?))).optional()?.ok_or("No retained session at the selected identity")?;
         self.history_record(record, offset)
     }
     fn history_record(
@@ -2373,12 +2384,15 @@ mod concurrent_tests {
         let selected_task = states[2].session_identity.as_ref().unwrap().task.clone();
         worker
             .commands
-            .send(Command::SelectWorkspace(selected_task.clone()))
+            .send(Command::SelectWorkspace(
+                uuid::Uuid::new_v4(),
+                selected_task.clone(),
+            ))
             .unwrap();
         loop {
             if matches!(
                 worker.events.recv_timeout(Duration::from_secs(5)).unwrap(),
-                Completion::Registry(_)
+                Completion::Selected(_, Ok(_))
             ) {
                 break;
             }
