@@ -318,15 +318,71 @@ impl Sessions {
         restored: crate::persistence::Restored,
         storage: &crate::persistence::Worker,
     ) -> Result<Self, Box<dyn std::error::Error>> {
+        let mut restored = restored;
+        let others = std::mem::take(&mut restored.sessions);
+        let selected_id = restored
+            .state
+            .session_identity
+            .as_ref()
+            .map(|id| id.session.clone());
+        if let Some(id) = &selected_id
+            && let Some(known) = others.iter().find(|entry| {
+                entry
+                    .state
+                    .session_identity
+                    .as_ref()
+                    .is_some_and(|identity| &identity.session == id)
+            })
+        {
+            restored.task = known.task.clone();
+        }
+        let selected_task = restored.task.clone();
+        let launches = restored.launches.clone();
+        let mut owner = agent_session::AgentSession::restore(directory, restored, storage)?;
+        let target = owner.observation().control_target;
+        let mut entries = vec![(target, owner)];
+        for recovered in others {
+            let recovered_id = recovered
+                .state
+                .session_identity
+                .as_ref()
+                .map(|id| id.session.clone());
+            if recovered_id == selected_id
+                && (selected_id.is_some() || recovered.task == selected_task)
+            {
+                continue;
+            }
+            let restored = crate::persistence::Restored {
+                sessions: Vec::new(),
+                state: recovered.state,
+                checkout: recovered.checkout.as_deref().map(path_bytes),
+                task: recovered.task.clone(),
+                launches: launches
+                    .iter()
+                    .filter(|result| {
+                        result.identity.as_ref().is_some_and(|label| {
+                            label.starts_with(&format!("task={} session=", recovered.task))
+                        })
+                    })
+                    .cloned()
+                    .collect(),
+            };
+            let mut owner = agent_session::AgentSession::restore(directory, restored, storage)?;
+            let target = owner.observation().control_target;
+            entries.push((target, owner));
+        }
+        if entries[0].1.checkout().is_some() {
+            storage
+                .commands
+                .try_send(crate::persistence::Command::SelectWorkspace(selected_task))?;
+        }
         Ok(Self {
-            entries: vec![(
-                uuid::Uuid::new_v4().to_string(),
-                agent_session::AgentSession::restore(directory, restored, storage)?,
-            )],
+            entries,
             selected: 0,
             directory: directory.to_owned(),
         })
     }
+
     fn complete(
         &mut self,
         event: crate::persistence::Completion,
@@ -339,6 +395,7 @@ impl Sessions {
             crate::persistence::Completion::Committed(_)
                 | crate::persistence::Completion::Failed(..)
                 | crate::persistence::Completion::Deleted(_)
+                | crate::persistence::Completion::HistoryTarget(..)
         ) {
             for (_, owner) in &mut self.entries {
                 owner.complete(event.clone(), storage);
@@ -388,13 +445,22 @@ impl Sessions {
             }) || owner.checkout() == Some(identity.root.as_path())
         }) {
             self.selected = index;
-            self.entries[index].1.adopt(identity, true, task, storage);
+            self.entries[index]
+                .1
+                .adopt(identity, true, task.clone(), storage);
+            storage
+                .commands
+                .try_send(crate::persistence::Command::SelectWorkspace(task))
+                .map_err(|error| {
+                    format!("Workspace selection not saved: {error}; retry selection")
+                })?;
             return Ok(());
         }
         if self.entries.len() >= 1024 {
             return Err("Session owner capacity reached; retained owners are preserved".into());
         }
         let restored = crate::persistence::Restored {
+            sessions: Vec::new(),
             state: Observation::default(),
             checkout: None,
             task: task.clone(),
@@ -402,8 +468,13 @@ impl Sessions {
         };
         let mut owner = agent_session::AgentSession::restore(&self.directory, restored, storage)
             .map_err(|e| e.to_string())?;
-        owner.adopt(identity, false, task, storage);
-        self.entries.push((uuid::Uuid::new_v4().to_string(), owner));
+        owner.adopt(identity, false, task.clone(), storage);
+        storage
+            .commands
+            .try_send(crate::persistence::Command::SelectWorkspace(task))
+            .map_err(|error| format!("Workspace selection not saved: {error}; retry selection"))?;
+        let target = owner.observation().control_target;
+        self.entries.push((target, owner));
         self.selected = self.entries.len() - 1;
         Ok(())
     }
@@ -448,6 +519,17 @@ impl Sessions {
             Request::SelectSession(target) => {
                 if let Some(index) = self.entries.iter().position(|(id, _)| *id == target) {
                     self.selected = index;
+                    if let Err(error) =
+                        storage
+                            .commands
+                            .try_send(crate::persistence::Command::SelectWorkspace(
+                                self.entries[index].1.task().to_owned(),
+                            ))
+                    {
+                        self.report_error(format!(
+                            "Workspace selection not saved: {error}; retry selection"
+                        ));
+                    }
                 } else {
                     self.report_error("Session target no longer exists".into());
                 }

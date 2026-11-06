@@ -273,7 +273,16 @@ pub enum Command {
     Prepare(Snapshot),
     Authorize(Snapshot),
     Save(Snapshot),
+    // Legacy storage test seam; runtime replies use HistoryTarget.
+    #[allow(dead_code)]
     History(usize, u64),
+    HistoryTarget {
+        target: String,
+        index: usize,
+        session: Option<String>,
+        offset: u64,
+    },
+    #[allow(dead_code)]
     HistorySession(String, u64),
     Cleanup(usize),
     Delete(String),
@@ -295,6 +304,7 @@ pub enum Completion {
     Committed(Operation),
     Failed(Operation, String),
     History(HistoryPage),
+    HistoryTarget(String, std::result::Result<HistoryPage, String>),
     Error(&'static str, String),
 }
 pub struct RestoredSession {
@@ -423,7 +433,7 @@ impl Worker {
                             continue;
                         }
                     }
-                    let kind = match &command { Command::SelectWorkspace(..) => "selection", Command::Capture(..) => unreachable!(), Command::Register(..) => "registry", Command::Save(..) | Command::Prepare(..) | Command::Authorize(..) => "metadata", Command::History(..) | Command::HistorySession(..) => "history", Command::Cleanup(..) | Command::Delete(..) | Command::Seal(..) => "cleanup", Command::Retry => "retry", Command::Flush(..) => "flush" };
+                    let kind = match &command { Command::SelectWorkspace(..) => "selection", Command::Capture(..) => unreachable!(), Command::Register(..) => "registry", Command::Save(..) | Command::Prepare(..) | Command::Authorize(..) => "metadata", Command::History(..) | Command::HistorySession(..) | Command::HistoryTarget { .. } => "history", Command::Cleanup(..) | Command::Delete(..) | Command::Seal(..) => "cleanup", Command::Retry => "retry", Command::Flush(..) => "flush" };
                     status.lock().unwrap().operation = Some((kind, Instant::now()));
                     let operation = match &command { Command::Prepare(snapshot) | Command::Authorize(snapshot) | Command::Save(snapshot) => Some(snapshot.operation.clone()), Command::Flush(operation) | Command::Seal(operation) => Some(operation.clone()), _ => None };
                     let result = match command {
@@ -444,6 +454,10 @@ impl Worker {
                         Command::Prepare(Snapshot { operation, state, checkout, task }) => store.fault("prepare").and_then(|_| store.save(&state, checkout, task)).map(|_| Completion::Committed(operation)),
                         Command::Authorize(Snapshot { operation, state, checkout, task }) => store.fault("authorize").and_then(|_| store.save(&state, checkout, task)).map(|_| Completion::Committed(operation)),
                         Command::Save(Snapshot { operation, state, checkout, task }) => store.fault("save").and_then(|_| store.save(&state, checkout, task)).map(|_| Completion::Committed(operation)),
+                        Command::HistoryTarget { target, index, session, offset } => {
+                            let page = if let Some(id) = session { store.history_session(&id, offset) } else { store.history(index, offset) };
+                            Ok(Completion::HistoryTarget(target, page.map_err(|error| error.to_string())))
+                        },
                         Command::History(index, offset) => store.history(index, offset).map(Completion::History),
                         Command::HistorySession(id, offset) => store.history_session(&id, offset).map(Completion::History),
                         Command::Flush(operation) => {

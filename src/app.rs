@@ -677,20 +677,36 @@ mod tests {
         let mut app = App::new("repo".into());
         app.observe_session(Observation {
             control_target: "owner-a".into(),
-            session_identity: Some(crate::events::SessionIdentity { task: "workspace-a".into(), session: "conversation-a".into(), request: "launch-a".into() }),
+            session_identity: Some(crate::events::SessionIdentity {
+                task: "workspace-a".into(),
+                session: "conversation-a".into(),
+                request: "launch-a".into(),
+            }),
             ..Observation::default()
         });
-        assert!(matches!(app.viewport(Some((24, 100))), Some(Effect::Session(Request::Session { target, session: Some(session), command }))
-            if target == "owner-a" && session == "conversation-a" && matches!(*command, Request::Resize { rows: 24, cols: 100 })));
-        assert!(matches!(app.input(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE)), Some(Effect::Session(Request::Session { target, session: Some(session), command }))
-            if target == "owner-a" && session == "conversation-a" && matches!(*command, Request::Stop)));
+        assert!(
+            matches!(app.viewport(Some((24, 100))), Some(Effect::Session(Request::Session { target, session: Some(session), command }))
+            if target == "owner-a" && session == "conversation-a" && matches!(*command, Request::Resize { rows: 24, cols: 100 }))
+        );
+        assert!(
+            matches!(app.input(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE)), Some(Effect::Session(Request::Session { target, session: Some(session), command }))
+            if target == "owner-a" && session == "conversation-a" && matches!(*command, Request::Stop))
+        );
     }
 
     #[test]
     fn late_projection_cannot_replace_explicitly_selected_runtime() {
         let mut app = App::new("repo".into());
-        app.observe_session(Observation { control_target: "owner-b".into(), screen: "B".into(), ..Observation::default() });
-        app.observe_session(Observation { control_target: "owner-a".into(), screen: "late A".into(), ..Observation::default() });
+        app.observe_session(Observation {
+            control_target: "owner-b".into(),
+            screen: "B".into(),
+            ..Observation::default()
+        });
+        app.observe_session(Observation {
+            control_target: "owner-a".into(),
+            screen: "late A".into(),
+            ..Observation::default()
+        });
         assert_eq!(app.session.control_target, "owner-b");
         assert_eq!(app.session.screen, "B");
     }

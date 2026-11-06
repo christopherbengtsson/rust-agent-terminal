@@ -105,7 +105,7 @@ impl AgentSession {
     pub(super) fn restore(
         directory: &Path,
         restored: crate::persistence::Restored,
-        storage: &crate::persistence::Worker,
+        _storage: &crate::persistence::Worker,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let mut state = restored.state;
         if state.launch_request.is_empty() {
@@ -120,23 +120,15 @@ impl AgentSession {
             .into_iter()
             .map(|result| (result.request.clone(), result))
             .collect();
-        let mut writes = crate::persistence::Obligations::default();
-        writes.send(
-            &storage.commands,
-            crate::persistence::Command::Save(crate::persistence::Snapshot::new(
-                &state,
-                checkout.as_deref(),
-                &task_identity,
-            )),
-        )?;
-        state.metadata_pending = true;
+        let writes = crate::persistence::Obligations::default();
+        state.metadata_pending = false;
+        state.control_target = uuid::Uuid::new_v4().to_string();
         let (write_errors, input_errors) = mpsc::sync_channel(1);
         let endpoint_directory = std::env::temp_dir().join(format!(
             "rat-{}-{}",
             unsafe { libc::geteuid() },
             &uuid::Uuid::new_v4().simple().to_string()[..12]
         ));
-        super::private_directory(&endpoint_directory)?;
         Ok(Self {
             endpoint_directory,
             directory: directory.to_owned(),
@@ -312,6 +304,16 @@ impl AgentSession {
                 }
             }
             Completion::History(page) => self.state.history = Some(page),
+            Completion::HistoryTarget(target, result) => {
+                if target == self.state.control_target {
+                    match result {
+                        Ok(page) => self.state.history = Some(page),
+                        Err(error) => {
+                            self.state.error = Some(format!("History unavailable: {error}; retry"))
+                        }
+                    }
+                }
+            }
             Completion::Error(kind, error) => {
                 if kind == "cleanup" {
                     self.state.cleanup_message = Some(format!(
@@ -876,6 +878,7 @@ impl AgentSession {
                         pixel_height: 0,
                     })?;
                     crate::recovery::crash_barrier(directory, "before-create");
+                    super::private_directory(&self.endpoint_directory)?;
                     let gate_path = self.endpoint_directory.join("launch-gate.sock");
                     let _ = fs::remove_file(&gate_path);
                     let gate_listener = UnixListener::bind(&gate_path)?;
@@ -1184,11 +1187,11 @@ impl AgentSession {
                         .set_size(rows.try_into().unwrap(), cols.try_into().unwrap());
                 }
                 Request::HistorySession { session, offset } => {
-                    storage.commands.try_send(crate::persistence::Command::HistorySession(session, offset)).map_err(|error| format!("History busy: {error}; retry"))?;
+                    storage.commands.try_send(crate::persistence::Command::HistoryTarget { target: self.state.control_target.clone(), index: 0, session: Some(session), offset }).map_err(|error| format!("History busy: {error}; retry"))?;
                 }
                 Request::History { index, offset } => {
                     self.state.history_index = index;
-                    storage.commands.try_send(crate::persistence::Command::History(index, offset)).map_err(|e| format!("History busy: {e}; retry"))?;
+                    storage.commands.try_send(crate::persistence::Command::HistoryTarget { target: self.state.control_target.clone(), index, session: if index == 0 { self.state.session_identity.as_ref().map(|identity| identity.session.clone()) } else { None }, offset }).map_err(|e| format!("History busy: {e}; retry"))?;
                 }
                 Request::Screen => {}
                 Request::Cleanup { page } => {
