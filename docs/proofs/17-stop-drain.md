@@ -51,3 +51,33 @@ while ordinary capture is backpressured; no safe-suspension claim is made.
 
 This is a scripted native-PTY regression, not a new Claude/Codex compatibility,
 physical display latency, actual disk exhaustion or full-release capacity proof.
+
+## Integrated verification receipt
+
+Clean revision `1ac5569` includes cleanup integration `317d242` and telemetry
+accounting `86bf106`. Stable locked build, formatting and all-target
+warnings-denied Clippy passed. The original quick command passed again in 41.08s
+at `/private/tmp/rat17-stop-integrated01`: accepted and durable both 1711228,
+pending zero after repair, Stop confirmed before repair, peak pending 68608.
+
+The all-target run passed 26 unit tests (one ignored PTY probe is exercised by
+its restoration driver) and 47 ownership scenarios, with one ignored long
+measurement and one failure in 376.57s. The failed
+`native_exit_retains_context_and_explicit_stop_cleans_refusing_descendant`
+attempted its second launch immediately after the first Exited frame; its
+captured screen remained Exited with the old session, durable 108 and eventually
+committed metadata. It did not reach its descendant Stop assertion. This test
+needs readiness/receipt synchronization before its second launch; the failure
+must not be described as a passing aggregate. An immediate exact isolated repeat
+passed in 2.15s, confirming the TERM-refusing descendant in 632.066ms. The new
+styled full-storage Stop regression, explicit failed-group-verification,
+saturated input, all storage fault/recovery and sustained history-continuity
+scenarios passed in the aggregate.
+
+Because Cargo stopped after ownership, the remaining integration targets ran
+separately: scripted interaction passed in 27.68s and screen/resize/focus/
+reconnect passed in 8.70s. Final read-only process inventory found no process
+whose executable belonged to this Stop verification worktree. Ticket 17's later
+harness union restores cleanup test assertions lost in this branch's append
+conflict resolution and supplies its own final measurements; this receipt does
+not claim that later harness source was tested here.
