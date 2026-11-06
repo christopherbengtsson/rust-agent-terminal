@@ -107,6 +107,8 @@ pub struct Observation {
     #[serde(default)]
     pub durable_flush_count: u64,
     #[serde(default)]
+    pub durable_commits: std::collections::VecDeque<crate::persistence::DurableCommit>,
+    #[serde(default)]
     pub durable_completed_millis: u64,
     #[serde(default)]
     pub sync_commit_micros: u64,
@@ -653,6 +655,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
         state.capture_backpressure_micros = progress.backpressure_micros;
         state.durable_bytes = progress.durable;
         state.durable_flush_count = progress.flush_count;
+        state.durable_commits.clone_from(&progress.commits);
         state.durable_completed_millis = progress.completed_millis;
         state.sync_commit_micros = progress.last_flush_micros;
         state.accepted_to_durable_millis = progress.accepted_to_durable_millis;
@@ -1405,6 +1408,7 @@ pub fn scripted_child() -> io::Result<()> {
     let mut approval = false;
     let mut flood_run = 0;
     let mut native_active = false;
+    let mut paced: Option<std::thread::JoinHandle<io::Result<()>>> = None;
     for byte in io::stdin().lock().bytes() {
         match byte? {
             3 => {
@@ -1421,6 +1425,11 @@ pub fn scripted_child() -> io::Result<()> {
             }
             b'\r' => {
                 if line == b"exit" {
+                    if let Some(producer) = paced.take() {
+                        producer
+                            .join()
+                            .map_err(|_| io::Error::other("Paced producer panicked"))??;
+                    }
                     break;
                 }
                 if line == b"survive" {
@@ -1568,6 +1577,55 @@ pub fn scripted_child() -> io::Result<()> {
                         .ok_or_else(|| io::Error::other("Invalid proof padding"))?;
                     io::stdout().write_all(&vec![b'R'; length])?;
                     print!("fixture> ");
+                } else if let Some(config) = line.strip_prefix(b"pace17 ") {
+                    if paced
+                        .as_ref()
+                        .is_some_and(|producer| !producer.is_finished())
+                    {
+                        println!("pace17 busy; one producer maximum\r");
+                        line.clear();
+                        continue;
+                    }
+                    if let Some(previous) = paced.take() {
+                        previous
+                            .join()
+                            .map_err(|_| io::Error::other("Paced producer panicked"))??;
+                    }
+                    let values: Vec<u64> = std::str::from_utf8(config)
+                        .map_err(io::Error::other)?
+                        .split_whitespace()
+                        .map(str::parse)
+                        .collect::<std::result::Result<_, _>>()
+                        .map_err(io::Error::other)?;
+                    if values.len() != 3
+                        || values[1] > 300_000
+                        || !(1024..=4_194_304).contains(&values[2])
+                    {
+                        return Err(io::Error::other(
+                            "pace17 requires run duration_ms(<=300000) bytes_per_second(1024..4194304)",
+                        ));
+                    }
+                    paced = Some(thread::spawn(move || {
+                        paced_fixture(values[0], values[1], values[2])
+                    }));
+                } else if let Some(nonce) = line.strip_prefix(b"ack17 ") {
+                    // Input receipt precedes stdout acquisition: full storage can
+                    // block its visible ACK without blocking receipt itself.
+                    let received = fixture_clock()?;
+                    let nonce = String::from_utf8_lossy(nonce);
+                    if let Some(mut ledger) = fixture_ledger("proof-input17.jsonl") {
+                        writeln!(
+                            ledger,
+                            "{}",
+                            serde_json::json!({"nonce":nonce,"received_ns":received})
+                        )?;
+                    }
+                    let mut stdout = io::stdout().lock();
+                    write!(
+                        stdout,
+                        "\x1b[s\x1b[1;1H\x1b[2KACK17 {nonce} received_ns={received}\x1b[u"
+                    )?;
+                    stdout.flush()?;
                 } else if line == b"flood13" {
                     flood_run += 1;
                     let start_ns = fixture_clock()?;
@@ -1657,6 +1715,75 @@ pub fn scripted_child() -> io::Result<()> {
     }
     print!("\x1b[?2004l");
     io::stdout().flush()
+}
+
+fn fixture_ledger(name: &str) -> Option<std::fs::File> {
+    std::env::var_os("RAT_PROOF_STORAGE_DIR")
+        .map(PathBuf::from)
+        .filter(|path| path.join("proof-storage-ledger").is_file())
+        .and_then(|path| {
+            OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path.join(name))
+                .ok()
+        })
+}
+
+// A native-style producer: one finite worker, one <=1024-byte stdout lock,
+// pacing outside that lock, and no catch-up burst after backpressure.
+fn paced_fixture(run: u64, duration_ms: u64, rate: u64) -> io::Result<()> {
+    let started = Instant::now();
+    let start_ns = fixture_clock()?;
+    let period = Duration::from_secs_f64(1024.0 / rate as f64);
+    let mut ledger = fixture_ledger("proof-emitted17.jsonl");
+    let mut sequence = 0u64;
+    let mut max_write_us = 0;
+    let mut write_us = 0;
+    while started.elapsed() < Duration::from_millis(duration_ms) {
+        let cycle = Instant::now();
+        let mut record = format!(
+            "\x1b[2;1H\x1b[2Kpace17 run={run} seq={sequence:08}\x1b[3;1H\x1b[32mλ界\x1b[0m"
+        )
+        .into_bytes();
+        record.resize(1024, b'X');
+        let before = Instant::now();
+        {
+            let mut stdout = io::stdout().lock();
+            stdout.write_all(&record)?;
+            stdout.flush()?;
+        }
+        let elapsed = before.elapsed().as_micros() as u64;
+        max_write_us = max_write_us.max(elapsed);
+        write_us += elapsed;
+        if let Some(ledger) = ledger.as_mut() {
+            writeln!(
+                ledger,
+                "{}",
+                serde_json::json!({"run":run,"record":sequence,"bytes":1024,"write_us":elapsed,"completed_ns":fixture_clock()?})
+            )?;
+        }
+        sequence += 1;
+        if let Some(rest) = period.checked_sub(cycle.elapsed()) {
+            thread::sleep(rest);
+        }
+    }
+    let finish_ns = fixture_clock()?;
+    let mut stdout = io::stdout().lock();
+    write!(
+        stdout,
+        "\x1b[2;1H\x1b[2Kpace17-complete run={run} records={sequence} bytes={} start_ns={start_ns} finish_ns={finish_ns} write_us={write_us} max_write_us={max_write_us}\r\nfixture> ",
+        sequence * 1024
+    )?;
+    stdout.flush()?;
+    if let Some(ledger) = ledger.as_mut() {
+        writeln!(
+            ledger,
+            "{}",
+            serde_json::json!({"kind":"complete","run":run,"records":sequence,"bytes":sequence*1024,"start_ns":start_ns,"finish_ns":finish_ns,"write_us":write_us,"max_write_us":max_write_us})
+        )?;
+    }
+    Ok(())
 }
 
 fn fixture_clock() -> io::Result<u64> {

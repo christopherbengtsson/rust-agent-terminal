@@ -27,8 +27,19 @@ pub struct HistoryPage {
     pub offset: u64,
     pub next: Option<u64>,
 }
+/// Finite per-commit evidence. Sequence gaps identify overwritten observations;
+/// polling the last completion alone cannot establish an interval distribution.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DurableCommit {
+    pub sequence: u64,
+    pub prefix: u64,
+    pub completed_micros: u64,
+    pub sync_commit_micros: u64,
+    pub oldest_accepted_micros: u64,
+}
 #[derive(Clone, Debug, Default)]
 pub struct Progress {
+    pub commits: std::collections::VecDeque<DurableCommit>,
     pub accepted: u64,
     pub written: u64,
     pub operation: Option<(&'static str, Instant)>,
@@ -85,6 +96,7 @@ pub fn metadata(state: &Observation) -> Box<Observation> {
     saved.formatted = String::new();
     saved.decoded = None;
     saved.history = None;
+    saved.durable_commits.clear();
     saved.status = crate::native_status::Status::default();
     Box::new(saved)
 }
@@ -221,9 +233,11 @@ struct Store {
     completions: u64,
     completed_millis: u64,
     accepted_to_durable_millis: u64,
+    commits: std::collections::VecDeque<DurableCommit>,
 }
 impl Store {
     fn publish(&self, progress: &mut Progress) {
+        progress.commits.clone_from(&self.commits);
         progress.written = self.active.as_ref().map_or(0, |(_, _, offset)| *offset);
         progress.durable = self.total;
         progress.last_flush_micros = self.sync_micros;
@@ -273,6 +287,7 @@ impl Store {
             completions: 0,
             completed_millis: 0,
             accepted_to_durable_millis: 0,
+            commits: std::collections::VecDeque::with_capacity(1024),
         })
     }
     fn restore(&mut self) -> Result<Restored> {
@@ -470,8 +485,18 @@ impl Store {
             self.sync_micros = started.elapsed().as_micros() as u64;
             self.completions += 1;
             self.completed_millis = self.origin.elapsed().as_millis() as u64;
-            self.accepted_to_durable_millis =
-                self.oldest.take().unwrap().elapsed().as_millis() as u64;
+            let age = self.oldest.take().unwrap().elapsed();
+            self.accepted_to_durable_millis = age.as_millis() as u64;
+            if self.commits.len() == 1024 {
+                self.commits.pop_front();
+            }
+            self.commits.push_back(DurableCommit {
+                sequence: self.completions,
+                prefix: self.total,
+                completed_micros: self.origin.elapsed().as_micros() as u64,
+                sync_commit_micros: self.sync_micros,
+                oldest_accepted_micros: age.as_micros() as u64,
+            });
         }
         Ok(())
     }
