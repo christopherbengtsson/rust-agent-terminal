@@ -178,7 +178,9 @@ impl App {
                 ))));
             }
             KeyCode::Char('v') if key.modifiers.is_empty() => {
-                if self.session.launch_result.is_some() {
+                if self.session.launch_result.is_some()
+                    || self.session.lifecycle == crate::session::Lifecycle::Running
+                {
                     self.launch_request = uuid::Uuid::new_v4().to_string();
                 }
                 return Some(Effect::Session(Request::Resume(
@@ -186,7 +188,9 @@ impl App {
                 )));
             }
             KeyCode::Char('c') if key.modifiers.is_empty() => {
-                if self.session.launch_result.is_some() {
+                if self.session.launch_result.is_some()
+                    || self.session.lifecycle == crate::session::Lifecycle::Running
+                {
                     self.launch_request = uuid::Uuid::new_v4().to_string();
                 }
                 return Some(Effect::Session(Request::LaunchClaude(
@@ -194,7 +198,9 @@ impl App {
                 )));
             }
             KeyCode::Char('x') if key.modifiers.is_empty() => {
-                if self.session.launch_result.is_some() {
+                if self.session.launch_result.is_some()
+                    || self.session.lifecycle == crate::session::Lifecycle::Running
+                {
                     self.launch_request = uuid::Uuid::new_v4().to_string();
                 }
                 return Some(Effect::Session(Request::LaunchCodex(
@@ -202,7 +208,9 @@ impl App {
                 )));
             }
             KeyCode::Char('l') if key.modifiers.is_empty() => {
-                if self.session.launch_result.is_some() {
+                if self.session.launch_result.is_some()
+                    || self.session.lifecycle == crate::session::Lifecycle::Running
+                {
                     // An explicit new launch after a known result is a new intent.
                     self.launch_request = uuid::Uuid::new_v4().to_string();
                 }
@@ -236,9 +244,9 @@ impl App {
         } else if self.session.lifecycle == crate::session::Lifecycle::Interrupted {
             "u reconcile · v resume · h history · d detach · q quit/stop · j/k select · r refresh"
         } else if self.history_open {
-            "q quit/stop/retry · s stop · h live · n/p session · [/] page · j/k scroll · d detach"
+            "q quit/stop/retry · s stop · y retry history · h live · n/p session · [/] page · j/k scroll · d detach"
         } else {
-            "q quit/stop · v resume · c new Claude · x new Codex · a adopt · Enter attach · h history · s stop · d detach · j/k · r refresh"
+            "q quit/stop · y retry history · v resume · c new Claude · x new Codex · a adopt · Enter attach · h history · s stop · d detach · j/k · r refresh"
         }
     }
 

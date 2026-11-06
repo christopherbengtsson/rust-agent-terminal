@@ -928,6 +928,9 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                 state.error = recorded.error.clone();
                 return Ok(());
             }
+            if !continuing && child.is_some() && launch_request.is_some() {
+                return Err("A session already exists; attach to it".into());
+            }
             if (pending_launch.is_some() || gate_receipt.is_some())
                 && matches!(
                     request,
@@ -984,7 +987,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                 }
                 Request::QueryLaunch(_) => return Err("Launch request unknown to this supervisor; do not replay uncertain activity after supervisor loss".into()),
                 Request::Launch(request) | Request::LaunchClaude(request) | Request::LaunchCodex(request) | Request::Resume(request) => {
-                    if !continuing && (!eof || capture_done.is_some() || flush_pending || storage.progress.lock().unwrap().pending_bytes > 0 || metadata_failed || (matches!(state.lifecycle, Lifecycle::Stopped | Lifecycle::Exited) && !final_flush)) {
+                    if !continuing && child.is_none() && stopping.is_none() && (!eof || capture_done.is_some() || flush_pending || storage.progress.lock().unwrap().pending_bytes > 0 || metadata_failed || (matches!(state.lifecycle, Lifecycle::Stopped | Lifecycle::Exited) && !final_flush)) {
                         return Err("Previous session history is still pending; repair storage and press y to retry before starting another session".into());
                     }
                     if state.execution.is_some() && !continuing && child.is_none() { return Err("Interrupted execution is uncertain; u reconciles process evidence. Verified reboot resolves unknown descendants; no automatic coding restart.".into()); }
@@ -1271,15 +1274,16 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                 }
                 Request::Stop | Request::Shutdown => {
                     if state.storage_wait_millis >= 250 || state.producer_wait_millis > 0 || state.storage_error.is_some() { state.capture_loss_possible = true; }
-                    if pending_launch.is_some() || gate_receipt.is_some() || outcome_reply {
+                    if pending_launch.is_some() || gate_receipt.is_some() {
                         let result = LaunchResult { request: state.launch_request.clone(), identity: state.identity.clone(), error: Some("Launch cancelled by Stop; metadata may still be pending".into()) };
                         launches.insert(result.request.clone(), result.clone());
                         state.launch_result = Some(result);
                     }
+                    let cancelled_preparation = pending_launch.is_some() && child.is_none() && gate_receipt.is_none();
                     cancelled_launch = true;
                     pending_launch = None;
                     prepared_ready = false;
-                    if child.is_none() && gate_receipt.is_none() { state.execution = None; }
+                    if cancelled_preparation { state.execution = None; }
                     gate_release = None;
                     if child.is_none() && state.execution.is_some() {
                         return Err("Interrupted execution remains uncertain; u reconciles evidence, d detaches. A missing native leader may require verified reboot before replacement or confirmed shutdown.".into());

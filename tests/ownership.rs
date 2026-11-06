@@ -608,6 +608,27 @@ fn missing_claude_keeps_adopted_checkout_and_allows_fixture_launch() {
     dashboard.send(b"c");
     dashboard.wait("Claude Code launch failed:");
     dashboard.wait("adopted checkout retained");
+    // Failure can be visible while the cancelled native process/history tail
+    // still drains. A subsequent launch is explicit only after that boundary.
+    dashboard.kill();
+    let mut controller = Controller::connect(&fixture);
+    let deadline = Instant::now() + Duration::from_secs(4);
+    loop {
+        let state = controller.request(serde_json::json!("Screen"));
+        if state["lifecycle"] == "Exited"
+            && state["metadata_pending"] == false
+            && state["accepted_bytes"] == state["durable_bytes"]
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "failed launch history still pending: {state}"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    drop(controller);
+    dashboard = fixture.reopen_with_path_after_release("Process: Exited", Some(tools.as_os_str()));
     dashboard.send(b"l");
     dashboard.wait("fixture>");
     fixture.assert_one_owner_and_child();
@@ -634,6 +655,27 @@ fn missing_codex_keeps_adopted_checkout_and_allows_fixture_launch() {
     dashboard.send(b"x");
     dashboard.wait("Codex CLI launch failed:");
     dashboard.wait("adopted checkout retained");
+    // Failure can be visible while the cancelled native process/history tail
+    // still drains. A subsequent launch is explicit only after that boundary.
+    dashboard.kill();
+    let mut controller = Controller::connect(&fixture);
+    let deadline = Instant::now() + Duration::from_secs(4);
+    loop {
+        let state = controller.request(serde_json::json!("Screen"));
+        if state["lifecycle"] == "Exited"
+            && state["metadata_pending"] == false
+            && state["accepted_bytes"] == state["durable_bytes"]
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "failed launch history still pending: {state}"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    drop(controller);
+    dashboard = fixture.reopen_with_path_after_release("Process: Exited", Some(tools.as_os_str()));
     dashboard.send(b"l");
     dashboard.wait("fixture>");
     fixture.assert_one_owner_and_child();
@@ -2524,6 +2566,17 @@ fn storage_saturation_keeps_navigation_retry_stop_and_exact_retained_bytes() {
     dashboard.send(b"j");
     dashboard.wait("Branch: other14");
     let navigation_us = navigation.elapsed().as_micros();
+    let dashboard_pid = dashboard.child.process_id().unwrap();
+    let dashboard_rss = Command::new("ps")
+        .args([
+            "-p",
+            &dashboard_pid.to_string(),
+            "-o",
+            "pid=,ppid=,rss=,stat=",
+        ])
+        .output()
+        .unwrap();
+    fixture.assert_one_owner_and_child();
     dashboard.kill();
     let mut controller = Controller::connect(&fixture);
     let deadline = Instant::now() + Duration::from_secs(4);
@@ -2650,12 +2703,24 @@ fn storage_saturation_keeps_navigation_retry_stop_and_exact_retained_bytes() {
         bytes.len() - prefix.len() <= emitted_bytes as usize,
         "capture must not exceed completed emission writes"
     );
-    let evidence = serde_json::json!({"emitted_records":emitted.len(),"emitted_payload_bytes":emitted_bytes,"emitted_not_captured":emitted_bytes-(bytes.len()-prefix.len()) as u64,"producer_completed_write_max_us":emitted.iter().map(|entry| entry["write_us"].as_u64().unwrap()).max(),"memory":memory,"navigation_us":navigation_us,"retry_us":retry_us,"stop_us":stop_us,"saturated":saturated,"stopped":stopped,"persistent":persistent,"repaired":final_state,"retained_bytes":bytes.len(),"cap":270336,"workload":"4MiB flood; stalled write; ENOSPC; stop; repair"});
+    let evidence = serde_json::json!({"revision":String::from_utf8_lossy(&Command::new("git").args(["rev-parse","HEAD"]).output().unwrap().stdout).trim(),"source_dirty":!Command::new("git").args(["diff","HEAD","--quiet","--","src","tests"]).status().unwrap().success(),"profile":"debug","fault":"real prefix write then ENOSPC; persistent ENOSPC synthetic, no full user disk","capture_slots":64,"block_max":4096,"worker_and_producer_blocks":2,"outer_harness_slots":8,"emitted_records":emitted.len(),"emitted_payload_bytes":emitted_bytes,"emitted_not_captured":emitted_bytes-(bytes.len()-prefix.len()) as u64,"producer_completed_write_max_us":emitted.iter().map(|entry| entry["write_us"].as_u64().unwrap()).max(),"dashboard_rss_rows":String::from_utf8_lossy(&dashboard_rss.stdout),"owner_pid":owner,"child_pid":child,"memory":memory,"navigation_us":navigation_us,"retry_us":retry_us,"stop_us":stop_us,"saturated":saturated,"stopped":stopped,"persistent":persistent,"repaired":final_state,"retained_bytes":bytes.len(),"cap":270336,"workload":"4MiB flood; stalled write; ENOSPC; stop; repair"});
     eprintln!("storage14 evidence: {evidence}");
     if let Some(path) = std::env::var_os("RAT_STORAGE_EVIDENCE") {
         let path = PathBuf::from(path);
-        std::fs::write(path.with_extension("emitted.jsonl"), emitted_ledger).unwrap();
-        std::fs::write(path, format!("{evidence}\n")).unwrap();
+        std::fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(path.with_extension("emitted.jsonl"))
+            .unwrap()
+            .write_all(emitted_ledger.as_bytes())
+            .unwrap();
+        std::fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(path)
+            .unwrap()
+            .write_all(format!("{evidence}\n").as_bytes())
+            .unwrap();
     }
     if final_state["stopped"] != true {
         controller.request(serde_json::json!("Shutdown"));

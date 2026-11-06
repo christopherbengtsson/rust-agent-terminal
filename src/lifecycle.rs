@@ -15,6 +15,9 @@ pub fn stop(mut child: Child, group: i32) -> Receiver<Outcome> {
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
         let result = (|| -> io::Result<()> {
+            // macOS can report EPERM transiently while a signalled PTY leader
+            // is exiting. Preserve the error, but let actual reaping and group
+            // absence establish success within the same bounded deadline.
             let mut signal_error = match signal(group, libc::SIGTERM) {
                 Ok(()) => None,
                 Err(error) if error.raw_os_error() == Some(libc::EPERM) => Some(error),
