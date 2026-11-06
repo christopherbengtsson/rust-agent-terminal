@@ -164,6 +164,7 @@ fn files(bytes: &[u8]) -> Result<(Vec<ChangedFile>, usize), String> {
             omitted += 1;
         }
     }
+    files.sort_by(|a, b| a.path.cmp(&b.path));
     Ok((files, omitted))
 }
 fn new_content(root: &Path, path: &[u8]) -> Result<String, String> {

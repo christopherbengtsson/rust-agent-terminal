@@ -131,17 +131,30 @@ impl Ui {
                                 .to_string()
                         })
                         .unwrap_or_else(|| "checkout unknown · retained legacy history".into());
+                    let runtime = app
+                        .session
+                        .sessions
+                        .iter()
+                        .filter(|entry| entry.task == workspace.task)
+                        .max_by_key(|entry| entry.reserved);
+                    let context = runtime.map_or_else(
+                        || format!("{} sessions", workspace.sessions.len()),
+                        |runtime| {
+                            format!(
+                                "{:?} · {} · {} sessions",
+                                runtime.lifecycle,
+                                runtime.status.state.label(),
+                                workspace.sessions.len()
+                            )
+                        },
+                    );
                     ListItem::new(vec![
                         Line::from(format!(
                             "{} / {}",
                             visible(project),
                             visible(&workspace.name)
                         )),
-                        Line::from(format!(
-                            "{} · {} sessions",
-                            visible(&path),
-                            workspace.sessions.len()
-                        )),
+                        Line::from(format!("{} · {}", context, visible(&path))),
                     ])
                 })
                 .collect::<Vec<_>>();
@@ -157,7 +170,7 @@ impl Ui {
             } else if app.session.registry_pending {
                 " Registering project… ".into()
             } else {
-                " Projects / retained workspaces · A add · j/k select · Enter discover · a adopt · R rename "
+                " Projects / retained workspaces · A add · j/k select · Enter open · a adopt · R rename "
                     .into()
             };
             frame.render_stateful_widget(
@@ -777,6 +790,56 @@ fn visible(text: &str) -> String {
 mod tests {
     use super::*;
     use ratatui::{Terminal, backend::TestBackend};
+
+    #[test]
+    fn workspace_picker_preserves_independent_lifecycle_and_semantic_status() {
+        let mut app = App::new("repo".into());
+        app.workspaces_open = true;
+        for (task, attention) in [
+            ("A", crate::native_status::State::Approval),
+            ("B", crate::native_status::State::Unknown),
+        ] {
+            app.session
+                .registry
+                .workspaces
+                .push(crate::registry::Workspace {
+                    id: task.into(),
+                    task: task.into(),
+                    legacy_tasks: vec![],
+                    name: task.into(),
+                    project: None,
+                    path: Some(task.as_bytes().to_vec()),
+                    checkout: None,
+                    sessions: vec![task.into()],
+                });
+            app.session.sessions.push(crate::events::SessionSummary {
+                target: task.into(),
+                task: task.into(),
+                lifecycle: crate::events::Lifecycle::Running,
+                reserved: true,
+                status: crate::native_status::Status {
+                    state: attention,
+                    ..Default::default()
+                },
+                ..Default::default()
+            });
+        }
+        for (cols, rows) in [(160, 40), (60, 18)] {
+            let mut terminal = Terminal::new(TestBackend::new(cols, rows)).unwrap();
+            terminal
+                .draw(|frame| Ui::default().draw(frame, &app))
+                .unwrap();
+            let text = terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect::<String>();
+            assert!(text.contains("Running · approval needed"), "{text}");
+            assert!(text.contains("Running · unknown"), "{text}");
+        }
+    }
 
     #[test]
     fn retained_workspace_selection_is_visible_in_normal_and_small_terminals() {

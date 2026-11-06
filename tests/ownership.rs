@@ -1937,9 +1937,13 @@ fn codex_status_requires_current_attributed_evidence_despite_liveness_and_prose(
     // Reuse the shared scripted child through the normal Codex launch boundary.
     let executable = env!("CARGO_BIN_EXE_agent-terminal").replace('\'', "'\\''");
     let wrapper = tools.join("codex");
+    let invocation = fixture.temp.path().join("codex-invocation");
     std::fs::write(
         &wrapper,
-        format!("#!/bin/sh\nexec '{executable}' --scripted-child\n"),
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\nexec '{executable}' --scripted-child\n",
+            invocation.display()
+        ),
     )
     .unwrap();
     std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -1962,9 +1966,17 @@ fn codex_status_requires_current_attributed_evidence_despite_liveness_and_prose(
             .contains("Process: Running")
     );
     let channel = UnixDatagram::unbound().unwrap();
-    channel
-        .send_to(b"{", fixture.state().join("codex-status.sock"))
+    let argv = std::fs::read_to_string(invocation).unwrap();
+    let endpoint = argv
+        .split("--codex-status-hook '")
+        .nth(1)
+        .unwrap()
+        .split('\'')
+        .next()
         .unwrap();
+    assert!(endpoint.starts_with("/tmp/rat-"));
+    assert!(endpoint.len() < 104, "macOS Unix socket pathname must fit");
+    channel.send_to(b"{", endpoint).unwrap();
     dashboard.wait("invalid or unattributed Codex evidence");
     dashboard.send(b"fixture-failed-test\r");
     dashboard.wait("test result: FAILED; agent continues");
@@ -6201,6 +6213,258 @@ fn registry_migration_refuses_unattributable_legacy_record_and_preserves_databas
 }
 
 #[test]
+fn concurrent_workspaces_keep_controls_capture_faults_and_final_flush_scoped() {
+    use std::os::unix::ffi::OsStrExt;
+    let fixture = Fixture::new();
+    assert!(
+        Command::new("git")
+            .arg("-C")
+            .arg(&fixture.repository)
+            .args([
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=fixture@example.invalid",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "fixture"
+            ])
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    let second = fixture.temp.path().join("second-worktree");
+    assert!(
+        Command::new("git")
+            .arg("-C")
+            .arg(&fixture.repository)
+            .args(["worktree", "add", "-b", "second"])
+            .arg(&second)
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    let mut dashboard = fixture.open();
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted");
+    dashboard.send(b"l");
+    dashboard.wait("fixture>");
+    dashboard.kill();
+    let mut control = Controller::connect(&fixture);
+    let a = control.greeting.clone();
+    let target_a = a["control_target"].as_str().unwrap().to_owned();
+    let id_a = a["session_identity"]["session"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let target = |owner: &str, session: &str, command: serde_json::Value| serde_json::json!({"Session":{"target":owner,"session":session,"command":command}});
+    control.request(target(
+        &target_a,
+        &id_a,
+        serde_json::json!({"Input": b"only-workspace-A\r".to_vec()}),
+    ));
+    control.request(serde_json::json!({"Adopt":second.as_os_str().as_bytes()}));
+    let wait = |control: &mut Controller, predicate: &dyn Fn(&serde_json::Value) -> bool| {
+        let deadline = Instant::now() + Duration::from_secs(8);
+        loop {
+            let state = control.request(serde_json::json!("Screen"));
+            if predicate(&state) {
+                break state;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "session condition timed out: {state}"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    };
+    wait(&mut control, &|state| {
+        state["adoption_pending"] == false && state["adopted"] == second.to_str().unwrap()
+    });
+    let b = control.request(serde_json::json!({"Launch":"concurrent-workspace-b"}));
+    assert!(b["launch_result"]["error"].is_null(), "{b}");
+    let target_b = b["control_target"].as_str().unwrap().to_owned();
+    let id_b = b["session_identity"]["session"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_ne!(target_a, target_b);
+    assert_ne!(id_a, id_b);
+    let alias = fixture.temp.path().join("alias-to-first");
+    std::os::unix::fs::symlink(&fixture.repository, &alias).unwrap();
+    control.request(serde_json::json!({"Adopt":alias.as_os_str().as_bytes()}));
+    let aliased = wait(&mut control, &|state| {
+        state["adoption_pending"] == false && state["control_target"] == target_a
+    });
+    assert_eq!(aliased["session_identity"]["session"], id_a);
+    assert_eq!(
+        aliased["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|entry| !entry["session"].is_null())
+            .count(),
+        2
+    );
+    let duplicate = control.request(serde_json::json!({"Launch":"duplicate-in-aliased-worktree"}));
+    assert_eq!(duplicate["session_identity"]["session"], id_a);
+    assert!(
+        duplicate["error"]
+            .as_str()
+            .unwrap()
+            .contains("already exists")
+    );
+    control.request(serde_json::json!({"SelectSession":target_b}));
+    control.request(target(
+        &target_b,
+        &id_b,
+        serde_json::json!({"Input": b"only-workspace-B\r".to_vec()}),
+    ));
+    wait(&mut control, &|state| {
+        state["screen"]
+            .as_str()
+            .unwrap_or("")
+            .contains("received: only-workspace-B")
+    });
+    // A's input and geometry target remain A even though B is selected.
+    control.request(target(
+        &target_a,
+        &id_a,
+        serde_json::json!({"Resize":{"rows":19,"cols":77}}),
+    ));
+    let selected_b = control.request(serde_json::json!("Screen"));
+    assert_ne!(selected_b["rows"], 19);
+    assert!(
+        !selected_b["screen"]
+            .as_str()
+            .unwrap()
+            .contains("only-workspace-A")
+    );
+    control.request(serde_json::json!({"SelectSession":target_a}));
+    let selected_a = wait(&mut control, &|state| {
+        state["rows"] == 19
+            && state["screen"]
+                .as_str()
+                .unwrap_or("")
+                .contains("received: only-workspace-A")
+    });
+    assert_eq!(selected_a["cols"], 77);
+    // A stale conversation UUID cannot stop this owner's current conversation.
+    let stale = control.request(target(
+        &target_a,
+        "00000000-0000-0000-0000-000000000000",
+        serde_json::json!("Stop"),
+    ));
+    assert_eq!(stale["lifecycle"], "Running");
+    assert!(stale["error"].as_str().unwrap().contains("Session changed"));
+    let after_automatic_resize = control.request(target(
+        &target_a,
+        &id_a,
+        serde_json::json!({"Resize":{"rows":20,"cols":78}}),
+    ));
+    assert_eq!(
+        after_automatic_resize["error"], stale["error"],
+        "background geometry must preserve the actionable refusal"
+    );
+    std::fs::write(fixture.state().join("proof-storage-session"), &id_a).unwrap();
+    std::fs::write(fixture.state().join("proof-storage-write"), "error").unwrap();
+    control.request(target(
+        &target_a,
+        &id_a,
+        serde_json::json!({"Input":b"pace17 601 15000 131072\r".to_vec()}),
+    ));
+    wait(&mut control, &|state| {
+        state["storage_error"].is_string()
+            && state["capture_pending_bytes"].as_u64().unwrap_or(0) > 0
+    });
+    control.request(serde_json::json!({"SelectSession":target_b}));
+    control.request(target(
+        &target_b,
+        &id_b,
+        serde_json::json!({"Input":b"pace17 602 15000 65536\r".to_vec()}),
+    ));
+    let flowing_b = wait(&mut control, &|state| {
+        state["durable_bytes"].as_u64().unwrap_or(0) > 8192
+    });
+    assert!(
+        flowing_b["storage_error"].is_null(),
+        "A's fault leaked into B: {flowing_b}"
+    );
+    let before_b = flowing_b["output_bytes"].as_u64().unwrap();
+    // Stopping faulted A never targets B; B still captures while A retains bytes.
+    control.request(target(&target_a, &id_a, serde_json::json!("Stop")));
+    let continuing_b = wait(&mut control, &|state| {
+        state["output_bytes"].as_u64().unwrap_or(0) > before_b + 4096
+    });
+    assert_eq!(continuing_b["lifecycle"], "Running");
+    control.request(serde_json::json!({"SelectSession":target_a}));
+    let stopped_a = wait(&mut control, &|state| state["lifecycle"] == "Stopped");
+    assert!(stopped_a["capture_pending_bytes"].as_u64().unwrap_or(0) > 0);
+    assert!(stopped_a["capture_loss_possible"].as_bool().unwrap());
+    std::fs::remove_file(fixture.state().join("proof-storage-write")).unwrap();
+    control.request(target(&target_a, &id_a, serde_json::json!("RetryStorage")));
+    let final_a = wait(&mut control, &|state| {
+        state["metadata_pending"] == false
+            && state["capture_pending_bytes"] == 0
+            && state["accepted_bytes"] == state["durable_bytes"]
+    });
+    assert_eq!(final_a["lifecycle"], "Stopped");
+    control.request(target(
+        &target_a,
+        &id_a,
+        serde_json::json!({"HistorySession":{"session":id_a,"offset":0}}),
+    ));
+    let history_a = wait(&mut control, &|state| {
+        state["history"]["text"]
+            .as_str()
+            .unwrap_or("")
+            .contains("only-workspace-A")
+    });
+    assert!(
+        !history_a["history"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("only-workspace-B")
+    );
+    control.request(serde_json::json!({"SelectSession":target_b}));
+    let after_a = control.request(serde_json::json!("Screen"));
+    assert_eq!(after_a["lifecycle"], "Running");
+    assert!(
+        after_a["durable_bytes"].as_u64().unwrap() > flowing_b["durable_bytes"].as_u64().unwrap()
+    );
+    // A new explicit conversation can start after its final capture settles;
+    // ordinary quit must stop this new child and the still-streaming B child.
+    control.request(serde_json::json!({"SelectSession":target_a}));
+    let replacement_a =
+        control.request(serde_json::json!({"Launch":"concurrent-workspace-a-next"}));
+    assert_eq!(replacement_a["lifecycle"], "Running", "{replacement_a}");
+    let pid_a = replacement_a["execution"]["pid"].as_i64().unwrap() as i32;
+    let pid_b = after_a["execution"]["pid"].as_i64().unwrap() as i32;
+    let mut state = control.request(serde_json::json!("Shutdown"));
+    let deadline = Instant::now() + Duration::from_secs(8);
+    while state["stopped"] != true {
+        assert!(
+            Instant::now() < deadline,
+            "ordinary quit did not settle every owner: {state}"
+        );
+        state = control.request(serde_json::json!("Screen"));
+    }
+    drop(control);
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while unsafe { libc::kill(pid_a, 0) } == 0 || unsafe { libc::kill(pid_b, 0) } == 0 {
+        assert!(
+            Instant::now() < deadline,
+            "ordinary quit left a fixture child alive"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[test]
 fn first_prompt_and_manual_names_preserve_workspace_and_conversation_identity() {
     use std::os::unix::fs::PermissionsExt;
     let fixture = Fixture::new();
@@ -6366,6 +6630,156 @@ fn prompt_editor_and_manual_rename_are_usable_in_normal_and_small_dashboard_ptys
             "My local workspace"
         );
         control.request(serde_json::json!("Shutdown"));
+    }
+}
+
+#[test]
+fn keyboard_switches_live_workspaces_and_reconnects_in_normal_and_small_ptys() {
+    use std::os::unix::ffi::OsStrExt;
+    let fixture = Fixture::new();
+    let second = fixture.temp.path().join("second-repository");
+    std::fs::create_dir(&second).unwrap();
+    assert!(
+        Command::new("git")
+            .args(["init", "-b", "main"])
+            .arg(&second)
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    let mut dashboard = fixture.open();
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted:");
+    dashboard.send(b"l");
+    dashboard.wait("fixture>");
+    dashboard.send(b"workspace-A-visible\r");
+    dashboard.wait("received: workspace-A-visible");
+    dashboard.kill();
+    let mut control = Controller::connect(&fixture);
+    let target_a = control.greeting["control_target"].clone();
+    let id_a = control.greeting["session_identity"]["session"].clone();
+    control.request(serde_json::json!({"Adopt": second.as_os_str().as_bytes()}));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let state = control.request(serde_json::json!("Screen"));
+        if state["adoption_pending"] == false && state["adopted"] == second.to_str().unwrap() {
+            break;
+        }
+        assert!(Instant::now() < deadline, "{state}");
+    }
+    let b = control.request(serde_json::json!({"Launch":"live-ui-b"}));
+    let target_b = b["control_target"].clone();
+    let id_b = b["session_identity"]["session"].clone();
+    control.request(serde_json::json!({"Input":b"workspace-B-visible\r".to_vec()}));
+    drop(control);
+    let capture = |dashboard: &Dashboard, cols: u16, rows: u16, name: &str| {
+        if let Some(directory) = std::env::var_os("RAT_CONCURRENT_UI_EVIDENCE") {
+            let mut cells = Vec::new();
+            for row in 0..rows {
+                for col in 0..cols {
+                    let cell = dashboard.screen.screen().cell(row, col).unwrap();
+                    cells.push(serde_json::json!({"row":row,"col":col,"text":cell.contents(),"fg":format!("{:?}",cell.fgcolor()),"bg":format!("{:?}",cell.bgcolor()),"bold":cell.bold(),"wide":cell.is_wide_continuation()}));
+                }
+            }
+            let directory = PathBuf::from(directory);
+            std::fs::create_dir_all(&directory).unwrap();
+            std::fs::write(directory.join(format!("m2-06-{name}-{cols}.json")),serde_json::to_vec_pretty(&serde_json::json!({"source":"real dashboard outer PTY cells switching two scripted coding sessions; no native terminal application compatibility claim","cols":cols,"rows":rows,"cells":cells,"hide_cursor":true})).unwrap()).unwrap();
+        }
+    };
+    for (cols, rows) in [(160, 40), (60, 18)] {
+        let reconnect_deadline = Instant::now() + Duration::from_secs(8);
+        dashboard = loop {
+            let mut candidate = Dashboard::open_geometry(
+                &fixture.repository,
+                &fixture.state(),
+                None,
+                None,
+                rows,
+                cols,
+            );
+            let visible = candidate.wait_any(&[
+                "workspace-B-visible",
+                "Another dashboard controls this supervisor",
+            ]);
+            if visible.contains("workspace-B-visible") {
+                break candidate;
+            }
+            candidate.kill();
+            assert!(
+                Instant::now() < reconnect_deadline,
+                "prior controller EOF not released"
+            );
+        };
+        dashboard.send(&[0x1d]);
+        dashboard.wait("Focus: dashboard");
+        dashboard.send(b"w");
+        dashboard.wait("retained workspaces");
+        dashboard.send(b"k\r");
+        let a_screen = dashboard.wait("workspace-A-visible");
+        assert!(!a_screen.contains("workspace-B-visible"));
+        dashboard.send(b"A-after-switch\r");
+        dashboard.wait("received: A-after-switch");
+        if cols == 160 {
+            capture(&dashboard, cols, rows, "A");
+        }
+        if let Some(directory) = std::env::var_os("RAT_CONCURRENT_UI_EVIDENCE") {
+            let directory = PathBuf::from(directory);
+            std::fs::create_dir_all(&directory).unwrap();
+            std::fs::write(
+                directory.join(format!("m2-06-A-{cols}.txt")),
+                dashboard.screen.screen().contents(),
+            )
+            .unwrap();
+            std::fs::write(
+                directory.join(format!("m2-06-A-{cols}.ansi")),
+                dashboard.screen.screen().state_formatted(),
+            )
+            .unwrap();
+        }
+        dashboard.send(&[0x1d]);
+        dashboard.wait("Focus: dashboard");
+        dashboard.send(b"w");
+        dashboard.wait("retained workspaces");
+        dashboard.send(b"j\r");
+        let b_screen = dashboard.wait("workspace-B-visible");
+        assert!(!b_screen.contains("workspace-A-visible"));
+        assert!(
+            !b_screen.contains("Session changed before command delivery"),
+            "selection must wait for B's identity before automatic resize: {b_screen}"
+        );
+        if cols == 60 {
+            capture(&dashboard, cols, rows, "B");
+        }
+        if let Some(directory) = std::env::var_os("RAT_CONCURRENT_UI_EVIDENCE") {
+            let directory = PathBuf::from(directory);
+            std::fs::write(
+                directory.join(format!("m2-06-B-{cols}.txt")),
+                dashboard.screen.screen().contents(),
+            )
+            .unwrap();
+            std::fs::write(
+                directory.join(format!("m2-06-B-{cols}.ansi")),
+                dashboard.screen.screen().state_formatted(),
+            )
+            .unwrap();
+        }
+        dashboard.kill();
+        let mut control = Controller::connect(&fixture);
+        assert_eq!(control.greeting["control_target"], target_b);
+        assert_eq!(control.greeting["session_identity"]["session"], id_b);
+        let a = control.request(serde_json::json!({"SelectSession":target_a}));
+        assert_eq!(a["session_identity"]["session"], id_a);
+        assert_eq!(a["lifecycle"], "Running");
+        control.request(serde_json::json!({"SelectSession":target_b}));
+    }
+    let mut control = Controller::connect(&fixture);
+    let mut state = control.request(serde_json::json!("Shutdown"));
+    let deadline = Instant::now() + Duration::from_secs(8);
+    while state["stopped"] != true {
+        assert!(Instant::now() < deadline, "{state}");
+        state = control.request(serde_json::json!("Screen"));
     }
 }
 

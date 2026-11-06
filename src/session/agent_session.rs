@@ -53,6 +53,7 @@ pub(super) struct AgentSession {
     execution: Execution,
     history: History,
     directory: PathBuf,
+    endpoint_directory: PathBuf,
     state: Observation,
     task_identity: String,
     checkout: Option<PathBuf>,
@@ -104,7 +105,7 @@ impl AgentSession {
     pub(super) fn restore(
         directory: &Path,
         restored: crate::persistence::Restored,
-        storage: &crate::persistence::Worker,
+        _storage: &crate::persistence::Worker,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let mut state = restored.state;
         if state.launch_request.is_empty() {
@@ -119,18 +120,17 @@ impl AgentSession {
             .into_iter()
             .map(|result| (result.request.clone(), result))
             .collect();
-        let mut writes = crate::persistence::Obligations::default();
-        writes.send(
-            &storage.commands,
-            crate::persistence::Command::Save(crate::persistence::Snapshot::new(
-                &state,
-                checkout.as_deref(),
-                &task_identity,
-            )),
-        )?;
-        state.metadata_pending = true;
+        let writes = crate::persistence::Obligations::default();
+        state.metadata_pending = false;
+        state.control_target = uuid::Uuid::new_v4().to_string();
         let (write_errors, input_errors) = mpsc::sync_channel(1);
+        let endpoint_directory = PathBuf::from("/tmp").join(format!(
+            "rat-{}-{}",
+            unsafe { libc::geteuid() },
+            &uuid::Uuid::new_v4().simple().to_string()[..12]
+        ));
         Ok(Self {
+            endpoint_directory,
             directory: directory.to_owned(),
             state,
             task_identity,
@@ -193,7 +193,20 @@ impl AgentSession {
                 ));
                 self.state.history = None;
                 self.state.history_index = 0;
-                self.history.history_sealed = false;
+                if self
+                    .state
+                    .session_identity
+                    .as_ref()
+                    .is_some_and(|identity| identity.session == id)
+                {
+                    self.history.history_sealed = false;
+                    self.history.capture_started_here = false;
+                    self.state.accepted_bytes = 0;
+                    self.state.written_bytes = 0;
+                    self.state.durable_bytes = 0;
+                    self.state.capture_pending_bytes = 0;
+                    self.state.durable_commits.clear();
+                }
                 self.state.cleanup = None;
                 let _ = storage
                     .commands
@@ -291,6 +304,16 @@ impl AgentSession {
                 }
             }
             Completion::History(page) => self.state.history = Some(page),
+            Completion::HistoryTarget(target, result) => {
+                if target == self.state.control_target {
+                    match result {
+                        Ok(page) => self.state.history = Some(page),
+                        Err(error) => {
+                            self.state.error = Some(format!("History unavailable: {error}; retry"))
+                        }
+                    }
+                }
+            }
             Completion::Error(kind, error) => {
                 if kind == "cleanup" {
                     self.state.cleanup_message = Some(format!(
@@ -438,27 +461,34 @@ impl AgentSession {
                 self.retry_requested = false;
             }
         }
-        let progress = storage.progress.lock().unwrap().clone();
+        let progress = storage.progress_for(
+            self.state
+                .session_identity
+                .as_ref()
+                .map(|identity| identity.session.as_str()),
+        );
         self.state.capacity = progress.capacity.clone();
-        self.state.accepted_bytes = progress.accepted;
-        self.state.written_bytes = progress.written;
-        self.state.storage_wait_millis = progress
-            .operation
-            .map_or(0, |(_, since)| since.elapsed().as_millis() as u64);
-        self.state.producer_wait_millis = progress
-            .producer_wait
-            .map_or(0, |since| since.elapsed().as_millis() as u64);
-        self.state.storage_error = progress.error.clone();
-        self.state.capture_pending_bytes = progress.pending_bytes;
-        self.state.capture_high_water = progress.pending_high_water;
-        self.state.capture_backpressure_count = progress.backpressure_count;
-        self.state.capture_backpressure_micros = progress.backpressure_micros;
-        self.state.durable_bytes = progress.durable;
-        self.state.durable_flush_count = progress.flush_count;
-        self.state.durable_commits.clone_from(&progress.commits);
-        self.state.durable_completed_millis = progress.completed_millis;
-        self.state.sync_commit_micros = progress.last_flush_micros;
-        self.state.accepted_to_durable_millis = progress.accepted_to_durable_millis;
+        if self.history.capture_started_here && !self.history.history_sealed {
+            self.state.accepted_bytes = progress.accepted;
+            self.state.written_bytes = progress.written;
+            self.state.storage_wait_millis = progress
+                .operation
+                .map_or(0, |(_, since)| since.elapsed().as_millis() as u64);
+            self.state.producer_wait_millis = progress
+                .producer_wait
+                .map_or(0, |since| since.elapsed().as_millis() as u64);
+            self.state.storage_error = progress.error.clone();
+            self.state.capture_pending_bytes = progress.pending_bytes;
+            self.state.capture_high_water = progress.pending_high_water;
+            self.state.capture_backpressure_count = progress.backpressure_count;
+            self.state.capture_backpressure_micros = progress.backpressure_micros;
+            self.state.durable_bytes = progress.durable;
+            self.state.durable_flush_count = progress.flush_count;
+            self.state.durable_commits.clone_from(&progress.commits);
+            self.state.durable_completed_millis = progress.completed_millis;
+            self.state.sync_commit_micros = progress.last_flush_micros;
+            self.state.accepted_to_durable_millis = progress.accepted_to_durable_millis;
+        }
 
         self.state.metadata_pending = self.writes.metadata_pending()
             || self.metadata_failed
@@ -672,9 +702,14 @@ impl AgentSession {
     ) {
         let directory = self.directory.clone();
         let directory = directory.as_path();
-        let progress = storage.progress.lock().unwrap().clone();
+        let progress = storage.progress_for(
+            self.state
+                .session_identity
+                .as_ref()
+                .map(|identity| identity.session.as_str()),
+        );
         let mut deferred = false;
-        if !matches!(request, Request::Screen) && !self.metadata_failed {
+        if !matches!(request, Request::Screen | Request::Resize { .. }) && !self.metadata_failed {
             self.state.error = None;
         }
         let save_history = matches!(&request, Request::History { index, .. } if *index != self.state.history_index);
@@ -782,7 +817,7 @@ impl AgentSession {
                 return Err("Launch reconciliation pending; wait for durable outcome".into());
             }
             match request {
-                Request::InspectWorking { .. } | Request::RenameWorkspace { .. } | Request::Discover { .. } | Request::Adopt(_) | Request::Register(_) => unreachable!("workspace requests are supervisor-owned"),
+                Request::InspectWorking { .. } | Request::RenameWorkspace { .. } | Request::Session { .. } | Request::SelectSession(_) | Request::Discover { .. } | Request::Adopt(_) | Request::Register(_) => unreachable!("workspace requests are supervisor-owned"),
                 Request::Reconcile => {
                     if self.execution.child.is_some() || self.execution.stopping.is_some() { return Err("Session owned by current supervisor; stop it normally".into()); }
                     if let Some(evidence) = &self.state.execution { evidence.reconcile()?; }
@@ -792,7 +827,7 @@ impl AgentSession {
                 }
                 Request::QueryLaunch(_) => return Err("Launch request unknown to this supervisor; do not replay uncertain activity after supervisor loss".into()),
                 Request::LaunchNative { request, .. } | Request::Launch(request) | Request::LaunchClaude(request) | Request::LaunchCodex(request) | Request::Resume(request) => {
-                    if !continuing && self.execution.child.is_none() && self.execution.stopping.is_none() && (!self.history.eof || self.history.capture_done.is_some() || self.history.flush_pending || storage.progress.lock().unwrap().pending_bytes > 0 || self.metadata_failed || (matches!(self.state.lifecycle, Lifecycle::Stopped | Lifecycle::Exited | Lifecycle::Failed) && !self.history.final_flush)) {
+                    if !continuing && self.execution.child.is_none() && self.execution.stopping.is_none() && (!self.history.eof || self.history.capture_done.is_some() || self.history.flush_pending || storage.progress_for(self.state.session_identity.as_ref().map(|identity| identity.session.as_str())).pending_bytes > 0 || self.metadata_failed || (matches!(self.state.lifecycle, Lifecycle::Stopped | Lifecycle::Exited | Lifecycle::Failed) && !self.history.final_flush)) {
                         return Err("Previous session history is still pending; repair storage and press y to retry before starting another session".into());
                     }
                     if self.state.execution.is_some() && !continuing && self.execution.child.is_none() { return Err("Interrupted execution is uncertain; u reconciles process evidence. Verified reboot resolves unknown descendants; no automatic coding restart.".into()); }
@@ -814,6 +849,19 @@ impl AgentSession {
                     if initial.as_ref().and_then(|(_, prompt)| prompt.as_ref()).is_some_and(|prompt| prompt.len() > 4084 || prompt.contains('\0')) { return Err("First prompt exceeds 4084-byte limit or contains NUL".into()); }
                     if !continuing {
                         self.history.capture_started_here = false;
+                        self.history.history_sealed = false;
+                        self.state.accepted_bytes = 0;
+                        self.state.written_bytes = 0;
+                        self.state.durable_bytes = 0;
+                        self.state.capture_pending_bytes = 0;
+                        self.state.capture_high_water = 0;
+                        self.state.capture_backpressure_count = 0;
+                        self.state.capture_backpressure_micros = 0;
+                        self.state.durable_flush_count = 0;
+                        self.state.durable_commits.clear();
+                        self.state.storage_error = None;
+                        self.state.storage_wait_millis = 0;
+                        self.state.producer_wait_millis = 0;
                         self.launch.cancelled_launch = false;
                         self.state.capture_loss_possible = false;
                         if !resume { self.state.native_conversation = None; }
@@ -844,7 +892,8 @@ impl AgentSession {
                         pixel_height: 0,
                     })?;
                     crate::recovery::crash_barrier(directory, "before-create");
-                    let gate_path = directory.join("launch-gate.sock");
+                    super::private_directory(&self.endpoint_directory)?;
+                    let gate_path = self.endpoint_directory.join("launch-gate.sock");
                     let _ = fs::remove_file(&gate_path);
                     let gate_listener = UnixListener::bind(&gate_path)?;
                     gate_listener.set_nonblocking(true)?;
@@ -881,7 +930,7 @@ impl AgentSession {
                     self.execution.codex_monitor = None;
                     self.state.status = crate::native_status::Status::default();
                     if codex {
-                        match crate::codex_status::Monitor::start(directory) {
+                        match crate::codex_status::Monitor::start(&self.endpoint_directory) {
                             Ok(mut status_monitor) => {
                                 if resume { status_monitor.expect_session(self.state.native_conversation.as_ref().unwrap()); }
                                 if status_monitor.configure(&mut command).is_ok() { self.execution.codex_monitor = Some(status_monitor); }
@@ -890,7 +939,7 @@ impl AgentSession {
                             Err(_) => self.state.status.reason = "Codex status monitor unavailable".into(),
                         }
                     } else {
-                        match crate::native_status::Monitor::start(directory, !claude, if resume { self.state.native_conversation.as_deref() } else { None }) {
+                        match crate::native_status::Monitor::start(&self.endpoint_directory, !claude, if resume { self.state.native_conversation.as_deref() } else { None }) {
 
                             Ok(mut status_monitor) => {
                                 status_monitor.native_executable(claude_executable.as_deref());
@@ -977,7 +1026,7 @@ impl AgentSession {
                     self.launch.gate_receipt = Some(result);
                     let gate_listener = self.launch.partial_gate.take().unwrap();
                     let proof_receipt_pause = directory.join("proof-launch-receipt");
-                    let gate_path = directory.join("launch-gate.sock");
+                    let gate_path = self.endpoint_directory.join("launch-gate.sock");
                     thread::spawn(move || {
                         let result = (|| -> io::Result<crate::recovery::Receipt> {
                             let deadline = std::time::Instant::now() + Duration::from_secs(2);
@@ -1026,9 +1075,9 @@ impl AgentSession {
                     self.history.history_sealed = false;
                     self.history.seal_pending = false;
                     let session = self.state.session_identity.as_ref().ok_or("Missing prepared identity")?.session.clone();
-                    let capture = storage.output.clone();
                     launch_setup_fault(directory, "before-capture")?;
                     let mut source = self.execution.master.as_ref().unwrap().lock().unwrap().try_clone_reader()?;
+                    let capture = storage.capture_for(&session)?;
                     self.history.capture_started_here = true;
                     let (finished, done) = mpsc::sync_channel(1);
                     self.history.capture_done = Some(done);
@@ -1153,11 +1202,11 @@ impl AgentSession {
                         .set_size(rows.try_into().unwrap(), cols.try_into().unwrap());
                 }
                 Request::HistorySession { session, offset } => {
-                    storage.commands.try_send(crate::persistence::Command::HistorySession(session, offset)).map_err(|error| format!("History busy: {error}; retry"))?;
+                    storage.commands.try_send(crate::persistence::Command::HistoryTarget { target: self.state.control_target.clone(), index: 0, session: Some(session), offset }).map_err(|error| format!("History busy: {error}; retry"))?;
                 }
                 Request::History { index, offset } => {
                     self.state.history_index = index;
-                    storage.commands.try_send(crate::persistence::Command::History(index, offset)).map_err(|e| format!("History busy: {e}; retry"))?;
+                    storage.commands.try_send(crate::persistence::Command::HistoryTarget { target: self.state.control_target.clone(), index, session: if index == 0 { self.state.session_identity.as_ref().map(|identity| identity.session.clone()) } else { None }, offset }).map_err(|e| format!("History busy: {e}; retry"))?;
                 }
                 Request::Screen => {}
                 Request::Cleanup { page } => {
@@ -1172,7 +1221,6 @@ impl AgentSession {
                     storage.commands.try_send(crate::persistence::Command::Delete(id)).map_err(|e| format!("Cleanup busy: {e}; retry"))?;
                 }
                 Request::RetryStorage => {
-                    self.history.history_sealed = false;
                     self.retry_requested = true;
                     self.history.final_flush = false;
                 }
@@ -1321,40 +1369,6 @@ impl AgentSession {
     pub(super) fn report_error(&mut self, error: String) {
         self.state.error = Some(error);
     }
-    pub(super) fn prepare_adoption(&mut self) -> Result<(), String> {
-        if !self.metadata_failed {
-            self.state.error = None;
-        }
-        if self.launch.creating.is_some() {
-            return Err("Process creation still owns a launch reservation; Stop cancels intent, then wait for cleanup".into());
-        }
-        if self.launch.pending_launch.is_some() || self.launch.gate_receipt.is_some() {
-            return Err("Launch reconciliation pending; wait for durable outcome".into());
-        }
-        Ok(())
-    }
-    pub(super) fn adoption_refusal(
-        &self,
-        same_checkout: bool,
-        storage: &crate::persistence::Worker,
-    ) -> Result<(), String> {
-        if (self.execution.child.is_some()
-            || self.execution.stopping.is_some()
-            || !self.history.eof
-            || self.history.capture_done.is_some()
-            || storage.progress.lock().unwrap().pending_bytes > 0)
-            && !same_checkout
-        {
-            return Err("Stop the existing session before adopting another checkout".into());
-        }
-        if self.state.execution.is_some() && self.execution.child.is_none() && !same_checkout {
-            return Err(
-                "Interrupted execution is uncertain; inspect history before changing adoption"
-                    .into(),
-            );
-        }
-        Ok(())
-    }
     pub(super) fn adopt(
         &mut self,
         identity: crate::git::CheckoutIdentity,
@@ -1380,6 +1394,22 @@ impl AgentSession {
         self.report_error(error);
         self.save_metadata(storage);
     }
+    pub(super) fn reserved(&self) -> bool {
+        self.state.execution.is_some()
+            || !self.history.eof
+            || self.history.capture_done.is_some()
+            || self.history.flush_pending
+            || (self.history.capture_started_here && !self.history.history_sealed)
+            || self.execution.child.is_some()
+            || self.execution.stopping.is_some()
+            || self.launch.pending_launch.is_some()
+            || self.launch.creating.is_some()
+            || self.launch.created.is_some()
+            || self.launch.gate_receipt.is_some()
+    }
+    pub(super) fn task(&self) -> &str {
+        &self.task_identity
+    }
     pub(super) fn checkout(&self) -> Option<&Path> {
         self.checkout.as_deref()
     }
@@ -1400,5 +1430,14 @@ impl AgentSession {
                 self.metadata_error = self.state.error.clone();
             }
         }
+    }
+}
+
+impl Drop for AgentSession {
+    fn drop(&mut self) {
+        self.execution.monitor.take();
+        self.execution.codex_monitor.take();
+        let _ = fs::remove_file(self.endpoint_directory.join("launch-gate.sock"));
+        let _ = fs::remove_dir(&self.endpoint_directory);
     }
 }

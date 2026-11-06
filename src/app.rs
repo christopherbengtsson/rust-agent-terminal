@@ -13,9 +13,12 @@ pub struct App {
     pub workspaces_open: bool,
     pub workspace_selected: Option<String>,
     pub project_input: Option<String>,
+    prompt_target: Option<(String, Option<String>)>,
     pub first_prompt: Option<(crate::events::NativeAgent, String)>,
     pub rename_workspace: Option<(String, String)>,
     pub session: Observation,
+    selected_target: String,
+    selecting_checkout: bool,
     pub attached: bool,
     pub history_open: bool,
     pub cleanup_open: bool,
@@ -46,10 +49,13 @@ impl App {
             workspace_selected: None,
             project_input: None,
             first_prompt: None,
+            prompt_target: None,
             rename_workspace: None,
             sent_viewport: None,
             pending_viewport: None,
             session: Default::default(),
+            selected_target: String::new(),
+            selecting_checkout: false,
             attached: false,
             history_open: false,
             cleanup_open: false,
@@ -74,11 +80,14 @@ impl App {
     /// Ui computes geometry; App decides whether a new usable size needs dispatch.
     pub fn viewport(&mut self, dimensions: Option<(u16, u16)>) -> Option<Effect> {
         let dimensions = dimensions?;
+        if !self.selected_target.is_empty() && self.selected_target != self.session.control_target {
+            return None;
+        }
         if self.sent_viewport == Some(dimensions) {
             return None;
         }
         self.pending_viewport = Some(dimensions);
-        Some(Effect::Session(Request::Resize {
+        Some(self.session_effect(Request::Resize {
             rows: dimensions.0,
             cols: dimensions.1,
         }))
@@ -100,7 +109,33 @@ impl App {
         {
             self.launch_request = uuid::Uuid::new_v4().to_string();
         }
-        Effect::Session(request(self.launch_request.clone()))
+        self.session_effect(request(self.launch_request.clone()))
+    }
+
+    fn session_effect(&self, request: Request) -> Effect {
+        if self.selected_target.is_empty()
+            || matches!(
+                request,
+                Request::Shutdown
+                    | Request::Adopt(_)
+                    | Request::Register(_)
+                    | Request::SelectSession(_)
+                    | Request::Discover { .. }
+                    | Request::InspectWorking { .. }
+            )
+        {
+            Effect::Session(request)
+        } else {
+            Effect::Session(Request::Session {
+                target: self.selected_target.clone(),
+                session: self
+                    .session
+                    .session_identity
+                    .as_ref()
+                    .map(|id| id.session.clone()),
+                command: Box::new(request),
+            })
+        }
     }
 
     pub fn observe_session(&mut self, mut observation: Observation) {
@@ -116,6 +151,23 @@ impl App {
                 repository: PathBuf::from(std::ffi::OsString::from_vec(discovery.repository)),
                 result: discovery.result,
             });
+        }
+        if !observation.connection_lost
+            && !self.selected_target.is_empty()
+            && !observation.control_target.is_empty()
+            && observation.control_target != self.selected_target
+            && !self.selecting_checkout
+        {
+            return;
+        }
+        if self.selected_target.is_empty() || self.selecting_checkout {
+            self.selected_target = observation.control_target.clone();
+        }
+        if self.selecting_checkout
+            && !observation.adoption_pending
+            && (self.session.adoption_pending || observation.error.is_some())
+        {
+            self.selecting_checkout = false;
         }
         if observation.connection_lost {
             if let Some(view) = &mut self.diff {
@@ -192,7 +244,7 @@ impl App {
                 self.attached = false;
                 return None;
             }
-            return Some(Effect::Session(Request::Key(key)));
+            return Some(self.session_effect(Request::Key(key)));
         }
         if let Some(view) = &mut self.diff {
             if key.modifiers.is_empty() {
@@ -276,6 +328,7 @@ impl App {
             match key.code {
                 KeyCode::Esc => {
                     self.first_prompt = None;
+                    self.prompt_target = None;
                     self.rename_workspace = None;
                 }
                 KeyCode::Enter => {
@@ -283,11 +336,22 @@ impl App {
                         let Effect::Session(_) = self.launch_intent(Request::Launch) else {
                             unreachable!()
                         };
-                        return Some(Effect::Session(Request::LaunchNative {
+                        let command = Request::LaunchNative {
                             request: self.launch_request.clone(),
                             agent,
                             prompt: (!prompt.is_empty()).then_some(prompt),
-                        }));
+                        };
+                        let effect = match self.prompt_target.take() {
+                            Some((target, session)) if !target.is_empty() => {
+                                Effect::Session(Request::Session {
+                                    target,
+                                    session,
+                                    command: Box::new(command),
+                                })
+                            }
+                            _ => self.session_effect(command),
+                        };
+                        return Some(effect);
                     }
                     if let Some((workspace, name)) = self.rename_workspace.take() {
                         return Some(Effect::Session(Request::RenameWorkspace {
@@ -343,7 +407,7 @@ impl App {
                         return None;
                     }
                     self.workspaces_open = true;
-                    return Some(Effect::Session(Request::Register(path.into_bytes())));
+                    return Some(self.session_effect(Request::Register(path.into_bytes())));
                 }
                 KeyCode::Backspace => {
                     path.pop();
@@ -370,6 +434,13 @@ impl App {
                     self.error = Some("Adopt the selected workspace before starting".into());
                     return None;
                 }
+                self.prompt_target = Some((
+                    self.selected_target.clone(),
+                    self.session
+                        .session_identity
+                        .as_ref()
+                        .map(|id| id.session.clone()),
+                ));
                 self.first_prompt = Some((
                     if key.code == KeyCode::Char('C') {
                         crate::events::NativeAgent::Claude
@@ -461,7 +532,7 @@ impl App {
                     self.history_offset = 0;
                     self.history_scroll = 0;
                     self.session.history = None;
-                    return Some(Effect::Session(Request::HistorySession {
+                    return Some(self.session_effect(Request::HistorySession {
                         session: session.clone(),
                         offset: 0,
                     }));
@@ -477,7 +548,24 @@ impl App {
                     };
                     use std::os::unix::ffi::OsStringExt;
                     if key.code == KeyCode::Char('a') {
-                        return Some(Effect::Session(Request::Adopt(path.clone())));
+                        self.selected_target.clear();
+                        self.selecting_checkout = true;
+                        self.sent_viewport = None;
+                        return Some(self.session_effect(Request::Adopt(path.clone())));
+                    }
+                    if let Some(target) = self
+                        .session
+                        .sessions
+                        .iter()
+                        .filter(|entry| entry.task == workspace.task)
+                        .max_by_key(|entry| entry.reserved)
+                        .map(|entry| entry.target.clone())
+                    {
+                        self.selected_target = target.clone();
+                        self.attached = false;
+                        self.sent_viewport = None;
+                        self.workspaces_open = false;
+                        return Some(Effect::Session(Request::SelectSession(target)));
                     }
                     let repository = PathBuf::from(std::ffi::OsString::from_vec(path.clone()));
                     if repository != self.repository {
@@ -491,7 +579,7 @@ impl App {
                 }
                 KeyCode::Char('q') => {
                     self.shutdown_pending = true;
-                    return Some(Effect::Session(Request::Shutdown));
+                    return Some(self.session_effect(Request::Shutdown));
                 }
                 KeyCode::Char('d') => {
                     self.detached = true;
@@ -518,7 +606,7 @@ impl App {
             self.cleanup_selected = 0;
             self.history_open = false;
             self.session.cleanup = None;
-            return Some(Effect::Session(Request::Cleanup { page: 0 }));
+            return Some(self.session_effect(Request::Cleanup { page: 0 }));
         }
         if self.cleanup_open
             && (key.modifiers.is_empty()
@@ -537,7 +625,9 @@ impl App {
                         self.history_offset = 0;
                         self.history_scroll = 0;
                         self.session.history = None;
-                        return Some(Effect::Session(Request::DeleteHistory { id: preview.id }));
+                        return Some(
+                            self.session_effect(Request::DeleteHistory { id: preview.id }),
+                        );
                     }
                     return None;
                 }
@@ -580,7 +670,7 @@ impl App {
                     };
                     self.cleanup_selected = 0;
                     self.session.cleanup = None;
-                    return Some(Effect::Session(Request::Cleanup { page: index }));
+                    return Some(self.session_effect(Request::Cleanup { page: index }));
                 }
                 KeyCode::Char('y' | 's' | 'q') => {}
                 _ => return None,
@@ -628,12 +718,12 @@ impl App {
             if self.history_open && matches!(key.code, KeyCode::Char('h' | 'n' | 'p' | '[' | ']')) {
                 self.history_scroll = 0;
                 if let Some(session) = &self.history_session {
-                    return Some(Effect::Session(Request::HistorySession {
+                    return Some(self.session_effect(Request::HistorySession {
                         session: session.clone(),
                         offset: self.history_offset,
                     }));
                 }
-                return Some(Effect::Session(Request::History {
+                return Some(self.session_effect(Request::History {
                     index: self.history_index,
                     offset: self.history_offset,
                 }));
@@ -649,13 +739,13 @@ impl App {
                 return Some(Effect::Detach);
             }
             KeyCode::Char('u') if key.modifiers.is_empty() => {
-                return Some(Effect::Session(Request::Reconcile));
+                return Some(self.session_effect(Request::Reconcile));
             }
             KeyCode::Char('y') if key.modifiers.is_empty() => {
-                return Some(Effect::Session(Request::RetryStorage));
+                return Some(self.session_effect(Request::RetryStorage));
             }
             KeyCode::Char('s') if key.modifiers.is_empty() => {
-                return Some(Effect::Session(Request::Stop));
+                return Some(self.session_effect(Request::Stop));
             }
             KeyCode::Char('a') if key.modifiers.is_empty() => {
                 let tree = self.current()?;
@@ -665,9 +755,11 @@ impl App {
                     );
                     return None;
                 }
-                return Some(Effect::Session(Request::Adopt(crate::session::path_bytes(
-                    &tree.path,
-                ))));
+                let path = crate::session::path_bytes(&tree.path);
+                self.selected_target.clear();
+                self.selecting_checkout = true;
+                self.sent_viewport = None;
+                return Some(self.session_effect(Request::Adopt(path)));
             }
             KeyCode::Char('v') if key.modifiers.is_empty() => {
                 return Some(self.launch_intent(Request::Resume));
@@ -694,7 +786,7 @@ impl App {
             Some(Action::Refresh) => return Some(Effect::Refresh),
             Some(Action::Quit) => {
                 self.shutdown_pending = true;
-                return Some(Effect::Session(Request::Shutdown));
+                return Some(self.session_effect(Request::Shutdown));
             }
             None => {}
         }
@@ -711,7 +803,7 @@ impl App {
         } else if self.project_input.is_some() {
             "Add project: existing local path · Enter register without launch · Esc cancel"
         } else if self.workspaces_open {
-            "Workspaces: j/k select · [/] project · Enter discover · a adopt · R rename · f Working diff · h latest history · A add project · w/Esc back · d detach · q quit"
+            "Workspaces: j/k select · [/] project · Enter open · a adopt · R rename · f Working diff · h latest history · A add project · w/Esc back · d detach · q quit"
         } else if self.attached {
             "Native input · Ctrl-C interrupt · Ctrl-] / Ctrl-5 dashboard (keeps session running)"
         } else if self.cleanup_open {
@@ -757,7 +849,7 @@ impl App {
             self.error = Some("Paste exceeds 4084-byte limit; split it and retry".into());
             return None;
         }
-        Some(Effect::Session(Request::Paste(text)))
+        Some(self.session_effect(Request::Paste(text)))
     }
 
     pub fn begin_refresh(&mut self) -> bool {
@@ -833,6 +925,114 @@ mod tests {
     }
 
     #[test]
+    fn first_prompt_freezes_the_conversation_when_its_modal_opens() {
+        let mut app = App::new("repo".into());
+        let identity = |session: &str| crate::events::SessionIdentity {
+            task: "task-a".into(),
+            session: session.into(),
+            request: "request-a".into(),
+        };
+        app.observe_session(Observation {
+            control_target: "owner-a".into(),
+            session_identity: Some(identity("conversation-a")),
+            ..Observation::default()
+        });
+        app.input(KeyEvent::new(KeyCode::Char('C'), KeyModifiers::SHIFT));
+        app.paste("Explicit first prompt".into());
+        app.observe_session(Observation {
+            control_target: "owner-a".into(),
+            session_identity: Some(identity("replacement-conversation")),
+            ..Observation::default()
+        });
+        assert!(
+            matches!(app.input(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)), Some(Effect::Session(Request::Session { target, session: Some(session), command }))
+            if target == "owner-a" && session == "conversation-a" && matches!(*command, Request::LaunchNative { .. }))
+        );
+    }
+
+    #[test]
+    fn workspace_enter_selects_its_running_owner_and_rejects_late_previous_screen() {
+        let mut app = App::new("repo".into());
+        let mut state = Observation {
+            control_target: "owner-a".into(),
+            ..Observation::default()
+        };
+        state.registry.workspaces.push(crate::registry::Workspace {
+            id: "workspace-b".into(),
+            task: "task-b".into(),
+            legacy_tasks: vec![],
+            name: "B".into(),
+            project: None,
+            path: Some(b"other".to_vec()),
+            checkout: None,
+            sessions: vec!["conversation-b".into()],
+        });
+        state.sessions.push(crate::events::SessionSummary {
+            target: "owner-b".into(),
+            task: "task-b".into(),
+            session: Some("conversation-b".into()),
+            lifecycle: crate::events::Lifecycle::Running,
+            reserved: true,
+            ..Default::default()
+        });
+        app.observe_session(state);
+        app.input(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE));
+        assert!(
+            matches!(app.input(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)), Some(Effect::Session(Request::SelectSession(target))) if target == "owner-b")
+        );
+        assert!(
+            app.viewport(Some((24, 100))).is_none(),
+            "geometry waits for the selected owner's identity"
+        );
+        app.observe_session(Observation {
+            control_target: "owner-a".into(),
+            screen: "late A".into(),
+            ..Observation::default()
+        });
+        app.observe_session(Observation {
+            control_target: "owner-b".into(),
+            screen: "current B".into(),
+            lifecycle: crate::events::Lifecycle::Running,
+            identity: Some("session-b".into()),
+            ..Observation::default()
+        });
+        assert_eq!(app.session.screen, "current B");
+        assert!(app.attached);
+        assert!(
+            matches!(app.viewport(Some((24,100))), Some(Effect::Session(Request::Session { target, .. })) if target == "owner-b")
+        );
+    }
+
+    #[test]
+    fn explicit_adoption_accepts_new_owner_after_pending_old_owner_reply() {
+        let mut app = App::new("repo".into());
+        app.apply(Event::WorktreesLoaded(Ok(vec![worktree("other")])));
+        app.observe_session(Observation {
+            control_target: "old-owner".into(),
+            ..Observation::default()
+        });
+        assert!(matches!(
+            app.input(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE)),
+            Some(Effect::Session(Request::Adopt(_)))
+        ));
+        app.observe_session(Observation {
+            control_target: "old-owner".into(),
+            adoption_pending: true,
+            ..Observation::default()
+        });
+        app.observe_session(Observation {
+            control_target: "new-owner".into(),
+            adopted: Some("other".into()),
+            ..Observation::default()
+        });
+        assert_eq!(app.session.control_target, "new-owner");
+        assert_eq!(app.session.adopted.as_deref(), Some("other"));
+        assert!(
+            matches!(app.viewport(Some((24,100))), Some(Effect::Session(Request::Session { target, .. })) if target == "new-owner")
+        );
+    }
+
+    #[test]
     fn first_prompt_requires_explicit_submit_and_can_be_cancelled() {
         let mut app = App::new(PathBuf::from("/repo"));
         assert!(
@@ -854,6 +1054,45 @@ mod tests {
             matches!(app.input(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
             Some(Effect::Session(Request::LaunchNative { agent: crate::events::NativeAgent::Codex, prompt: Some(prompt), .. })) if prompt == "Fix the unicode λ search")
         );
+    }
+
+    #[test]
+    fn session_actions_freeze_owner_and_conversation_identity() {
+        let mut app = App::new("repo".into());
+        app.observe_session(Observation {
+            control_target: "owner-a".into(),
+            session_identity: Some(crate::events::SessionIdentity {
+                task: "workspace-a".into(),
+                session: "conversation-a".into(),
+                request: "launch-a".into(),
+            }),
+            ..Observation::default()
+        });
+        assert!(
+            matches!(app.viewport(Some((24, 100))), Some(Effect::Session(Request::Session { target, session: Some(session), command }))
+            if target == "owner-a" && session == "conversation-a" && matches!(*command, Request::Resize { rows: 24, cols: 100 }))
+        );
+        assert!(
+            matches!(app.input(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE)), Some(Effect::Session(Request::Session { target, session: Some(session), command }))
+            if target == "owner-a" && session == "conversation-a" && matches!(*command, Request::Stop))
+        );
+    }
+
+    #[test]
+    fn late_projection_cannot_replace_explicitly_selected_runtime() {
+        let mut app = App::new("repo".into());
+        app.observe_session(Observation {
+            control_target: "owner-b".into(),
+            screen: "B".into(),
+            ..Observation::default()
+        });
+        app.observe_session(Observation {
+            control_target: "owner-a".into(),
+            screen: "late A".into(),
+            ..Observation::default()
+        });
+        assert_eq!(app.session.control_target, "owner-b");
+        assert_eq!(app.session.screen, "B");
     }
 
     #[test]
