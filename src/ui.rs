@@ -716,7 +716,7 @@ impl Ui {
             && !app.attached
             && (frame.area().width < 80 || frame.area().height < 22)
         {
-            "w Working/Whole · b base · j/k file · arrows scroll\nr refresh · f/Esc back · s stop · q quit · d detach"
+            "w Working/Whole · e inspect ALL · o LIVE · j/k file\nb base · r refresh · f/Esc back · s stop · q quit"
         } else if app.first_prompt.is_some() || app.rename_workspace.is_some() {
             app.keyboard_help()
         } else if !app.attached
@@ -729,7 +729,7 @@ Esc cancel · registration never starts an agent"
             && app.workspaces_open
             && (frame.area().width < 80 || frame.area().height < 22)
         {
-            "N create · j/k select · [/] project · a adopt
+            "N create · j/k select · [/] proj · a adopt · E LIVE
 A add · h history · Enter open · q quit · w/Esc back"
         } else if app.cleanup_open
             && !app.attached
@@ -768,7 +768,10 @@ A add · h history · Enter open · q quit · w/Esc back"
         } else {
             app.keyboard_help()
         };
-        frame.render_widget(Paragraph::new(help_text), help);
+        frame.render_widget(
+            Paragraph::new(app.editor_message.as_deref().unwrap_or(help_text)),
+            help,
+        );
     }
 }
 

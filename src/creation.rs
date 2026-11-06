@@ -510,8 +510,14 @@ fn create(record: &mut Record, cancel: &AtomicBool) {
     }
 }
 
-/// Supervisor-side coordinator. It advances only matching writer receipts and
-/// never starts work merely because a saved record was loaded.
+/// Next execution stage receives immutable durable intent plus a separate live
+/// launch authorization. Persist `record`, never encode authorization into intent.
+pub struct LaunchHandoff {
+    pub record: Record,
+    pub authorized_start: bool,
+}
+/// Supervisor-side coordinator. Advances only matching writer receipts; loading
+/// saved records never runs Git or native code.
 pub struct Coordinator {
     pub view: View,
     loaded: bool,
@@ -520,7 +526,7 @@ pub struct Coordinator {
     saving: Option<(uuid::Uuid, Record)>,
     cancelled: bool,
     launch_authorized: bool,
-    pub launch: Option<Record>,
+    pub launch: Option<LaunchHandoff>,
 }
 impl Coordinator {
     pub fn new(storage: &crate::persistence::Worker) -> Self {
@@ -845,9 +851,13 @@ impl Coordinator {
                                 }
                                 Phase::Creating => self.work(Work::Create(record)),
                                 Phase::Created => {
-                                    record.intent.start &=
-                                        self.launch_authorized && !record.launch_cancelled;
-                                    self.launch = Some(record);
+                                    let authorized_start = record.intent.start
+                                        && self.launch_authorized
+                                        && !record.launch_cancelled;
+                                    self.launch = Some(LaunchHandoff {
+                                        record,
+                                        authorized_start,
+                                    });
                                 }
                                 _ => {}
                             }
@@ -1274,9 +1284,18 @@ mod tests {
                     .launch
                     .take()
                     .expect("created workspace handoff");
-                assert_eq!(completed.phase, Phase::Created, "{}", completed.message);
+                assert_eq!(
+                    completed.record.phase,
+                    Phase::Created,
+                    "{}",
+                    completed.record.message
+                );
                 assert!(
-                    !completed.intent.start,
+                    completed.record.intent.start,
+                    "original requested intent must remain immutable"
+                );
+                assert!(
+                    !completed.authorized_start,
                     "reconciliation must never rearm an earlier launch"
                 );
                 assert!(folder.join(".git").exists());

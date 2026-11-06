@@ -5822,7 +5822,7 @@ fn dashboard_refuses_legacy_live_owner_before_sending_new_git_requests() {
             stream
                 .set_read_timeout(Some(Duration::from_secs(3)))
                 .unwrap();
-            let old = serde_json::json!({"git_jobs_protocol":protocol,"diff_protocol":diff_protocol,"creation_protocol":creation_protocol,"registry_protocol":1,"sessions_protocol":1,"prompt_naming_protocol":1,"adopted":null,"identity":null,"screen":"","formatted":"","rows":24,"cols":100,"output_bytes":0,"error":null,"stopped":false,"lifecycle":"Idle","control_denied":false});
+            let old = serde_json::json!({"git_jobs_protocol":protocol,"diff_protocol":diff_protocol,"creation_protocol":creation_protocol,"editor_protocol":1,"registry_protocol":1,"sessions_protocol":1,"prompt_naming_protocol":1,"adopted":null,"identity":null,"screen":"","formatted":"","rows":24,"cols":100,"output_bytes":0,"error":null,"stopped":false,"lifecycle":"Idle","control_denied":false});
             serde_json::to_writer(&mut stream, &old).unwrap();
             stream.write_all(b"\n").unwrap();
             let mut unexpected = [0; 1];

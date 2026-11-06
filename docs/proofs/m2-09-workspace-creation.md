@@ -9,7 +9,8 @@ record does not claim Milestone 2 or C6 release qualification.
 Feature branch `feature/m2-09-create-workspace`, isolated worktree
 `/tmp/rat-m2-09`, started at integration `610c723`. Working-diff integration
 `5c1a604` and the corrected compatibility implementation `c20cd49` are merged.
-The actual native smoke used source `6f4ab06` and binary SHA-256
+External-editor integration `438b75d` is also merged, preserving its protocol and
+App/editor handoff behavior. The actual native smoke used source `6f4ab06` and binary SHA-256
 `a33b560559fe4ccd7351841a865b82ff699a95f8df28a2a96ed650cd7b18a049`.
 Subsequent amendments cover paste preservation, receipt attribution/rendering,
 cancelled intent labels, relative managed paths, failed worker reporting, atomic
@@ -127,5 +128,7 @@ merger's combined execution rather than an overlapping outer-PTY rerun. Stable
 locked build, formatting and warnings-denied all-target Clippy are run on the
 final feature source. The frozen combined all-target gate belongs to the merger;
 no overlapping full/native aggregate is claimed here. Configured setup is ticket
-10. Broader native prompt completion through trust/hooks, physical-terminal
+10. Its interception point is the typed `LaunchHandoff { record, authorized_start }`:
+the record retains original immutable requested intent for persistence; the separate
+boolean alone permits live launch. Reconciliation always clears that authorization. Broader native prompt completion through trust/hooks, physical-terminal
 compatibility, sleep/wake and actual reboot remain outside this scoped proof.

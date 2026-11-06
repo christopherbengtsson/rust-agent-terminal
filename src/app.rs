@@ -15,10 +15,31 @@ pub struct CreateForm {
     original_path: Option<(String, Vec<u8>)>,
     preview_applied: bool,
 }
+/// Dashboard navigation retained across a deliberate external-editor handoff.
+pub struct EditorContext {
+    repository: PathBuf,
+    selected: Option<usize>,
+    workspace_selected: Option<String>,
+    workspaces_open: bool,
+    selected_target: String,
+    session: Option<String>,
+    attached: bool,
+    history_open: bool,
+    history_raw: bool,
+    history_scroll: u16,
+    history_index: usize,
+    history_session: Option<String>,
+    history_offset: u64,
+    history: Option<crate::persistence::HistoryPage>,
+}
+
 pub struct App {
     pub create_form: Option<CreateForm>,
     pub creation_open: bool,
     pub creation_selected: Option<String>,
+    pub editor_source_request: Option<(String, String)>,
+    pub editor_ready: Option<crate::editor::Target>,
+    pub editor_message: Option<String>,
     pub diff: Option<crate::working_diff::View>,
     pub workspaces_open: bool,
     pub workspace_selected: Option<String>,
@@ -58,6 +79,9 @@ impl App {
             create_form: None,
             creation_open: false,
             creation_selected: None,
+            editor_source_request: None,
+            editor_ready: None,
+            editor_message: None,
             diff: None,
             workspaces_open: false,
             workspace_selected: None,
@@ -89,6 +113,53 @@ impl App {
             loading: false,
             discovery_request: uuid::Uuid::new_v4().as_u128() as u64,
             error: None,
+        }
+    }
+
+    pub fn editor_context(&self) -> EditorContext {
+        EditorContext {
+            repository: self.repository.clone(),
+            selected: self.selected,
+            workspace_selected: self.workspace_selected.clone(),
+            workspaces_open: self.workspaces_open,
+            selected_target: self.selected_target.clone(),
+            session: self
+                .session
+                .session_identity
+                .as_ref()
+                .map(|id| id.session.clone()),
+            attached: self.attached,
+            history_open: self.history_open,
+            history_raw: self.history_raw,
+            history_scroll: self.history_scroll,
+            history_index: self.history_index,
+            history_session: self.history_session.clone(),
+            history_offset: self.history_offset,
+            history: self.session.history.clone(),
+        }
+    }
+
+    pub fn editor_returned(&mut self, context: EditorContext) {
+        self.attached = context.attached
+            && !self.session.connection_lost
+            && !self.session.control_denied
+            && self.session.lifecycle == crate::events::Lifecycle::Running
+            && self.session.control_target == context.selected_target
+            && self.session.session_identity.as_ref().map(|id| &id.session)
+                == context.session.as_ref();
+        self.repository = context.repository;
+        self.selected = context.selected;
+        self.workspace_selected = context.workspace_selected;
+        self.workspaces_open = context.workspaces_open;
+        self.selected_target = context.selected_target;
+        self.history_open = context.history_open;
+        self.history_raw = context.history_raw;
+        self.history_scroll = context.history_scroll;
+        self.history_index = context.history_index;
+        self.history_session = context.history_session;
+        self.history_offset = context.history_offset;
+        if self.history_open {
+            self.session.history = context.history;
         }
     }
 
@@ -141,6 +212,7 @@ impl App {
                     | Request::SelectSession(_)
                     | Request::Discover { .. }
                     | Request::InspectWorking { .. }
+                    | Request::EditorSource { .. }
             )
         {
             Effect::Session(request)
@@ -177,11 +249,39 @@ impl App {
             ));
             form.preview_applied = true;
         }
+        if let Some(response) = observation.editor_source.take()
+            && self.editor_source_request.as_ref()
+                == Some(&(response.request.clone(), response.workspace.clone()))
+        {
+            self.editor_source_request = None;
+            match response.result {
+                Ok((path, line)) => {
+                    use std::os::unix::ffi::OsStringExt;
+                    self.editor_ready = Some(crate::editor::Target::Source {
+                        path: PathBuf::from(std::ffi::OsString::from_vec(path)),
+                        line,
+                    });
+                }
+                Err(error) => self.editor_message = Some(crate::working_diff::printable(&error)),
+            }
+        }
 
         if let Some(response) = observation.working_diff.take()
             && let Some(view) = &mut self.diff
         {
+            let editor_ready = view.editor_request.as_ref() == Some(&response.request)
+                && response.workspace == view.workspace
+                && response.request == view.request;
             view.observe(response);
+            if editor_ready && !view.loading {
+                view.editor_request = None;
+                if view.error.is_none() {
+                    self.editor_ready = view
+                        .snapshot
+                        .clone()
+                        .map(|snapshot| crate::editor::Target::Comparison(Box::new(snapshot)));
+                }
+            }
         }
         if let Some(discovery) = observation.discovery.take() {
             use std::os::unix::ffi::OsStringExt;
@@ -213,6 +313,7 @@ impl App {
             self.selecting_checkout = false;
         }
         if observation.connection_lost {
+            self.editor_source_request = None;
             if let Some(view) = &mut self.diff {
                 view.loading = false;
                 view.error = Some(
@@ -279,6 +380,7 @@ impl App {
         if key.kind == KeyEventKind::Release {
             return None;
         }
+        self.editor_message = None;
         if self.attached {
             // Legacy terminals encode Ctrl-] as 0x1d, which Crossterm names Ctrl-5.
             if key.modifiers == KeyModifiers::CONTROL
@@ -464,6 +566,39 @@ impl App {
                 }));
             }
         }
+        if key.code == KeyCode::Char('E')
+            && !key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+            && self.project_input.is_none()
+            && self.first_prompt.is_none()
+            && self.rename_workspace.is_none()
+            && !self.diff.as_ref().is_some_and(|v| v.base_entry.is_some())
+        {
+            let workspace = self.session.registry.workspaces.iter().find(|w| {
+                if let Some(view) = &self.diff {
+                    w.id == view.workspace
+                } else if self.workspaces_open {
+                    Some(&w.id) == self.workspace_selected.as_ref()
+                } else {
+                    self.current().is_some_and(|c| {
+                        w.checkout
+                            .as_ref()
+                            .is_some_and(|known| known.root == c.path)
+                    })
+                }
+            });
+            if let Some(workspace) = workspace
+                .filter(|w| w.checkout.is_some())
+                .map(|w| w.id.clone())
+            {
+                self.editor_message = Some("Opening LIVE workspace shared with the active agent; saves change working files".into());
+                return self.source_editor(workspace, None, 1);
+            }
+            self.editor_message =
+                Some("No existing retained workspace checkout selected; adopt it first".into());
+            return None;
+        }
         if let Some(view) = &mut self.diff {
             if let Some(entry) = &mut view.base_entry {
                 match key.code {
@@ -508,6 +643,35 @@ impl App {
                     }
                     KeyCode::Char('b') if !view.loading => {
                         view.base_entry = Some(String::new());
+                        return None;
+                    }
+                    KeyCode::Char('e') if !view.loading => {
+                        if self.session.editor_protocol != 1 {
+                            self.editor_message = Some("Editor comparison requires an upgraded supervisor; detach and upgrade after stopping managed activity".into());
+                            return None;
+                        }
+                        let mut request = view.refresh();
+                        if let Request::InspectWorking { editor, .. } = &mut request {
+                            *editor = true;
+                        }
+                        view.editor_request = Some(view.request.clone());
+                        self.editor_message =
+                            Some("Preparing fresh full comparison for editor…".into());
+                        return Some(Effect::Session(request));
+                    }
+                    KeyCode::Char('o') if !view.loading => {
+                        if let Some(snapshot) = &view.snapshot
+                            && let Some(path) = &snapshot.selected
+                        {
+                            self.editor_message = Some("Opening LIVE source shared with the active agent; saving changes this workspace".into());
+                            let workspace = view.workspace.clone();
+                            let path = path.clone();
+                            let line =
+                                crate::editor::source_line(&snapshot.content, view.scroll as usize);
+                            return self.source_editor(workspace, Some(path), line);
+                        }
+                        self.editor_message =
+                            Some("No source selected; comparison remains inspectable".into());
                         return None;
                     }
                     KeyCode::Char('r') => {
@@ -1055,6 +1219,36 @@ impl App {
         None
     }
 
+    fn source_editor(
+        &mut self,
+        workspace: String,
+        path: Option<Vec<u8>>,
+        line: usize,
+    ) -> Option<Effect> {
+        if self.session.editor_protocol != 1
+            || self.session.control_denied
+            || self.session.connection_lost
+        {
+            self.editor_message = Some(
+                "Live source location unavailable; reconnect to a compatible local supervisor"
+                    .into(),
+            );
+            return None;
+        }
+        if self.editor_source_request.is_some() {
+            self.editor_message = Some("Source location preparation already pending".into());
+            return None;
+        }
+        let request = uuid::Uuid::new_v4().to_string();
+        self.editor_source_request = Some((request.clone(), workspace.clone()));
+        Some(Effect::Session(Request::EditorSource {
+            request,
+            workspace,
+            path,
+            line,
+        }))
+    }
+
     pub fn creation_record(&self) -> Option<&crate::creation::Record> {
         if let Some(request) = &self.creation_selected {
             self.session
@@ -1070,7 +1264,7 @@ impl App {
         if self.create_form.is_some() {
             "New workspace: Tab fields · Left/Right agent · Enter Create without starting · Ctrl-S Create and start · Esc cancel"
         } else if self.diff.is_some() {
-            "j/k file · arrows scroll · w Working/Whole workspace · b local base · r refresh · f/Esc back · s stop · q quit · d detach"
+            "e inspect ALL · o edit LIVE file · E LIVE workspace · j/k file · arrows scroll · w Working/Whole workspace · b local base · r refresh · f/Esc back · s stop · q quit · d detach"
         } else if self.first_prompt.is_some() {
             "First prompt (optional): Enter starts native agent · Esc cancels without launch"
         } else if self.rename_workspace.is_some() {
@@ -1078,7 +1272,7 @@ impl App {
         } else if self.project_input.is_some() {
             "Add project: existing local path · Enter register without launch · Esc cancel"
         } else if self.workspaces_open {
-            "Workspaces: N create · j/k select · [/] project · Enter open · a adopt · R rename · f Working diff · h latest history · A add project · w/Esc back · d detach · q quit"
+            "Workspaces: N create · E edit LIVE workspace · j/k select · [/] project · Enter open · a adopt · R rename · f Working diff · h latest history · A add project · w/Esc back · d detach · q quit"
         } else if self.attached {
             "Native input · Ctrl-C interrupt · Ctrl-] / Ctrl-5 dashboard (keeps session running)"
         } else if self.cleanup_open {
@@ -1088,7 +1282,7 @@ impl App {
         } else if self.history_open {
             "q quit/stop/retry · s stop · y retry history · g cleanup · h live · n/p session · [/] page · j/k scroll · d detach"
         } else {
-            "N create · w workspaces · A add · Enter attach · x new Codex · v resume · q quit/stop · f Working diff · O receipt · G recover · L local fallback · a adopt · c Claude · C/X prompt and start · R rename · h history · g cleanup · y retry · s stop · d detach · j/k · r refresh"
+            "N create · E edit LIVE workspace · w workspaces · A add · Enter attach · x new Codex · v resume · q quit/stop · f Working diff · O receipt · G recover · L local fallback · a adopt · c Claude · C/X prompt and start · R rename · h history · g cleanup · y retry · s stop · d detach · j/k · r refresh"
         }
     }
 
@@ -1224,6 +1418,97 @@ mod tests {
             path: PathBuf::from(path),
             ..Worktree::default()
         }
+    }
+
+    #[test]
+    fn editor_return_keeps_selected_history_passage_and_diff_context_after_observation() {
+        let mut app = App::new("/original/project".into());
+        app.selected = Some(2);
+        app.workspace_selected = Some("workspace".into());
+        app.selected_target = "owner".into();
+        app.session.control_target = "owner".into();
+        app.session.lifecycle = crate::events::Lifecycle::Running;
+        app.session.session_identity = Some(crate::events::SessionIdentity {
+            task: "task".into(),
+            session: "session".into(),
+            request: "request".into(),
+        });
+        app.history_open = true;
+        app.history_raw = true;
+        app.history_scroll = 29;
+        app.history_index = 4;
+        app.history_session = Some("historical-session".into());
+        app.history_offset = 16384;
+        app.session.history = Some(crate::persistence::HistoryPage {
+            identity: "retained-history".into(),
+            session: "historical-session".into(),
+            committed: 20000,
+            checkout: "/original/project".into(),
+            lifecycle: crate::events::Lifecycle::Exited,
+            process_exit: None,
+            text: "selected raw passage\\x1b".into(),
+            readable: None,
+            projection_preparing: false,
+            offset: 16384,
+            next: Some(20000),
+        });
+        let mut diff = crate::working_diff::View::new("workspace".into(), "name".into());
+        diff.selected = Some(b"selected-file".to_vec());
+        diff.scroll = 13;
+        diff.horizontal = 24;
+        app.diff = Some(diff);
+        let context = app.editor_context();
+        let mut next = app.session.clone();
+        next.output_bytes = 999;
+        next.screen = "agent kept running".into();
+        next.history.as_mut().unwrap().text = "intervening live observation".into();
+        app.observe_session(next);
+        app.editor_returned(context);
+        assert_eq!(app.repository, PathBuf::from("/original/project"));
+        assert_eq!(app.selected, Some(2));
+        assert_eq!(app.workspace_selected.as_deref(), Some("workspace"));
+        assert_eq!(app.selected_target, "owner");
+        assert!(app.history_open && app.history_raw);
+        assert_eq!(app.history_scroll, 29);
+        assert_eq!(app.history_session.as_deref(), Some("historical-session"));
+        assert_eq!(app.history_index, 4);
+        assert_eq!(app.history_offset, 16384);
+        assert_eq!(
+            app.session.history.as_ref().unwrap().text,
+            "selected raw passage\\x1b"
+        );
+        assert_eq!(app.session.history.as_ref().unwrap().offset, 16384);
+        assert_eq!(
+            app.diff.as_ref().unwrap().selected.as_deref(),
+            Some(b"selected-file".as_slice())
+        );
+        assert_eq!(app.diff.as_ref().unwrap().scroll, 13);
+        assert_eq!(app.diff.as_ref().unwrap().horizontal, 24);
+        assert_eq!(app.session.output_bytes, 999);
+        assert!(!app.attached);
+        app.history_open = false;
+        app.diff = None;
+        app.attached = true;
+        let context = app.editor_context();
+        let same = app.session.clone();
+        app.observe_session(same);
+        app.editor_returned(context);
+        assert!(app.attached);
+        app.attached = true;
+        let context = app.editor_context();
+        let mut ended = app.session.clone();
+        ended.lifecycle = crate::events::Lifecycle::Exited;
+        app.observe_session(ended);
+        app.editor_returned(context);
+        assert!(!app.attached);
+        app.session.lifecycle = crate::events::Lifecycle::Running;
+        app.attached = true;
+        let context = app.editor_context();
+        let mut replaced = app.session.clone();
+        replaced.session_identity.as_mut().unwrap().session = "replacement".into();
+        app.observe_session(replaced);
+        app.editor_returned(context);
+        assert!(!app.attached);
     }
 
     #[test]

@@ -201,9 +201,10 @@ The implementation still assumes a shared local host in these places:
   in each coding control request. Selection is separate; late input, resize,
   Stop or reconciliation cannot target a replacement conversation. Legacy wire
   variants retain their selected-owner adapter. History supports explicit session
-  UUIDs, with legacy index navigation retained. GitHub workflows
-  and editor/diff artifacts are planned; no implemented artifact contract or
-  checkout-independent editor integration is claimed.
+  UUIDs, with legacy index navigation retained. GitHub workflows remain planned. Comparison snapshots can carry bounded full-editor
+  content and identity; the dashboard materializes inspection artifacts without
+  reading checkout files. Source editing is explicitly local and requires an
+  owner-validated existing source location.
 
 Apply these boundaries when changing their owners, documenting any remaining
 local assumption. Continue with concrete local modules and existing workers;
@@ -1123,8 +1124,11 @@ disarms launch; only a fresh Create and start or a clearly labelled local-code
 continuation can arm it. The existing native owner retains durable same-request
 launch outcomes, independently of the completed checkout receipt.
 
-Completed workspaces enter the existing session collection without selecting
-that owner. A requested launch freezes that owner's target/session identity, so
+Completed workspaces pass through `LaunchHandoff { record, authorized_start }`.
+`record.intent` remains the original immutable durable request; later setup code
+may persist that record unchanged. `authorized_start` is transient launch intent
+and must never be written back into `record.intent.start`. Completed workspaces
+enter the existing session collection without selecting that owner. A requested launch freezes that owner's target/session identity, so
 late completion cannot steal navigation or launch in the currently selected
 workspace. Receipts project the originating owner's pending or durable native
 result. Failed native start keeps the registered workspace, branch, folder and
@@ -1165,3 +1169,42 @@ ignore them and incorrectly return Working. An incompatible live owner remains
 untouched and requires its compatible dashboard for stop/upgrade. These are local
 coding comparisons. They neither pin future Review revisions nor substitute an
 archive recovery ref for a review base. External-editor handoff is ticket 15.
+
+
+### External editor inspection and live source (Milestone 2 ticket 15)
+
+`InspectWorking.editor` requests a fresh full Working/Whole workspace artifact
+from the existing cancellable comparison worker. `editor_protocol=1` advertises
+that capability separately from comparison protocol 2; a dashboard connected to
+an older owner refuses editor inspection rather than treating a selected-file
+snapshot as a full export. Content and identity travel in `Snapshot.editor_content`,
+not an execution-side temporary filename. The export includes the file inventory
+and per-file state/reasons, with 64 KiB per file, 1 MiB total, 1024 inventory entries
+and a five-second budget checked between files. Existing bounded Git process
+commands and cancellation remain in force; one command/file can finish after
+that between-file budget. Long display path labels are abbreviated at 256 bytes;
+raw path identity remains in the snapshot. Matching status is not atomicity.
+
+`EditorSource` freezes request/workspace/path/line and runs retained-checkout and
+existing regular-source validation in an execution-owned cancellable worker.
+Responses are accepted only for the matching request/workspace. The current
+local supervisor returns an explicit host-local source path; this does not grant
+future remote owners a dashboard-local file editing capability. A file removed
+externally after validation may still race the editor's own open; the application
+never deliberately invents a missing source path.
+
+The dashboard's preparation worker materializes inspection text in a unique
+0700 temporary directory outside the checkout, marks the artifact read-only and
+keeps it alive through editor exit. It does no checkout Git or source reads.
+Cleanup runs off the UI loop. Configuration is executable plus literal argv in
+`RAT_EDITOR_JSON`; `Command` executes it directly. TerminalGuard releases raw,
+alternate-screen and paste ownership. A dedicated dashboard editor worker owns
+spawn/wait and assigns the editor its own foreground process group; main suppresses
+input/render while polling completion. This keeps native Ctrl-C within the editor.
+TerminalGuard reclaims the dashboard foreground group and raw/alternate/paste modes
+on success/nonzero/spawn failure. Fullscreen resize resets rendering buffers at the
+actual geometry without a cursor-position query.
+The App remains intact through handoff, retaining project/workspace/session,
+focus and diff/history context. The independent supervisor continues capturing
+agents. Inspection is labelled snapshot; source/workspace editing is labelled
+LIVE and shared with the agent. GUI editors require their configured wait option.
