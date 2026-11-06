@@ -73,6 +73,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let (_guard, mut terminal) = TerminalGuard::enter()?;
     let mut ui = Ui::default();
 
+    let mut sent_viewport = None;
     loop {
         // Bound the work per frame so future streaming sources cannot monopolize it.
         for _ in 0..32 {
@@ -93,7 +94,18 @@ fn main() -> Result<(), Box<dyn Error>> {
         if app.should_exit() {
             break;
         }
-        terminal.draw(|frame| ui.draw(frame, &app))?;
+        let completed = terminal.draw(|frame| ui.draw(frame, &app))?;
+        if let Some(dimensions) = Ui::session_dimensions(completed.area)
+            && sent_viewport != Some(dimensions)
+        {
+            match client.send(session::Request::Resize {
+                rows: dimensions.0,
+                cols: dimensions.1,
+            }) {
+                Ok(()) => sent_viewport = Some(dimensions),
+                Err(error) => app.error = Some(error),
+            }
+        }
         if event::poll(Duration::from_millis(50))? {
             match event::read()? {
                 TerminalEvent::Key(key) => match app.input(key) {

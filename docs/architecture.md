@@ -295,3 +295,17 @@ unconfirmed. PTY input uses a separate worker with 32 bounded 4096-byte slots;
 queue saturation reports retry, and a blocked writer cannot block stop commands.
 No persistence or clean-shutdown durable flush is claimed before ticket 08.
 See [lifecycle evidence](proofs/06-lifecycle.md).
+### Scripted screen proof (ticket 04)
+
+The current prototype derives child geometry from the shared session-pane layout
+(sidebar, status/help and borders excluded), capped at 200 columns × 80 rows.
+An absent viewport retains the last usable PTY/parser geometry until it returns.
+The supervisor serializes PTY resize then parser resize against 4 KiB output
+processing; the reader continues with dashboard focus or no connected client.
+There is no scrollback or durable transcript yet. Full styled screen snapshots
+carry the parsed-output byte boundary, geometry and cursor/input modes. The
+transport worker reconstructs display cells; rendering reads those cells and
+never writes raw child controls to the outer terminal. One queued snapshot
+resynchronizes lagging dashboards; this is ephemeral screen state rather than
+retained history. Framed transport is capped at 4 MiB for bounded styled snapshots.
+See [the proof and visual comparison](proofs/04-session-screen.md).

@@ -1,6 +1,6 @@
 use ratatui::{
     Frame,
-    layout::{Constraint, Layout},
+    layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::Line,
     widgets::{Block, List, ListItem, ListState, Paragraph, Wrap},
@@ -14,20 +14,41 @@ pub struct Ui {
 }
 
 impl Ui {
+    fn layout(area: Rect) -> (Rect, Rect, Rect, Rect) {
+        let compact = area.width < 80 || area.height < 22;
+        let [body, status, help] = Layout::vertical([
+            Constraint::Min(1),
+            Constraint::Length(if compact { 3 } else { 5 }),
+            Constraint::Length(if compact { 2 } else { 1 }),
+        ])
+        .areas(area);
+        let [sidebar, session] = Layout::horizontal([
+            Constraint::Percentage(if compact { 0 } else { 34 }),
+            Constraint::Min(1),
+        ])
+        .areas(body);
+        (sidebar, session, status, help)
+    }
+
+    pub fn session_viewport(area: Rect) -> Rect {
+        let (_, session, _, _) = Self::layout(area);
+        let mut viewport = Block::bordered().inner(session);
+        viewport.width = viewport.width.min(crate::session::MAX_COLS);
+        viewport.height = viewport.height.min(crate::session::MAX_ROWS);
+        viewport
+    }
+
+    pub fn session_dimensions(area: Rect) -> Option<(u16, u16)> {
+        let viewport = Self::session_viewport(area);
+        (viewport.width > 0 && viewport.height > 0).then_some((viewport.height, viewport.width))
+    }
+
     pub fn draw(&mut self, frame: &mut Frame, app: &App) {
         frame.render_widget(
             Block::default().style(Style::default().bg(Color::Rgb(12, 17, 24)).fg(Color::Gray)),
             frame.area(),
         );
-        let [body, status, help] = Layout::vertical([
-            Constraint::Min(1),
-            Constraint::Length(5),
-            Constraint::Length(1),
-        ])
-        .areas(frame.area());
-        let [sidebar, session] =
-            Layout::horizontal([Constraint::Percentage(34), Constraint::Percentage(66)])
-                .areas(body);
+        let (sidebar, session, status, help) = Self::layout(frame.area());
         let [reviews, header, list, details] = Layout::vertical([
             Constraint::Length(3),
             Constraint::Length(3),
@@ -43,24 +64,37 @@ impl Ui {
             ),
             reviews,
         );
-        let title = format!(
-            " Scripted PTY · Focus: {} · Process: {:?} · semantic status: unknown ",
-            if app.attached { "session" } else { "dashboard" },
-            app.session.lifecycle
-        );
-        let text = if app.session.screen.is_empty() {
-            "Adopt a checkout (a), then launch the fixture (l)."
+        let focus = if app.attached { "session" } else { "dashboard" };
+        let title = if frame.area().width < 80 || frame.area().height < 22 {
+            let tag = app
+                .session
+                .identity
+                .as_deref()
+                .and_then(|id| id.split("session=").nth(1))
+                .map(|id| id.chars().take(8).collect::<String>())
+                .unwrap_or_else(|| "unlaunched".into());
+            format!(" Fixture {tag} · Focus: {focus} ")
         } else {
-            &app.session.screen
+            format!(
+                " Scripted PTY · Focus: {focus} · Process: {:?} · semantic status: unknown ",
+                app.session.lifecycle
+            )
         };
         frame.render_widget(
-            Paragraph::new(text).block(
-                Block::bordered()
-                    .border_style(Style::default().fg(Color::Cyan))
-                    .title(title),
-            ),
+            Block::bordered()
+                .border_style(Style::default().fg(Color::Cyan))
+                .title(title),
             session,
         );
+        let viewport = Self::session_viewport(frame.area());
+        if let Some(screen) = app.session.decoded.as_ref() {
+            draw_screen(frame, viewport, screen, app.attached);
+        } else {
+            frame.render_widget(
+                Paragraph::new("Adopt a checkout (a), then launch the fixture (l)."),
+                viewport,
+            );
+        }
         frame.render_widget(
             Paragraph::new(format!(
                 "Repository: {}",
@@ -208,7 +242,79 @@ impl Ui {
                 .wrap(Wrap { trim: false }),
             status,
         );
-        frame.render_widget(Paragraph::new(app.keyboard_help()), help);
+        let compact_help;
+        let help_text = if frame.area().width < 80 || frame.area().height < 22 {
+            if app.attached {
+                compact_help = format!(
+                    "Ctrl-C interrupt · Ctrl-] dashboard\nProcess: {:?} · status: unknown",
+                    app.session.lifecycle
+                );
+                &compact_help
+            } else {
+                compact_help = format!(
+                    "a adopt · l fixture · Enter attach · s stop · d detach\nq quit/stop · Process: {:?} · status: unknown",
+                    app.session.lifecycle
+                );
+                &compact_help
+            }
+        } else {
+            app.keyboard_help()
+        };
+        frame.render_widget(Paragraph::new(help_text), help);
+    }
+}
+
+fn color(color: vt100::Color) -> Color {
+    match color {
+        vt100::Color::Default => Color::Reset,
+        vt100::Color::Idx(index) => Color::Indexed(index),
+        vt100::Color::Rgb(r, g, b) => Color::Rgb(r, g, b),
+    }
+}
+
+fn draw_screen(frame: &mut Frame, area: Rect, screen: &vt100::Screen, attached: bool) {
+    let (rows, cols) = screen.size();
+    for row in 0..area.height.min(rows.get()) {
+        for col in 0..area.width.min(cols.get()) {
+            let Some(cell) = screen.cell(row, col) else {
+                continue;
+            };
+            if cell.is_wide_continuation() {
+                continue;
+            }
+            // Never let a wide glyph overwrite the dashboard border during resize.
+            if cell.is_wide() && col + 1 >= area.width {
+                continue;
+            }
+            let mut style = Style::default()
+                .fg(color(cell.fgcolor()))
+                .bg(color(cell.bgcolor()));
+            for (enabled, modifier) in [
+                (cell.bold(), Modifier::BOLD),
+                (cell.dim(), Modifier::DIM),
+                (cell.italic(), Modifier::ITALIC),
+                (cell.underline(), Modifier::UNDERLINED),
+                (cell.inverse(), Modifier::REVERSED),
+            ] {
+                if enabled {
+                    style = style.add_modifier(modifier);
+                }
+            }
+            frame.buffer_mut().set_string(
+                area.x + col,
+                area.y + row,
+                if cell.contents().is_empty() {
+                    " "
+                } else {
+                    cell.contents()
+                },
+                style,
+            );
+        }
+    }
+    let (row, col) = screen.cursor_position();
+    if attached && !screen.hide_cursor() && row < area.height && col < area.width {
+        frame.set_cursor_position((area.x + col, area.y + row));
     }
 }
 
@@ -230,6 +336,69 @@ fn visible(text: &str) -> String {
 mod tests {
     use super::*;
     use ratatui::{Terminal, backend::TestBackend};
+
+    #[test]
+    fn native_cells_keep_style_width_and_cursor() {
+        let mut parser = vt100::Parser::new(4.try_into().unwrap(), 20.try_into().unwrap(), 0);
+        parser.process(b"\x1b[1;31mstyled ");
+        assert!(parser.screen().cell(0, 0).unwrap().bold());
+        let mut app = App::new("repo".into());
+        app.attached = true;
+        let formatted = parser.screen().state_formatted();
+        let mut restored = vt100::Parser::new(4.try_into().unwrap(), 20.try_into().unwrap(), 0);
+        restored.process(formatted.as_bytes());
+        assert!(
+            restored.screen().cell(0, 0).unwrap().bold(),
+            "{formatted:?}"
+        );
+        app.session.decoded = Some(restored.screen().clone());
+        let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+        terminal
+            .draw(|frame| Ui::default().draw(frame, &app))
+            .unwrap();
+        let cell = &terminal.backend().buffer()[(35, 1)];
+        assert_eq!(cell.fg, Color::Indexed(1));
+        assert!(cell.modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn viewport_excludes_sidebar_borders_and_status_and_small_layout_keeps_focus() {
+        assert_eq!(
+            Ui::session_viewport(ratatui::layout::Rect::new(0, 0, 100, 24)),
+            ratatui::layout::Rect::new(35, 1, 64, 16)
+        );
+        let mut app = App::new("repo".into());
+        app.attached = true;
+        let mut terminal = Terminal::new(TestBackend::new(60, 18)).unwrap();
+        terminal
+            .draw(|frame| Ui::default().draw(frame, &app))
+            .unwrap();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(text.contains("Focus: session"));
+        assert!(text.contains("status: unknown"));
+        assert!(text.contains("Ctrl-]"));
+    }
+
+    #[test]
+    fn unusable_viewport_does_not_request_pty_resize() {
+        assert_eq!(
+            Ui::session_dimensions(Rect::new(0, 0, 100, 24)),
+            Some((16, 64))
+        );
+        assert_eq!(Ui::session_dimensions(Rect::new(0, 0, 12, 4)), None);
+        assert_eq!(Ui::session_dimensions(Rect::new(0, 0, 1, 30)), None);
+        assert_eq!(Ui::session_dimensions(Rect::default()), None);
+        assert_eq!(
+            Ui::session_dimensions(Rect::new(0, 0, 60, 18)),
+            Some((11, 58))
+        );
+    }
 
     #[test]
     fn focus_and_available_actions_are_visible() {
