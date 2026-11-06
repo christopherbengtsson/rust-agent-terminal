@@ -36,6 +36,8 @@ pub struct Record {
     pub command: String,
     pub phase: Phase,
     pub execution: Execution,
+    #[serde(default)]
+    pub cleanup_confirmed: bool,
     pub output: String,
     pub discarded: u64,
     pub message: String,
@@ -109,6 +111,31 @@ impl Coordinator {
     }
     pub fn busy(&self) -> bool {
         self.job.is_some() || self.pending.is_some() || self.unsaved.is_some()
+    }
+    pub fn stopped(&self) -> bool {
+        !self.busy()
+            && !self.view.records.iter().any(|r| {
+                !r.cleanup_confirmed
+                    && matches!(
+                        r.phase,
+                        Phase::Prepared | Phase::Authorized | Phase::Running | Phase::Uncertain
+                    )
+                    && self
+                        .view
+                        .records
+                        .iter()
+                        .rev()
+                        .find(|latest| latest.creation.intent.request == r.creation.intent.request)
+                        .is_some_and(|latest| latest.attempt == r.attempt)
+            })
+    }
+    pub fn owns_original_launch(&self, task: &str, launch: &str) -> bool {
+        task == launch
+            && self
+                .view
+                .records
+                .iter()
+                .any(|r| r.creation.intent.request == task)
     }
     pub fn ready(&self) -> bool {
         self.loaded
@@ -203,6 +230,7 @@ impl Coordinator {
                     command,
                     phase: Phase::Prepared,
                     execution,
+                    cleanup_confirmed: false,
                     output: String::new(),
                     discarded: 0,
                     message: "Setup prepared; waiting for durable permission".into(),
@@ -240,6 +268,15 @@ impl Coordinator {
             job.cancel.store(true, Ordering::Release);
         }
         self.view.armed_launches = self.armed.iter().cloned().collect();
+        if self.job.is_none()
+            && self
+                .view
+                .records
+                .iter()
+                .any(|r| matches(r) && !r.cleanup_confirmed && r.phase == Phase::Uncertain)
+        {
+            self.view.error=Some("Setup Stop unconfirmed: restored process authority is unavailable. Reconcile survivors; saved PIDs are never signalled. Detach remains available".into());
+        }
     }
     pub fn cancel_checkout(&mut self, checkout: &CheckoutIdentity) {
         let requests: Vec<_> = self
@@ -311,10 +348,12 @@ impl Coordinator {
             return;
         }
         // Reconciliation is read-only and runs off the routing loop.
-        if matches!(
-            record.phase,
-            Phase::Prepared | Phase::Authorized | Phase::Running | Phase::Uncertain
-        ) {
+        if !record.cleanup_confirmed
+            && matches!(
+                record.phase,
+                Phase::Prepared | Phase::Authorized | Phase::Running | Phase::Uncertain
+            )
+        {
             if !informed {
                 self.view.error=Some("Setup outcome uncertain. Informed retry may repeat external effects; reconcile survivors before retry/skip".into());
                 return;
@@ -329,7 +368,7 @@ impl Coordinator {
             let worker = thread::spawn(move || {
                 match record.execution.reconcile() {
                     Ok(()) => {
-                        next.execution.released = false;
+                        next.cleanup_confirmed = true;
                         next.phase = Phase::Failed;
                         next.message="No survivors after read-only reconciliation. Command outcome remains unknown; choose informed Retry or Continue without setup".into();
                     }
@@ -346,7 +385,9 @@ impl Coordinator {
             });
             return;
         }
-        if record.message.contains("outcome remains unknown") && !informed {
+        if (record.phase == Phase::Uncertain || record.message.contains("outcome remains unknown"))
+            && !informed
+        {
             self.view.error = Some("Retry may repeat external effects; use informed retry".into());
             return;
         }
@@ -368,6 +409,7 @@ impl Coordinator {
             }
             next.attempt = uuid::Uuid::new_v4().to_string();
             next.phase = Phase::Prepared;
+            next.cleanup_confirmed = false;
             next.output.clear();
             next.discarded = 0;
             next.message = "Explicit setup retry; command may repeat external effects".into();
@@ -453,14 +495,26 @@ impl Coordinator {
         }
     }
     pub fn advance(&mut self, storage: &Worker) {
-        if self.pending.is_none()
-            && self.unsaved.is_none()
-            && let Some(record) = self.job.as_ref().and_then(|j| j.events.try_recv().ok())
-        {
-            if !matches!(record.phase, Phase::Authorized | Phase::Running) {
-                self.job = None;
+        if self.pending.is_none() && self.unsaved.is_none() {
+            match self.job.as_ref().map(|j| j.events.try_recv()) {
+                Some(Ok(record)) => {
+                    if !matches!(record.phase, Phase::Authorized | Phase::Running) {
+                        self.job = None;
+                    }
+                    self.save(record, storage);
+                }
+                Some(Err(mpsc::TryRecvError::Disconnected)) => {
+                    self.job = None;
+                    if let Some(mut r) = self.view.records.last().cloned() {
+                        r.phase = Phase::Uncertain;
+                        r.cleanup_confirmed = false;
+                        r.message="Setup worker ended without an outcome; reconcile survivors before explicit informed recovery".into();
+                        self.armed.remove(&r.creation.intent.request);
+                        self.save(r, storage);
+                    }
+                }
+                _ => {}
             }
-            self.save(record, storage);
         }
         self.view.pending = self.busy();
         self.view.armed_launches = self.armed.iter().cloned().collect();

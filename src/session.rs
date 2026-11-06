@@ -1168,7 +1168,10 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             .collect();
         state.registry_pending = registering || registry_operation.is_some();
         state.registry = registry.clone();
-        state.error = state.error.or_else(|| registry_error.clone());
+        state.error = state
+            .error
+            .or_else(|| registry_error.clone())
+            .or_else(|| setup.view.error.clone());
         state.adoption_pending = adoption_pending;
         state.discovery = discovery_result.clone();
         state.stopped = session.all_stopped()
@@ -1180,7 +1183,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             && diff_save.is_none()
             && registry_operation.is_none()
             && !creation.busy()
-            && !setup.busy();
+            && setup.stopped();
         if state.stopped && controller.is_none() {
             fs::remove_file(&socket)?;
             return Ok(());
@@ -1273,7 +1276,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             continue;
         };
         let bytes: Vec<_> = pending.drain(..=end).collect();
-        let request: Request = match serde_json::from_slice(&bytes) {
+        let mut request: Request = match serde_json::from_slice(&bytes) {
             Ok(request) => request,
             Err(_) => {
                 controller = None;
@@ -1296,13 +1299,23 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             target,
             session: expected,
             command,
-        } = &request
+        } = &mut request
             && matches!(**command, Request::Stop)
             && let Some((_, owner)) = session.entries.iter_mut().find(|(id, _)| id == target)
-            && owner.observation().session_identity.map(|id| id.session) == *expected
-            && let Some(checkout) = owner.observation().checkout_identity
         {
-            setup.cancel_checkout(&checkout);
+            let state = owner.observation();
+            let current = state.session_identity.map(|id| id.session);
+            // Empty-owner Stop may race its setup's original native handoff.
+            // It may follow only that same creation request, never a later chat.
+            if current == *expected
+                || expected.is_none()
+                    && setup.owns_original_launch(owner.task(), &state.launch_request)
+            {
+                if let Some(checkout) = state.checkout_identity {
+                    setup.cancel_checkout(&checkout);
+                }
+                *expected = current;
+            }
         }
 
         match request {
@@ -1460,8 +1473,8 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             }
             Request::ConfigureSetup { project, command } => {
                 let operation = uuid::Uuid::new_v4();
-                if registry_operation.is_some() {
-                    registry_error = Some("Project configuration save pending".into());
+                if registry_operation.is_some() || creation.busy() {
+                    registry_error = Some("Project configuration or workspace creation pending; retry configuration after it settles".into());
                 } else if let Err(e) = crate::setup::validate_command(&command) {
                     registry_error = Some(e);
                 } else {
@@ -1501,12 +1514,15 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             request @ (Request::PreviewCreation { .. }
             | Request::CreateWorkspace(_)
             | Request::RecoverCreation { .. }) => {
+                let configured = matches!(&request,Request::CreateWorkspace(intent) if registry.projects.iter().any(|p|p.id==intent.project && p.setup_command.is_some()));
                 if matches!(request, Request::CreateWorkspace(_))
-                    && (setup.admission_busy()
-                        || !setup.capacity()
-                        || session.entries.iter().filter(|(_, o)| o.reserved()).count()
-                            + session.setup_reservations.len()
-                            >= 32)
+                    && (registry_operation.is_some()
+                        || setup.admission_busy()
+                        || configured
+                            && (!setup.capacity()
+                                || session.entries.iter().filter(|(_, o)| o.reserved()).count()
+                                    + session.setup_reservations.len()
+                                    >= 32))
                 {
                     creation.view.error=Some("Project setup is still pending; workspace creation waits for setup outcome".into());
                 } else {
@@ -1614,7 +1630,10 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             .collect();
         state.registry_pending = registering || registry_operation.is_some();
         state.registry = registry.clone();
-        state.error = state.error.or_else(|| registry_error.clone());
+        state.error = state
+            .error
+            .or_else(|| registry_error.clone())
+            .or_else(|| setup.view.error.clone());
         state.adoption_pending = adoption_pending;
         state.discovery = discovery_result.clone();
         state.stopped = session.all_stopped()
@@ -1626,7 +1645,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             && diff_save.is_none()
             && registry_operation.is_none()
             && !creation.busy()
-            && !setup.busy();
+            && setup.stopped();
         if controller.is_some() {
             delivery = Some(Delivery::new(&mut state)?);
             subscriber_frame_high_water =

@@ -8573,6 +8573,17 @@ fn configured_setup_restart_retains_uncertain_effects_until_explicit_reconciliat
         std::fs::read_to_string(folder.join("attempts")).unwrap(),
         "x"
     );
+    let quit = f.control.request_now(serde_json::json!("Shutdown"));
+    assert_eq!(
+        quit["stopped"], false,
+        "uncertain restored setup survivors cannot be acknowledged as stopped"
+    );
+    let unconfirmed = setup_wait(&mut f.control, &|s| {
+        s["setup"]["error"]
+            .as_str()
+            .is_some_and(|e| e.contains("Stop unconfirmed"))
+    });
+    assert_eq!(unconfirmed["stopped"], false);
     // A debug proof boot change exercises reboot evidence, not a real reboot.
     f.restart("setup-boot-two");
     f.phase("Uncertain");
@@ -8881,4 +8892,76 @@ fn active_capture_flushes_while_retained_search_replaces_and_cancels_queries() {
         started.elapsed().as_millis()
     );
     control.request(serde_json::json!("Shutdown"));
+}
+
+#[test]
+fn configured_setup_empty_owner_stop_follows_original_handoff_but_never_later_conversation() {
+    let mut f = SetupFixture::new("exit 1");
+    let (request, _) = f.create(true);
+    let failed = f.phase("Failed");
+    let target = failed["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["task"] == request)
+        .unwrap()["target"]
+        .clone();
+    let attempt = failed["setup"]["records"][0]["attempt"].clone();
+    f.control.request(
+        serde_json::json!({"RecoverSetup":{"attempt":attempt,"retry":false,"informed":false}}),
+    );
+    f.phase("Skipped");
+    let marker = f.launches.clone();
+    setup_wait(&mut f.control, &|_| marker.exists());
+    setup_wait(&mut f.control, &|s| {
+        s["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["target"] == target && s["lifecycle"] == "Running")
+    });
+    // This is the identity captured when setup's coding owner was still empty.
+    f.control
+        .request(serde_json::json!({"Session":{"target":target,"session":null,"command":"Stop"}}));
+    let stopped =
+        setup_wait(&mut f.control, &|s| {
+            s["sessions"].as_array().unwrap().iter().any(|s| {
+                s["target"] == target && s["lifecycle"] == "Stopped" && s["reserved"] == false
+            })
+        });
+    let original = stopped["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["target"] == target)
+        .unwrap()["session"]
+        .clone();
+    f.control.request(serde_json::json!({"Session":{"target":target,"session":original,"command":{"LaunchClaude":"setup-later-independent-chat"}}}));
+    let later = setup_wait(&mut f.control, &|s| {
+        s["sessions"].as_array().unwrap().iter().any(|s| {
+            s["target"] == target && s["lifecycle"] == "Running" && s["session"] != original
+        })
+    });
+    let later_id = later["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["target"] == target)
+        .unwrap()["session"]
+        .clone();
+    f.control
+        .request(serde_json::json!({"Session":{"target":target,"session":null,"command":"Stop"}}));
+    let state = f.control.request(serde_json::json!("Screen"));
+    let owner = state["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["target"] == target)
+        .unwrap();
+    assert_eq!(owner["session"], later_id);
+    assert_eq!(
+        owner["lifecycle"], "Running",
+        "stale setup Stop cannot signal later conversation"
+    );
+    f.finish();
 }

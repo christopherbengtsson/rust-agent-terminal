@@ -1475,7 +1475,7 @@ impl App {
         } else if self.session.lifecycle == crate::session::Lifecycle::Interrupted {
             "u reconcile · v resume · g cleanup · h history · d detach · q quit/stop · j/k select · r refresh"
         } else {
-            "q quit/stop  s stop  h history  Enter attach  x new Codex  v resume  / find  S text  B chats  N create  O receipt  U setup  E LIVE  f diff  w workspaces  d detach"
+            "q quit s stop h history Enter attach x Codex v resume / find S text B chats N create O receipt U setup E LIVE f diff w workspaces d detach"
         }
     }
 

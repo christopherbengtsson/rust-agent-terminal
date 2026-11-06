@@ -361,6 +361,7 @@ fn execute(
         }
         thread::sleep(Duration::from_millis(5));
     }
+    record.cleanup_confirmed = true;
     tail.lock().unwrap().apply(&mut record);
     record.phase = if cancel.load(Ordering::Acquire) {
         Phase::Cancelled
