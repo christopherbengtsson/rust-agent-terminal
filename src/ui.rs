@@ -240,7 +240,7 @@ impl Ui {
             draw_screen(frame, viewport, screen, app.attached);
         } else {
             frame.render_widget(
-                Paragraph::new("Adopt (a), then c Claude Code / x Codex CLI / l scripted fixture."),
+                Paragraph::new("Adopt (a), then c Claude / x Codex; C/X supplies an optional first prompt. R renames the workspace."),
                 viewport,
             );
         }
@@ -280,7 +280,7 @@ impl Ui {
                     lines.push(Line::from(if app.session.identity.is_some() {
                         format!("  └ managed session · {}", app.session.status.state.label())
                     } else {
-                        "  └ adopted · c Claude / x Codex / l fixture".into()
+                        "  └ adopted · c/x start · C/X prompt · R rename".into()
                     }));
                 }
                 ListItem::new(lines)
