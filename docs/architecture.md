@@ -496,3 +496,26 @@ fully configured native argv. Detached monitoring refreshes the parsed screen
 only when its output boundary changes. See the [exact version/scenario proof](proofs/12-codex-status.md)
 for five demonstrated signals, Stop-continuation and stale/delayed/quoted-text
 negative checks, and unsupported layouts/version limits.
+
+
+### Explicit native conversation recovery (ticket 16)
+
+Observation metadata retains an optional native conversation UUID independently
+of process state and bounded history chunks. Claude gets a generated UUID at new
+launch; resumed monitoring uses the original ID without a fresh --session-id.
+Codex supplies its own UUID through the invocation-local SessionStart monitor;
+the supervisor validates/persists it through the sole storage worker. A resumed
+Codex monitor expects that original identity. Live hook tokens and semantic state
+remain transient; no credentials or native transcript payloads are copied into
+this field.
+
+The explicit Resume request uses the existing durable launch gate and request
+cache. It requires the retained native tool/ID and a present checkout, creates a
+new managed runtime/history segment under the same task, and invokes supported
+native resume without a follow-up prompt. Startup and reconciliation never
+invoke it. Uncertain execution and one-active-session restrictions apply before
+native recovery. Unavailable recovery explains the reason; new conversation
+choices remain explicit. Readable historical segments stay independent of native
+records and checkout existence. This is only a most-recent-conversation proof
+path, not full resume/search/archive management. See the [native and separate
+reboot-style fixture evidence](proofs/16-native-recovery.md).
