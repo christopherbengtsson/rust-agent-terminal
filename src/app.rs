@@ -428,10 +428,18 @@ impl App {
             }
             self.creation_open = true;
             if let Some(request) = self
-                .session
-                .creation
-                .retry_request
+                .creation_selected
                 .clone()
+                .filter(|id| {
+                    self.session.creation.retry_request.as_ref() == Some(id)
+                        || self
+                            .session
+                            .creation
+                            .records
+                            .iter()
+                            .any(|r| r.intent.request == *id)
+                })
+                .or_else(|| self.session.creation.retry_request.clone())
                 .or_else(|| self.creation_record().map(|r| r.intent.request.clone()))
             {
                 return Some(Effect::Session(Request::RecoverCreation {
@@ -993,12 +1001,15 @@ impl App {
     }
 
     pub fn creation_record(&self) -> Option<&crate::creation::Record> {
-        self.session
-            .creation
-            .records
-            .iter()
-            .find(|r| Some(&r.intent.request) == self.creation_selected.as_ref())
-            .or_else(|| self.session.creation.records.last())
+        if let Some(request) = &self.creation_selected {
+            self.session
+                .creation
+                .records
+                .iter()
+                .find(|r| r.intent.request == *request)
+        } else {
+            self.session.creation.records.last()
+        }
     }
     pub fn keyboard_help(&self) -> &'static str {
         if self.create_form.is_some() {
@@ -1022,7 +1033,7 @@ impl App {
         } else if self.history_open {
             "q quit/stop/retry · s stop · y retry history · g cleanup · h live · n/p session · [/] page · j/k scroll · d detach"
         } else {
-            "N create · O creation receipt · G recover · L local fallback · f Working diff · w workspaces · A add · Enter attach · x new Codex · v resume · q quit/stop · a adopt · c Claude · C/X prompt and start · R rename · h history · g cleanup · y retry · s stop · d detach · j/k · r refresh"
+            "N create · w workspaces · A add · Enter attach · x new Codex · v resume · q quit/stop · f Working diff · O receipt · G recover · L local fallback · a adopt · c Claude · C/X prompt and start · R rename · h history · g cleanup · y retry · s stop · d detach · j/k · r refresh"
         }
     }
 
@@ -1036,11 +1047,13 @@ impl App {
                 _ => None,
             };
             if let Some(dest) = dest {
-                for c in text.chars().filter(|c| !c.is_control()) {
-                    if dest.len() + c.len_utf8() > 4084 {
-                        break;
-                    }
-                    dest.push(c);
+                if dest.len() + text.len() <= 4084 && !text.contains('\0') {
+                    dest.push_str(&text);
+                } else {
+                    self.error = Some(
+                        "Creation input exceeds 4084 bytes or contains NUL; input not changed"
+                            .into(),
+                    );
                 }
             }
             return None;
@@ -1747,5 +1760,26 @@ mod tests {
                 [b"/external/managed-\xff/".as_slice(), request.as_bytes()].concat()
             );
         }
+    }
+    #[test]
+    fn workspace_creation_keeps_pasted_first_prompt_as_supplied() {
+        let mut app = App::new("repo".into());
+        app.session
+            .registry
+            .projects
+            .push(crate::registry::Project {
+                id: "project".into(),
+                name: "Project".into(),
+                common_dir: vec![],
+            });
+        app.input(KeyEvent::new(KeyCode::Char('N'), KeyModifiers::NONE));
+        for _ in 0..3 {
+            app.input(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        }
+        app.paste("Fix unicode λ\nKeep the index unchanged".into());
+        assert_eq!(
+            app.create_form.as_ref().unwrap().intent.prompt.as_deref(),
+            Some("Fix unicode λ\nKeep the index unchanged")
+        );
     }
 }

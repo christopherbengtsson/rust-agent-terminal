@@ -57,8 +57,8 @@ exclusion for creation/archive workers. Acquire only inside execution workers,
 recheck identity and safety before invoking Git, and release immediately after the
 actual mutation/rechecks. It is process-local under the sole supervisor, has a
 bounded cancellable wait, and is never retained for an agent lifetime. Git's own
-ref/checkout refusals remain authoritative against external actors. Mutation
-commands and durable recovery remain later work; discovery/adoption are read-only.
+ref/checkout refusals remain authoritative against external actors. Creation uses this exclusion for fetch and checkout mutation, releasing it before
+writer acknowledgements or native launch; discovery/adoption remain read-only.
 
 **Agent sessions (target; scripted prototype below).** A local supervisor process, implemented as another
 mode of the same executable, must own child processes, PTYs, and history. The
@@ -1061,3 +1061,51 @@ file/context across refresh when possible and labels snapshots as not live.
 Status changes during capture get an additional warning; matching status does not
 claim atomic file contents. Each new inspection starts Working. See the
 [ticket evidence](proofs/m2-13-working-diff.md).
+
+
+### Independent workspace creation (Milestone 2 ticket 09)
+
+`creation` owns the concrete creation coordinator and one bounded Git worker at a
+time. The supervisor owns this coordinator, and a separate `creation_protocol`
+greeting prevents an older live owner from receiving unsupported requests. The
+dashboard chooses project/base/branch/folder/agent and an optional first prompt;
+Enter means Create without starting, Ctrl-S means Create and start. Generated
+folders use stable project/request UUIDs beneath execution-side product storage,
+outside the original checkout. Unix path bytes survive suggested-path display.
+
+The sole writer's schema 6 creation receipts bind immutable requested intent to
+its operation UUID, canonical common directory, original base ref/commit,
+creation phase and optional resulting checkout. Request identity is also the
+workspace's retained task identity and the native-launch request identity. The
+writer atomically registers the completed checkout and prompt-derived name with
+its receipt, and seeds an independent selected comparison base without replacing
+a later user selection. Original creation facts remain on the workspace.
+
+An intent commits before fetch; the exact fetched or explicitly chosen local
+commit commits before branch/worktree creation. Fetch and creation hold the
+per-common-directory Git exclusion, use bounded output and owned process groups,
+and have a 30-second child deadline with cancellation. Read-only Git identity
+checks retain their two-second bound. Git refuses existing branches and folders;
+the worker rechecks identity and destination before mutation. The original index
+and working files are never used to construct the new checkout.
+
+A failed fetch commits LocalChoice without creating anything. Its explicit local
+continuation uses the already displayed commit, even if a tracking ref has moved.
+Cancellation disarms launch and retains partial Git results. Recovery uses the
+same operation and exact target; it recognizes an existing checkout only when
+common directory, branch and pinned HEAD match. Ambiguous partial branch/folder
+state is retained and refused rather than overwritten. Store/transport failure
+never grants the next phase; matching attributed acknowledgements do. Saved
+receipts alone never run Git or native code on restore. Explicit reconciliation
+disarms launch; only a fresh Create and start or a clearly labelled local-code
+continuation can arm it. The existing native owner retains durable same-request
+launch outcomes, independently of the completed checkout receipt.
+
+Completed workspaces enter the existing session collection without selecting
+that owner. A requested launch freezes that owner's target/session identity, so
+late completion cannot steal navigation or launch in the currently selected
+workspace. Receipts project the originating owner's pending or durable native
+result. Failed native start keeps the registered workspace, branch, folder and
+history; retry remains an explicit Start. Optional configured setup is ticket 10,
+not an inactive control in this creation form. See the
+[scoped evidence and native limits](proofs/m2-09-workspace-creation.md).

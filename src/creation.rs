@@ -87,6 +87,7 @@ impl Intent {
             || self.branch.is_empty()
             || self.branch.len() > 240
             || self.branch.starts_with('-')
+            || self.branch.contains("@{")
             || self.path.is_empty()
             || self.path.len() > 32768
             || self.path.contains(&0)
@@ -168,6 +169,18 @@ impl Job {
                         managed_root,
                     } => {
                         let mut result = preview(project, &repository, &cancellation);
+                        let managed_root = if managed_root.is_absolute() {
+                            managed_root
+                        } else {
+                            match std::env::current_dir() {
+                                Ok(cwd) => cwd.join(managed_root),
+                                Err(error) => {
+                                    result.error =
+                                        Some(format!("Managed folder unavailable: {error}"));
+                                    PathBuf::new()
+                                }
+                            }
+                        };
                         result.managed_root = crate::session::path_bytes(&managed_root);
                         ResultEvent::Preview(result)
                     }
@@ -626,15 +639,27 @@ impl Coordinator {
                     record.launch_cancelled = true;
                 }
                 match record.phase {
-                    Phase::Created=>self.view.error=Some("Workspace already created. Adopt it and use Start explicitly; creation will not launch it again".into()),
-                    Phase::LocalChoice if local=>{
-                        if record.commit.is_none(){self.view.error=Some("No local commit available; select a different base in a new creation".into());return;}
-                        record.phase=Phase::Ready;record.message="Explicit local fallback; using the displayed pinned commit".into();self.save(record,storage);
+                    Phase::Created => {}
+                    Phase::LocalChoice if local => {
+                        if record.commit.is_none() {
+                            self.view.error=Some("No local commit available; select a different base in a new creation".into());
+                            return;
+                        }
+                        record.phase = Phase::Ready;
+                        record.message =
+                            "Explicit local fallback; using the displayed pinned commit".into();
+                        self.save(record, storage);
                     }
-                    Phase::LocalChoice=>self.view.error=Some("Fetch failed. Choose explicit local fallback to use the displayed commit".into()),
-                    Phase::Requested=>self.work(Work::Prepare(record,false)),
-                    _ if record.commit.is_some()=>{record.phase=Phase::Creating;self.save(record,storage);}
-                    _=>self.work(Work::Prepare(record,false)),
+                    Phase::LocalChoice => self.view.error = Some(
+                        "Fetch failed. Choose explicit local fallback to use the displayed commit"
+                            .into(),
+                    ),
+                    Phase::Requested => self.work(Work::Prepare(record, false)),
+                    _ if record.commit.is_some() => {
+                        record.phase = Phase::Creating;
+                        self.save(record, storage);
+                    }
+                    _ => self.work(Work::Prepare(record, false)),
                 }
             }
             _ => {}
@@ -696,6 +721,7 @@ impl Coordinator {
                                 Phase::Cancelled | Phase::Created | Phase::Failed
                             ) {
                                 record.phase = Phase::Cancelled;
+                                record.launch_cancelled = true;
                                 record.message="Creation cancelled; completed Git work, if any, retained. Explicit recovery required".into();
                                 self.save(record, storage);
                             }
@@ -738,7 +764,15 @@ impl Coordinator {
         }
     }
     pub fn advance(&mut self, storage: &crate::persistence::Worker) {
-        if let Some(event) = self.job.as_ref().and_then(|job| job.result.try_recv().ok()) {
+        let event = self.job.as_ref().map(|job| job.result.try_recv());
+        if matches!(event, Some(Err(mpsc::TryRecvError::Disconnected))) {
+            self.job = None;
+            self.view.error = Some(
+                "Creation worker ended without a result; recover the same request explicitly"
+                    .into(),
+            );
+        }
+        if let Some(Ok(event)) = event {
             self.job = None;
             match event {
                 ResultEvent::Preview(preview) => self.view.preview = Some(preview),

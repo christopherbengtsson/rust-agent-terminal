@@ -56,6 +56,10 @@ terminals; normal navigation retains Reviews above the worktree sidebar.
 | `f` | Inspect the selected retained workspace’s Working diff; in the worktree list, adopt an unknown checkout first |
 | `w` | Open retained projects/workspaces; available in small terminals |
 | `A` | Enter an existing local repository path and register it without adopting or starting coding |
+| `N` | Create an independent workspace for the selected registered project; Tab edits base/branch/folder/prompt/agent, Left/Right changes agent |
+| Enter / Ctrl-S in creation | Create without starting / Create and start the chosen native agent |
+| `O`, `[` / `]` in creation receipt | Open creation receipts / select the original operation by stable identity |
+| `L` / `G` / `Z` in creation receipt | Explicit pinned local fallback after fetch failure / query or recover without starting / cancel pending creation |
 | `j` / `k`, `[` / `]` in workspace picker | Select a workspace or jump between projects |
 | Enter / `a` / `h` in workspace picker | Discover selected project's worktrees / explicitly adopt selected checkout / read its latest retained session |
 | `w` / Esc in workspace picker | Return to the native session pane without changing execution |
@@ -366,5 +370,28 @@ step. Native interactive invocation receives that prompt as one positional
 argument after `--`, alongside the normal passive status hooks. `c` / `x`
 continues to start without a supplied prompt. Resume never supplies an initial
 prompt. Startup, restoration, cancellation and reconciliation do not execute a
-prompt. This slice starts an already adopted workspace; new worktree creation
-and Create without starting belong to the subsequent creation flow.
+prompt. Independent workspace creation uses the same native launch boundary.
+
+`N` creates an independent workspace in the selected registered project. The form
+shows its base, suggested branch and stable folder, chosen agent and optional
+first prompt; it requires no title. Choose a local branch explicitly when there
+is no unambiguous remote default. Enter means Create without starting; Ctrl-S
+means Create and start. Generated folders live under the supervisor state
+folder's `workspaces/<project>/<operation>` directory, outside the original
+checkout. Branch, folder and base overrides never overwrite existing work.
+
+Creation normally fetches the selected remote branch and saves the exact ref and
+commit before adding the checkout. A failed fetch stops at a visible local-code
+choice. Its receipt shows the exact locally available commit; `L` explicitly
+chooses that pinned version, including the displayed launch choice. Later ref
+movement cannot change it. `G` queries or reconciles the original operation
+without starting an agent. `Z` cancels pending creation; completed files/branches
+are retained. Restore only reads saved receipts. A failed native launch retains
+the created workspace, and a later explicit Start creates a new conversation.
+
+Creation receipts retain separate checkout and native-launch results. `O` opens
+receipts and `[`/`]` chooses an older operation. Late completion and background
+launch do not change your current workspace selection. Native folder-trust,
+hook-review and account prompts remain with the chosen CLI. Project setup
+commands are the separate ticket 10 slice. See the
+[creation evidence](docs/proofs/m2-09-workspace-creation.md).

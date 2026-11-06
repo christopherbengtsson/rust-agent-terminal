@@ -633,13 +633,17 @@ impl Ui {
                 } else {
                     "No confirmed native launch; explicit Start required after recovery".into()
                 };
-                let action = if record.intent.start && !record.launch_cancelled {
-                    format!("Create locally and start {:?}", record.intent.agent)
+                let action = if record.phase != crate::creation::Phase::LocalChoice
+                    || record.commit.is_none()
+                {
+                    "Local fallback unavailable for this phase".into()
+                } else if record.intent.start && !record.launch_cancelled {
+                    format!("L: Create locally and start {:?}", record.intent.agent)
                 } else {
-                    "Create locally without starting".into()
+                    "L: Create locally without starting".into()
                 };
                 format!(
-                    "Project: {}\nPhase: {:?}\nBase: {}\nCommit: {}\nBranch: {}\nFolder: {}\n{}\n\n{}\n\nL: {}\nG: Recover creation without starting\n[/]: receipts · Z: cancel · Esc: return",
+                    "Project: {}\nPhase: {:?}\nBase: {}\nCommit: {}\nBranch: {}\nFolder: {}\n{}\n\n{}\n\n{}\nG: Query/recover creation without starting\n[/]: receipts · Z: cancel · Esc: return",
                     visible(project),
                     record.phase,
                     visible(record.base_ref.as_deref().unwrap_or(&record.intent.base)),
@@ -680,7 +684,7 @@ impl Ui {
                     .last()
                     .is_some_and(|r| !matches!(r.phase, crate::creation::Phase::Created)))
         {
-            let message=app.session.creation.error.clone().or_else(||app.session.creation.records.last().map(|r|format!("{:?}: {} · branch {} · folder {} · base {} · commit {} · L local fallback · G recover · Z cancel · Esc dismiss",r.phase,r.message,r.intent.branch,crate::creation::path(&r.intent.path).display(),r.base_ref.as_deref().unwrap_or("pending"),r.commit.as_deref().unwrap_or("pending")))).unwrap_or_else(||"Workspace creation in progress · Z cancel".into());
+            let message=app.session.creation.error.clone().or_else(||app.creation_record().map(|r|format!("{:?}: {} · branch {} · folder {} · base {} · commit {} · L local fallback · G recover · Z cancel · Esc dismiss",r.phase,r.message,r.intent.branch,crate::creation::path(&r.intent.path).display(),r.base_ref.as_deref().unwrap_or("pending"),r.commit.as_deref().unwrap_or("pending")))).unwrap_or_else(||"Workspace creation in progress · Z cancel".into());
             frame.render_widget(
                 Paragraph::new(visible(&message))
                     .block(Block::bordered().title(" Workspace creation "))
@@ -710,8 +714,8 @@ Esc cancel · registration never starts an agent"
             && app.workspaces_open
             && (frame.area().width < 80 || frame.area().height < 22)
         {
-            "j/k select · [/] project · a adopt · Enter discover
-A add · h history · w/Esc back · d detach · q quit"
+            "N create · j/k select · [/] project · a adopt
+A add · h history · Enter open · q quit · w/Esc back"
         } else if app.cleanup_open
             && !app.attached
             && (frame.area().width < 80 || frame.area().height < 22)
@@ -736,7 +740,7 @@ A add · h history · w/Esc back · d detach · q quit"
                 &compact_help
             } else {
                 compact_help = format!(
-                    "f Working diff · w workspaces · A add · a adopt · c/x new · C/X prompt · R rename · Enter attach\nv resume · g cleanup · q quit/stop · d detach · {} {}",
+                    "N create · w workspaces · a adopt · c/x new · Enter attach\nv resume · f diff · O receipt · q quit/stop · {} {}",
                     if app.session.connection_lost {
                         format!("unknown (last seen {:?})", app.session.lifecycle)
                     } else {
