@@ -52,6 +52,7 @@ pub enum Effect {
 pub enum Request {
     Discover { request: u64, repository: Vec<u8> },
     Adopt(Vec<u8>),
+    Register(Vec<u8>),
     Launch(String),
     LaunchClaude(String),
     LaunchCodex(String),
@@ -59,6 +60,7 @@ pub enum Request {
     QueryLaunch(String),
     Reconcile,
     History { index: usize, offset: u64 },
+    HistorySession { session: String, offset: u64 },
     Input(Vec<u8>),
     Key(crossterm::event::KeyEvent),
     Paste(String),
@@ -90,6 +92,12 @@ pub struct LaunchResult {
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Observation {
+    #[serde(default)]
+    pub registry_protocol: u32,
+    #[serde(default)]
+    pub registry_pending: bool,
+    #[serde(default)]
+    pub registry: crate::registry::Registry,
     #[serde(default)]
     pub git_jobs_protocol: u32,
     #[serde(default)]

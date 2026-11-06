@@ -99,7 +99,72 @@ impl Ui {
             session,
         );
         let viewport = Self::session_viewport(frame.area());
-        if app.cleanup_open {
+        if app.workspaces_open || app.project_input.is_some() {
+            let items = app
+                .session
+                .registry
+                .workspaces
+                .iter()
+                .map(|workspace| {
+                    let project = workspace
+                        .project
+                        .as_ref()
+                        .and_then(|id| {
+                            app.session
+                                .registry
+                                .projects
+                                .iter()
+                                .find(|project| &project.id == id)
+                        })
+                        .map_or("Unknown project (legacy)", |project| project.name.as_str());
+                    let path = workspace
+                        .path
+                        .as_ref()
+                        .map(|path| {
+                            use std::os::unix::ffi::OsStrExt;
+                            std::path::Path::new(std::ffi::OsStr::from_bytes(path))
+                                .display()
+                                .to_string()
+                        })
+                        .unwrap_or_else(|| "checkout unknown · retained legacy history".into());
+                    ListItem::new(vec![
+                        Line::from(format!(
+                            "{} / {}",
+                            visible(project),
+                            visible(&workspace.name)
+                        )),
+                        Line::from(format!(
+                            "{} · {} sessions",
+                            visible(&path),
+                            workspace.sessions.len()
+                        )),
+                    ])
+                })
+                .collect::<Vec<_>>();
+            let selected = app
+                .session
+                .registry
+                .workspaces
+                .iter()
+                .position(|workspace| Some(&workspace.id) == app.workspace_selected.as_ref());
+            let mut selection = ListState::default().with_selected(selected);
+            let title = if let Some(path) = &app.project_input {
+                format!(" Add project: {}_ ", visible(path))
+            } else if app.session.registry_pending {
+                " Registering project… ".into()
+            } else {
+                " Projects / retained workspaces · A add · j/k select · Enter discover · a adopt "
+                    .into()
+            };
+            frame.render_stateful_widget(
+                List::new(items)
+                    .block(Block::bordered().title(title))
+                    .highlight_symbol("> ")
+                    .highlight_style(Style::default().fg(Color::Cyan)),
+                session,
+                &mut selection,
+            );
+        } else if app.cleanup_open {
             let mut text = String::new();
             if let Some(preview) = &app.cleanup_preview {
                 text.push_str(&format!("Confirm selected history deletion\n{}\nCheckout: {}\nDelete only this managed transcript segment ({} allocated bytes).\nPreserve checkout files, task working changes, native conversation records, metadata/request outcomes and other sessions.\nSpace recovery is not guaranteed. D deletes this UUID; Esc cancels.\n", visible(&preview.identity), visible(&preview.checkout), preview.bytes.map_or("unknown".into(), |bytes| bytes.to_string())));
@@ -537,6 +602,55 @@ fn visible(text: &str) -> String {
 mod tests {
     use super::*;
     use ratatui::{Terminal, backend::TestBackend};
+
+    #[test]
+    fn retained_workspace_selection_is_visible_in_normal_and_small_terminals() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let mut app = App::new("repo".into());
+        app.session.registry.workspaces = (0..20)
+            .map(|index| crate::registry::Workspace {
+                id: format!("workspace-{index}"),
+                task: format!("task-{index}"),
+                legacy_tasks: vec![format!("task-{index}")],
+                name: format!("retained-{index}"),
+                project: None,
+                path: None,
+                checkout: None,
+                sessions: vec!["retained-session".into()],
+            })
+            .collect();
+        app.input(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE));
+        for _ in 0..19 {
+            app.input(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        }
+        for (cols, rows) in [(160, 40), (60, 18)] {
+            let mut terminal = Terminal::new(TestBackend::new(cols, rows)).unwrap();
+            terminal
+                .draw(|frame| Ui::default().draw(frame, &app))
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            let text = buffer
+                .content
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect::<String>();
+            assert!(
+                text.contains("> Unknown project (legacy) / retained-19"),
+                "{text}"
+            );
+            assert!(text.contains("checkout unknown"));
+            assert!(text.contains("j/k select"));
+            if cols == 160 {
+                assert!(text.contains("Reviews"));
+                assert!(text.contains("Unavailable"));
+            }
+            if let Some(directory) = std::env::var_os("RAT_REGISTRY_EVIDENCE") {
+                std::fs::create_dir_all(&directory).unwrap();
+                let cells = buffer.content.iter().enumerate().map(|(index,cell)| serde_json::json!({"row":index / cols as usize,"col":index % cols as usize,"text":cell.symbol(),"fg":format!("{:?}",cell.fg),"bg":format!("{:?}",cell.bg),"bold":cell.modifier.contains(Modifier::BOLD),"wide":false})).collect::<Vec<_>>();
+                std::fs::write(std::path::Path::new(&directory).join(format!("05-registry-testbackend-{cols}.json")),serde_json::to_vec_pretty(&serde_json::json!({"source":"Ratatui TestBackend supporting render; not a real PTY or terminal screenshot","cols":cols,"rows":rows,"cells":cells,"hide_cursor":true})).unwrap()).unwrap();
+            }
+        }
+    }
 
     #[test]
     fn cleanup_renders_unknown_age_physical_size_preview_and_low_space_recovery_controls() {

@@ -100,7 +100,7 @@ fn transport(
     let mut greeting: Observation = serde_json::from_slice(&read_frame(&mut reader)?)?;
     decode_screen(&mut greeting);
     if greeting.control_denied {
-        if greeting.git_jobs_protocol != 1 {
+        if greeting.git_jobs_protocol != 1 || greeting.registry_protocol != 1 {
             events.send(greeting)?;
             return Ok(());
         }
@@ -133,9 +133,9 @@ fn transport(
         }
         return Ok(());
     }
-    if greeting.git_jobs_protocol != 1 {
+    if greeting.git_jobs_protocol != 1 || greeting.registry_protocol != 1 {
         greeting.control_denied = true;
-        greeting.error = Some("Existing supervisor does not support this dashboard's worktree protocol. Use its compatible dashboard to stop activity before upgrading; d detaches locally.".into());
+        greeting.error = Some("Existing supervisor does not support this dashboard's worktree protocol or registry protocol. Use its compatible dashboard to stop activity before upgrading; d detaches locally.".into());
         events.send(greeting)?;
         return Ok(());
     }
@@ -368,6 +368,8 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
     };
     let mut state = restored.state;
     state.git_jobs_protocol = 1;
+    state.registry_protocol = 1;
+    state.registry_pending = false;
     state.discovery = None;
     state.adoption_pending = false;
     let mut task_identity = restored.task;
@@ -379,6 +381,8 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
         launches.insert(result.request.clone(), result);
     }
     let mut adoption: Option<crate::git::AdoptionJob> = None;
+    let mut registering = false;
+    let mut registry_operation = None;
     let mut discovery: Option<crate::git::GitWorker> = None;
     let mut pending_discovery: Option<(u64, PathBuf)> = None;
     let mut checkout = restored
@@ -470,6 +474,30 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
         {
             adoption = None;
             state.adoption_pending = false;
+            if registering {
+                registering = false;
+                let operation = uuid::Uuid::new_v4();
+                match result {
+                    Ok(identity) => match storage
+                        .commands
+                        .try_send(crate::persistence::Command::Register(operation, identity))
+                    {
+                        Ok(()) => {
+                            registry_operation = Some(operation);
+                            state.registry_pending = true;
+                        }
+                        Err(error) => {
+                            state.registry_pending = false;
+                            state.error = Some(format!("Project not registered: {error}; retry"));
+                        }
+                    },
+                    Err(error) => {
+                        state.registry_pending = false;
+                        state.error = Some(error);
+                    }
+                }
+                continue;
+            }
             let result = result.and_then(|identity| {
                 let path = identity.root.clone();
                 let same_checkout = state.checkout_identity.as_ref().map_or_else(
@@ -489,7 +517,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     state.lifecycle = Lifecycle::Idle;
                     state.native_conversation = None;
                     state.agent = None;
-                    task_identity = uuid::Uuid::new_v4().to_string();
+                    task_identity = state.registry.checkout(&identity).map(|workspace| workspace.task.clone()).unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
                 }
                 state.adopted = Some(path.display().to_string());
                 checkout = Some(path);
@@ -521,6 +549,20 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
         while let Ok(event) = storage.events.try_recv() {
             use crate::persistence::Completion;
             match event {
+                Completion::Registry(registry) => state.registry = registry,
+                Completion::Registered(operation, result) => {
+                    if registry_operation != Some(operation) {
+                        continue;
+                    }
+                    registry_operation = None;
+                    state.registry_pending = false;
+                    match result {
+                        Ok(registry) => state.registry = registry,
+                        Err(error) => {
+                            state.error = Some(format!("Project not registered: {error}; retry"))
+                        }
+                    }
+                }
                 Completion::Retried | Completion::Sealed => {}
                 Completion::Cleanup(page) => state.cleanup = Some(page),
                 Completion::Deleted(id) => {
@@ -978,6 +1020,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     if controller.is_some() {
                         let refusal = Observation {
                             git_jobs_protocol: 1,
+                            registry_protocol: 1,
                             control_denied: true,
                             error: Some("Another dashboard controls this supervisor; close it before reconnecting".into()),
                             ..Observation::default()
@@ -1181,9 +1224,18 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     pending_discovery = Some((request, repository));
                     state.discovery = None;
                 }
+                Request::Register(bytes) => {
+                    if bytes.len() > 32768 { return Err("Repository path exceeds 32768 bytes".into()); }
+                    if adoption.is_some() || registry_operation.is_some() { return Err("Project operation pending; wait or Stop to cancel".into()); }
+                    adoption = Some(crate::git::AdoptionJob::start(PathBuf::from(std::ffi::OsString::from_vec(bytes)))?);
+                    registering = true;
+                    state.adoption_pending = true;
+                    state.registry_pending = true;
+                }
                 Request::Adopt(bytes) => {
+                    registering = false;
                     if bytes.len() > 32768 { return Err("Checkout path exceeds 32768 bytes".into()); }
-                    if adoption.is_some() { return Err("Adoption already pending; wait or Stop to cancel".into()); }
+                    if adoption.is_some() || registry_operation.is_some() { return Err("Adoption already pending; wait or Stop to cancel".into()); }
                     adoption = Some(crate::git::AdoptionJob::start(PathBuf::from(std::ffi::OsString::from_vec(bytes)))?);
                     state.adoption_pending = true;
                 }
@@ -1552,6 +1604,9 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                         .parser
                         .set_size(rows.try_into().unwrap(), cols.try_into().unwrap());
                 }
+                Request::HistorySession { session, offset } => {
+                    storage.commands.try_send(crate::persistence::Command::HistorySession(session, offset)).map_err(|error| format!("History busy: {error}; retry"))?;
+                }
                 Request::History { index, offset } => {
                     state.history_index = index;
                     storage.commands.try_send(crate::persistence::Command::History(index, offset)).map_err(|e| format!("History busy: {e}; retry"))?;
@@ -1576,6 +1631,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                 Request::Stop | Request::Shutdown => {
                     if let Some(job) = &adoption { job.cancel(); }
                     state.adoption_pending = false;
+                    if registering { state.registry_pending = false; registering = false; }
                     if let Some(worker) = &discovery { worker.cancel(); }
                     if let Some((request, repository)) = pending_discovery.take() {
                         state.discovery = Some(crate::git::Discovery { request, repository: path_bytes(&repository), result: Err("Git discovery cancelled by Stop".into()) });

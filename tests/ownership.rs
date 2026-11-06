@@ -5614,3 +5614,330 @@ fn dashboard_refuses_legacy_live_owner_before_sending_new_git_requests() {
     dashboard.send(b"d");
     server.join().unwrap();
 }
+
+struct RegistryOwner(std::process::Child);
+impl Drop for RegistryOwner {
+    fn drop(&mut self) {
+        if self.0.try_wait().ok().flatten().is_none() {
+            let _ = self.0.kill();
+        }
+        let _ = self.0.wait();
+    }
+}
+
+#[test]
+fn retained_registry_reuses_workspace_across_adoption_alias_and_restart() {
+    use std::os::unix::ffi::OsStrExt;
+    let fixture = Fixture::new();
+    let other = fixture.temp.path().join("other project");
+    assert!(
+        Command::new("git")
+            .args(["init", "-b", "main"])
+            .arg(&other)
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    let start = || {
+        let child = Command::new(env!("CARGO_BIN_EXE_agent-terminal"))
+            .arg("--supervisor")
+            .arg(fixture.state())
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !fixture.state().join("supervisor.sock").exists() {
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        RegistryOwner(child)
+    };
+    let mut owner = start();
+    let mut control = Controller::connect(&fixture);
+    let adopt = |control: &mut Controller, path: &Path| {
+        control.request(serde_json::json!({"Adopt": path.as_os_str().as_bytes()}));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let state = control.request(serde_json::json!("Screen"));
+            if state["adoption_pending"] == false && state["metadata_pending"] == false {
+                assert!(state["error"].is_null(), "{state}");
+                return state;
+            }
+            assert!(Instant::now() < deadline, "{state}");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    };
+    let first = adopt(&mut control, &fixture.repository);
+    let selected = first["registry"]["selected"]
+        .as_str()
+        .expect("durable workspace identity")
+        .to_owned();
+    adopt(&mut control, &other);
+    let alias = fixture.temp.path().join("alias");
+    std::os::unix::fs::symlink(&fixture.repository, &alias).unwrap();
+    let returned = adopt(&mut control, &alias);
+    assert_eq!(returned["registry"]["selected"], selected);
+    assert_eq!(
+        returned["registry"]["projects"].as_array().unwrap().len(),
+        2
+    );
+    assert_eq!(
+        returned["registry"]["workspaces"].as_array().unwrap().len(),
+        2
+    );
+    assert!(
+        returned["identity"].is_null(),
+        "registration never launches coding"
+    );
+    control.request(serde_json::json!("Shutdown"));
+    drop(control);
+    owner.0.wait().unwrap();
+    let mut owner = start();
+    let mut control = Controller::connect(&fixture);
+    assert_eq!(control.greeting["registry"]["selected"], selected);
+    assert_eq!(
+        control.greeting["registry"]["workspaces"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    control.request(serde_json::json!("Shutdown"));
+    drop(control);
+    owner.0.wait().unwrap();
+}
+
+#[test]
+fn populated_legacy_registry_migration_preserves_opaque_membership_paths_and_history() {
+    use std::os::unix::fs::PermissionsExt;
+    for version in 1..=3 {
+        let fixture = Fixture::new();
+        std::fs::create_dir(fixture.state()).unwrap();
+        std::fs::set_permissions(fixture.state(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let db = rusqlite::Connection::open(fixture.state().join("history.sqlite3")).unwrap();
+        db.execute_batch("CREATE TABLE app(id INTEGER PRIMARY KEY CHECK(id=1),state TEXT NOT NULL,checkout BLOB,task TEXT NOT NULL); CREATE TABLE sessions(id TEXT PRIMARY KEY,identity TEXT NOT NULL,state TEXT NOT NULL,durable INTEGER NOT NULL DEFAULT 0);").unwrap();
+        if version >= 2 {
+            db.execute_batch("CREATE TABLE requests(id TEXT PRIMARY KEY,result TEXT NOT NULL);")
+                .unwrap();
+        }
+        if version >= 3 {
+            db.execute_batch("ALTER TABLE sessions ADD COLUMN created INTEGER; ALTER TABLE sessions ADD COLUMN sealed INTEGER NOT NULL DEFAULT 0; ALTER TABLE sessions ADD COLUMN history_state TEXT NOT NULL DEFAULT 'retained';").unwrap();
+        }
+        db.pragma_update(None, "user_version", version).unwrap();
+        let ids = [
+            "11111111-1111-4111-8111-111111111111",
+            "22222222-2222-4222-8222-222222222222",
+        ];
+        let tasks = ["opaque legacy task", "another opaque task"];
+        let native = "33333333-3333-4333-8333-333333333333";
+        let mut current = serde_json::Value::Null;
+        for (index, id) in ids.iter().enumerate() {
+            let label = format!(
+                "task={} session={id} request=request with spaces {index}",
+                tasks[index]
+            );
+            let mut state = serde_json::json!({"adopted":"same lossy display �", "identity":label,"screen":"","formatted":"","rows":24,"cols":80,"output_bytes":0,"error":null,"stopped":false,"control_denied":false,"lifecycle":"Exited","native_conversation":native,"agent":"claude"});
+            if index == 1 {
+                state.as_object_mut().unwrap().remove("identity");
+            }
+            let raw = format!("legacy history {index}\n").into_bytes();
+            std::fs::write(
+                fixture.state().join(format!("{id}-00000000.transcript")),
+                &raw,
+            )
+            .unwrap();
+            db.execute(
+                "INSERT INTO sessions(id,identity,state,durable) VALUES(?1,?2,?3,?4)",
+                rusqlite::params![id, label, state.to_string(), raw.len()],
+            )
+            .unwrap();
+            if index == 0 {
+                current = state;
+            }
+        }
+        let path = b"/missing/original-\xff-checkout".to_vec();
+        db.execute(
+            "INSERT INTO app VALUES(1,?1,?2,?3)",
+            rusqlite::params![current.to_string(), path, tasks[0]],
+        )
+        .unwrap();
+        if version >= 2 {
+            db.execute("INSERT INTO requests VALUES(?1,?2)", rusqlite::params!["failed opaque request",serde_json::json!({"request":"failed opaque request","identity":null,"error":"original failure"}).to_string()]).unwrap();
+        }
+        drop(db);
+        let mut owner = RegistryOwner(
+            Command::new(env!("CARGO_BIN_EXE_agent-terminal"))
+                .arg("--supervisor")
+                .arg(fixture.state())
+                .spawn()
+                .unwrap(),
+        );
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !fixture.state().join("supervisor.sock").exists() {
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let mut control = Controller::connect(&fixture);
+        let registry = control.greeting["registry"].clone();
+        let workspaces = registry["workspaces"].as_array().unwrap();
+        assert_eq!(workspaces.len(), 2);
+        assert_eq!(
+            registry["projects"].as_array().unwrap().len(),
+            0,
+            "lossy legacy labels are not repository facts"
+        );
+        for (index, task) in tasks.iter().enumerate() {
+            let workspace = workspaces
+                .iter()
+                .find(|workspace| workspace["task"] == *task)
+                .unwrap();
+            assert_eq!(workspace["sessions"], serde_json::json!([ids[index]]));
+            assert!(workspace["checkout"].is_null());
+            if index == 0 {
+                assert_eq!(workspace["path"], serde_json::json!(path));
+            } else {
+                assert!(workspace["path"].is_null());
+            }
+            control
+                .request(serde_json::json!({"HistorySession":{"session":ids[index],"offset":0}}));
+            let deadline = Instant::now() + Duration::from_secs(3);
+            loop {
+                let observed = control.request(serde_json::json!("Screen"));
+                if observed["history"]["text"]
+                    .as_str()
+                    .is_some_and(|text| text.contains(&format!("legacy history {index}")))
+                {
+                    break;
+                }
+                assert!(Instant::now() < deadline, "{observed}");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            assert_eq!(
+                std::fs::read(
+                    fixture
+                        .state()
+                        .join(format!("{}-00000000.transcript", ids[index]))
+                )
+                .unwrap(),
+                format!("legacy history {index}\n").into_bytes()
+            );
+        }
+        assert_eq!(control.greeting["native_conversation"], native);
+        assert_eq!(control.greeting["lifecycle"], "Exited");
+        assert!(control.greeting["execution"].is_null());
+        if version >= 2 {
+            let outcome =
+                control.request(serde_json::json!({"QueryLaunch":"failed opaque request"}));
+            assert_eq!(outcome["launch_result"]["error"], "original failure");
+        }
+        control.request(serde_json::json!("Shutdown"));
+        drop(control);
+        owner.0.wait().unwrap();
+    }
+}
+
+#[test]
+fn project_registration_deduplicates_linked_checkouts_and_failed_writes_keep_prior_registry() {
+    use std::os::unix::ffi::OsStrExt;
+    let fixture = Fixture::new();
+    assert!(
+        Command::new("git")
+            .arg("-C")
+            .arg(&fixture.repository)
+            .args([
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=fixture@example.invalid",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "base"
+            ])
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    let linked = fixture.temp.path().join("linked checkout");
+    assert!(
+        Command::new("git")
+            .arg("-C")
+            .arg(&fixture.repository)
+            .args(["worktree", "add", "-b", "linked"])
+            .arg(&linked)
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    let mut owner = RegistryOwner(
+        Command::new(env!("CARGO_BIN_EXE_agent-terminal"))
+            .arg("--supervisor")
+            .arg(fixture.state())
+            .spawn()
+            .unwrap(),
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !fixture.state().join("supervisor.sock").exists() {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let mut control = Controller::connect(&fixture);
+    let register = |control: &mut Controller, path: &Path| {
+        control.request(serde_json::json!({"Register":path.as_os_str().as_bytes()}));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let state = control.request(serde_json::json!("Screen"));
+            if state["registry_pending"] == false && state["adoption_pending"] == false {
+                return state;
+            }
+            assert!(Instant::now() < deadline, "{state}");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    };
+    let first = register(&mut control, &fixture.repository);
+    assert!(first["error"].is_null(), "{first}");
+    assert_eq!(first["registry"]["projects"].as_array().unwrap().len(), 1);
+    assert_eq!(first["registry"]["workspaces"].as_array().unwrap().len(), 1);
+    assert!(
+        first["adopted"].is_null(),
+        "project registration must not retarget active coding"
+    );
+    assert!(first["registry"]["selected"].is_null());
+    std::fs::write(fixture.state().join("proof-storage-registry"), "error").unwrap();
+    let failed = register(&mut control, &linked);
+    assert!(
+        failed["error"]
+            .as_str()
+            .unwrap()
+            .contains("Project not registered")
+    );
+    assert_eq!(
+        failed["registry"], first["registry"],
+        "failed write cannot announce durable project/workspace"
+    );
+    std::fs::remove_file(fixture.state().join("proof-storage-registry")).unwrap();
+    let second = register(&mut control, &linked);
+    assert!(second["error"].is_null(), "{second}");
+    assert_eq!(second["registry"]["projects"].as_array().unwrap().len(), 1);
+    let workspaces = second["registry"]["workspaces"].as_array().unwrap();
+    assert_eq!(workspaces.len(), 2);
+    assert_ne!(workspaces[0]["id"], workspaces[1]["id"]);
+    let alias = fixture.temp.path().join("linked alias");
+    std::os::unix::fs::symlink(&linked, &alias).unwrap();
+    let aliased = register(&mut control, &alias);
+    assert_eq!(aliased["registry"], second["registry"]);
+    let missing = register(&mut control, &fixture.temp.path().join("absent"));
+    assert!(
+        missing["error"]
+            .as_str()
+            .unwrap()
+            .contains("Checkout unavailable")
+    );
+    assert_eq!(missing["registry"], second["registry"]);
+    assert!(missing["identity"].is_null());
+    control.request(serde_json::json!("Shutdown"));
+    drop(control);
+    owner.0.wait().unwrap();
+}
