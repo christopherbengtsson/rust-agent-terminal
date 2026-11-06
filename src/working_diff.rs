@@ -50,6 +50,14 @@ impl ChangedFile {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Snapshot {
     #[serde(default)]
+    pub editor_content: Option<String>,
+    #[serde(default)]
+    pub ancestor: Option<String>,
+    #[serde(default)]
+    pub head: Option<String>,
+    #[serde(default)]
+    pub compared_base: Option<Base>,
+    #[serde(default)]
     pub comparison: String,
     #[serde(default)]
     pub save_base: Option<Base>,
@@ -241,7 +249,7 @@ fn patch(root: &Path, file: &ChangedFile, staged: bool, cancelled: &AtomicBool) 
         Err(error) => format!("Patch unavailable/oversized: {}", printable(&error)),
     }
 }
-fn inspect(
+pub(crate) fn inspect(
     root: &Path,
     workspace: &str,
     request: &str,
@@ -249,6 +257,7 @@ fn inspect(
     cancelled: &AtomicBool,
 ) -> Result<Snapshot, String> {
     let checkout = crate::git::resolve_checkout(root, cancelled)?;
+    let head = revision(&checkout.root, b"HEAD", cancelled).ok();
     let before = status(&checkout.root, cancelled)?;
     let (files, omitted) = files(&before)?;
     let selected = selected
@@ -277,10 +286,18 @@ fn inspect(
             text
         }
     };
-    let changed_during_capture = status(&checkout.root, cancelled)? != before;
+    let changed_during_capture = status(&checkout.root, cancelled)? != before
+        || revision(&checkout.root, b"HEAD", cancelled).ok() != head;
     let selected = selected.map(|file| file.path.clone());
     Ok(Snapshot {
-        comparison: "Working".into(),
+        comparison: format!(
+            "Working\nHEAD {}",
+            head.as_deref().unwrap_or("unavailable or unborn")
+        ),
+        editor_content: None,
+        ancestor: None,
+        head,
+        compared_base: None,
         save_base: None,
         workspace: workspace.into(),
         request: request.into(),
@@ -529,6 +546,10 @@ fn inspect_whole(
             .unwrap_or_default()
             .as_millis() as u64,
         checkout,
+        editor_content: None,
+        ancestor: Some(ancestor.into()),
+        head: Some(head),
+        compared_base: Some(base.clone()),
         files: combined,
         omitted,
         selected,
@@ -537,6 +558,133 @@ fn inspect_whole(
         comparison,
         save_base: selected_ref.map(|_| base),
     })
+}
+
+fn artifact_label(file: &ChangedFile) -> String {
+    let label = file.label();
+    if label.len() <= 256 {
+        return label;
+    }
+    let mut end = 256;
+    while !label.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!(
+        "{}… [path label truncated; raw path retained in snapshot]",
+        &label[..end]
+    )
+}
+
+/// Bounded whole-comparison text. It is transported as content, never an owner temp path.
+pub(crate) fn editor_comparison(
+    snapshot: &mut Snapshot,
+    cancelled: &AtomicBool,
+) -> Result<String, String> {
+    use std::time::{Duration, Instant};
+    const TOTAL: usize = 1024 * 1024;
+    let started = Instant::now();
+    let before = status(&snapshot.checkout.root, cancelled)?;
+    let revisions_match = |snapshot: &Snapshot| {
+        revision(&snapshot.checkout.root, b"HEAD", cancelled).ok() == snapshot.head
+            && snapshot.compared_base.as_ref().is_none_or(|base| {
+                revision(&snapshot.checkout.root, &base.reference, cancelled)
+                    .ok()
+                    .as_deref()
+                    == Some(base.commit.as_str())
+            })
+    };
+    snapshot.changed_during_capture |= !revisions_match(snapshot);
+    let mut text = format!(
+        "{}\nWorkspace {}\nRequest {}\nCaptured {} ms since epoch\nInspection snapshot; not live source. No atomic filesystem capture is claimed.\nLimits: 64 KiB per file, 1 MiB comparison content, 5 seconds between files; at most 1024 inventory entries; path display labels abbreviated at 256 bytes.\n\nChanged files ({} additional inventory entries omitted by capture limit):\n",
+        snapshot.comparison,
+        printable(&snapshot.workspace),
+        printable(&snapshot.request),
+        snapshot.captured_millis,
+        snapshot.omitted
+    );
+    for file in &snapshot.files {
+        text.push_str(&format!("{} · {}\n", artifact_label(file), file.state));
+    }
+    // Reserve every file heading and an explicit omission reason before allocating patch bytes.
+    let mut used = text.len()
+        + 128
+        + snapshot
+            .files
+            .iter()
+            .map(|file| artifact_label(file).len() + file.state.len() + 100)
+            .sum::<usize>();
+    for file in &snapshot.files {
+        if cancelled.load(Ordering::Acquire) {
+            return Err("Comparison cancelled".into());
+        }
+        text.push_str(&format!(
+            "\n=== {} · {} ===\n",
+            artifact_label(file),
+            file.state
+        ));
+        if used >= TOTAL || started.elapsed() > Duration::from_secs(5) {
+            text.push_str("Content omitted: total comparison byte/time bound reached.\n");
+            continue;
+        }
+        let mut body = if file.new || file.conflict {
+            format!(
+                "{}\n{}",
+                if file.conflict {
+                    "Conflict: unresolved unmerged index; current file only."
+                } else {
+                    "New file (not in index)"
+                },
+                new_content(&snapshot.checkout.root, &file.path).unwrap_or_else(|e| e)
+            )
+        } else {
+            let mut body = String::new();
+            if let Some(ancestor) = &snapshot.ancestor {
+                body.push_str("Common ancestor to current working files\n");
+                body.push_str(&whole_patch(
+                    &snapshot.checkout.root,
+                    ancestor,
+                    file,
+                    cancelled,
+                ));
+            }
+            if file.staged {
+                body.push_str("\nStaged · HEAD to index\n");
+                body.push_str(&patch(&snapshot.checkout.root, file, true, cancelled));
+            }
+            if file.unstaged {
+                body.push_str("\nUnstaged · index to working files\n");
+                body.push_str(&patch(&snapshot.checkout.root, file, false, cancelled));
+            }
+            body
+        };
+        let limit = CONTENT_LIMIT.min(TOTAL - used);
+        if body.len() > limit {
+            let mut end = limit.saturating_sub(100);
+            while !body.is_char_boundary(end) {
+                end -= 1;
+            }
+            body.truncate(end);
+            body.push_str(
+                "\nContent truncated: per-file or total comparison byte bound reached.\n",
+            );
+        }
+        used += body.len();
+        text.push_str(&body);
+        text.push('\n');
+    }
+    snapshot.changed_during_capture |=
+        before != status(&snapshot.checkout.root, cancelled)? || !revisions_match(snapshot);
+    if snapshot.changed_during_capture {
+        text.push_str("\nWARNING: checkout changed during capture; reopen for fresh data.\n");
+    }
+    Ok(text)
+}
+
+pub struct ComparisonOptions {
+    pub whole: bool,
+    pub editor: bool,
+    pub retained: Option<Base>,
+    pub selected_ref: Option<Vec<u8>>,
 }
 
 pub struct Job {
@@ -550,9 +698,7 @@ impl Job {
         workspace: String,
         request: String,
         selected: Option<Vec<u8>>,
-        whole: bool,
-        retained: Option<Base>,
-        selected_ref: Option<Vec<u8>>,
+        options: ComparisonOptions,
     ) -> std::io::Result<Self> {
         let cancelled = Arc::new(AtomicBool::new(false));
         let cancellation = cancelled.clone();
@@ -560,6 +706,12 @@ impl Job {
         let worker = thread::Builder::new()
             .name("working-diff".into())
             .spawn(move || {
+                let ComparisonOptions {
+                    whole,
+                    editor,
+                    retained,
+                    selected_ref,
+                } = options;
                 let result = if whole {
                     inspect_whole(
                         &checkout.root,
@@ -579,10 +731,14 @@ impl Job {
                         &cancellation,
                     )
                 }
-                .and_then(|snapshot| {
+                .and_then(|mut snapshot| {
                     if snapshot.checkout != checkout {
                         Err("Checkout identity changed; re-adopt before inspection".into())
                     } else {
+                        if editor {
+                            snapshot.editor_content =
+                                Some(editor_comparison(&mut snapshot, &cancellation)?);
+                        }
                         Ok(snapshot)
                     }
                 });
@@ -612,6 +768,7 @@ impl Drop for Job {
 }
 
 pub struct View {
+    pub editor_request: Option<String>,
     pub whole: bool,
     pub base_entry: Option<String>,
     pub base_selection: Option<Vec<u8>>,
@@ -628,6 +785,7 @@ pub struct View {
 impl View {
     pub fn new(workspace: String, name: String) -> Self {
         Self {
+            editor_request: None,
             whole: false,
             base_entry: None,
             base_selection: None,
@@ -647,6 +805,7 @@ impl View {
         self.loading = true;
         self.error = None;
         crate::events::Request::InspectWorking {
+            editor: false,
             whole: self.whole,
             base: self.base_selection.clone(),
             request: self.request.clone(),
@@ -734,6 +893,70 @@ mod tests {
             String::from_utf8_lossy(&output.stderr)
         );
     }
+    #[test]
+    fn editor_exports_all_files_with_revision_identity_and_explicit_content_limits() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        git(root, &["init", "-q", "-b", "main"]);
+        git(root, &["config", "user.name", "Test"]);
+        git(root, &["config", "user.email", "test@example.com"]);
+        fs::write(root.join("tracked"), "base\n").unwrap();
+        fs::write(root.join("deleted"), "old\n").unwrap();
+        git(root, &["add", "."]);
+        git(root, &["commit", "-qm", "base"]);
+        git(root, &["branch", "base"]);
+        fs::write(root.join("tracked"), "committed\n").unwrap();
+        git(root, &["commit", "-qam", "work"]);
+        fs::write(root.join("tracked"), "staged\n").unwrap();
+        git(root, &["add", "tracked"]);
+        fs::write(root.join("tracked"), "unstaged\n").unwrap();
+        fs::remove_file(root.join("deleted")).unwrap();
+        fs::write(root.join("new"), "new text\n").unwrap();
+        fs::write(root.join("binary"), [0, 1, 2]).unwrap();
+        fs::write(root.join("large"), vec![b'x'; 70000]).unwrap();
+        let cancel = AtomicBool::new(false);
+        let mut working = inspect(root, "w", "working-editor", Some(b"tracked"), &cancel).unwrap();
+        let text = editor_comparison(&mut working, &cancel).unwrap();
+        assert!(text.contains("\nHEAD "), "{text}");
+        for expected in [
+            "=== deleted",
+            "=== tracked",
+            "=== new",
+            "-committed",
+            "+staged",
+            "+unstaged",
+            "new text",
+            "Binary file",
+            "Oversized file",
+        ] {
+            assert!(text.contains(expected), "missing {expected}: {text}");
+        }
+        let mut whole = inspect_whole(
+            root,
+            "w",
+            "whole-editor",
+            None,
+            None,
+            Some(b"refs/heads/base"),
+            &cancel,
+        )
+        .unwrap();
+        let text = editor_comparison(&mut whole, &cancel).unwrap();
+        for expected in [
+            "Whole workspace",
+            "Common ancestor",
+            "Local base refs/heads/base",
+            "-base",
+            "+unstaged",
+            "working files",
+            "=== new",
+            "=== deleted",
+        ] {
+            assert!(text.contains(expected), "missing {expected}: {text}");
+        }
+        assert!(text.len() <= 1024 * 1024);
+    }
+
     #[test]
     fn whole_workspace_includes_commits_and_overlapping_current_edits_without_index_changes() {
         let dir = tempfile::tempdir().unwrap();
@@ -970,6 +1193,7 @@ mod tests {
                 selected,
                 whole,
                 base,
+                ..
             })) = effect
             else {
                 panic!("missing inspection")

@@ -12,6 +12,25 @@ pub type DashboardTerminal = Terminal<CrosstermBackend<io::Stdout>>;
 pub struct TerminalGuard;
 
 impl TerminalGuard {
+    /// Deliberate terminal ownership handoff; no dashboard input is read while the editor owns it.
+    pub fn release_editor(&mut self, terminal: &mut DashboardTerminal) -> io::Result<()> {
+        terminal.show_cursor()?;
+        disable_raw_mode()?;
+        execute!(io::stdout(), DisableBracketedPaste, LeaveAlternateScreen)
+    }
+
+    pub fn reacquire_editor(&mut self, terminal: &mut DashboardTerminal) -> io::Result<()> {
+        // The editor foreground group must be relinquished before dashboard input/render.
+        crate::editor::foreground(unsafe { libc::getpgrp() })?;
+        enable_raw_mode()?;
+        execute!(io::stdout(), EnterAlternateScreen, EnableBracketedPaste)?;
+        // Fullscreen resize resets buffers without requesting a cursor-position report.
+        // Terminal::clear preserves the cursor via DSR, which is unnecessary after handoff.
+        let area = terminal.size()?.into();
+        terminal.resize(area)?;
+        Ok(())
+    }
+
     pub fn enter() -> io::Result<(Self, DashboardTerminal)> {
         let previous_hook = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {

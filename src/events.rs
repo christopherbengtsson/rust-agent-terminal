@@ -56,7 +56,15 @@ pub enum NativeAgent {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Request {
+    EditorSource {
+        request: String,
+        workspace: String,
+        path: Option<Vec<u8>>,
+        line: usize,
+    },
     InspectWorking {
+        #[serde(default)]
+        editor: bool,
         #[serde(default)]
         whole: bool,
         #[serde(default)]
@@ -142,6 +150,10 @@ pub struct LaunchResult {
 pub struct Observation {
     #[serde(default)]
     pub diff_protocol: u32,
+    #[serde(default)]
+    pub editor_protocol: u32,
+    #[serde(default)]
+    pub editor_source: Option<crate::editor::SourceResponse>,
     #[serde(default)]
     pub working_diff: Option<crate::working_diff::Response>,
     #[serde(default)]
