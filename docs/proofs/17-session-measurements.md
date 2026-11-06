@@ -9,7 +9,7 @@ Native Claude/Codex compatibility remains the separate versioned native proof.
 The final manifest is the first line of `observations.jsonl` in the final raw
 archive. It precedes production and includes source revision/dirty state, binary
 SHA256, hardware/OS/Rust/profile, geometry, rates, duration, sample counts, caps,
-style mix, fault delays and instrumentation. The attached phase lasts 90 seconds; dashboard focused, fully detached, slow
+style mix, fault delays and instrumentation. The attached phase lasts 150 seconds; dashboard focused, fully detached, slow
 subscriber and slow-storage phases last 60 seconds each. They offer 64KiB/s
 (attached, dashboard focused, fully detached, slow subscriber) or 256KiB/s with
 50ms per-append delay (slow storage). Full storage uses synthetic debug ENOSPC
@@ -80,6 +80,16 @@ the child in macOS `?Es` and 67584 accepted bytes pending. Repair/retry then
 confirmed Stop. The [causal bounded-drain proof](17-stop-drain.md) records the
 minimized red/green check. Its earlier duration/flush figures predate the dirty
 append correction and must not be used as the final durable distribution.
+
+The first attempted full run is retained in `17-partial-run-01.tar.gz`. Its
+100 attaches took 62.78 seconds, crossing the initial 60-second producer end;
+the subsequent 60-second focused phase hit the harness's generic eight-second
+completion wait after 200 navigation samples. This was a harness deadline error,
+with output still advancing; no remaining resource phases completed. Those raw
+samples are not the final active/plateau proof. The corrected protocol reserves
+150 seconds for all 100 attached samples, their 150ms spacing and focus changes,
+and gives completion waits a declared-duration budget. Failure snapshots are
+explicitly labeled nonquiescent and never treated as durability snapshots.
 
 Final results are recorded after the declared full run; this protocol alone
 closes no measurement gate.

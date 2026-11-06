@@ -3367,7 +3367,7 @@ fn paced_session_measurement17() {
     let fixture = Fixture::new();
     let preflight = std::env::var_os("RAT_MEASURE17_QUICK").is_some();
     let phase_ms = if preflight { 4000 } else { 60000 };
-    let attached_ms = if preflight { 4000 } else { 90000 };
+    let attached_ms = if preflight { 4000 } else { 150000 };
     let attach_samples = if preflight { 5 } else { 100 };
     let navigation_samples = if preflight { 10 } else { 200 };
     let evidence = PathBuf::from(
