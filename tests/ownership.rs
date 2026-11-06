@@ -7310,3 +7310,188 @@ fn creation_without_start_retains_exact_base_and_same_request_after_owner_restar
     drop(control);
     owner.0.wait().unwrap();
 }
+
+#[test]
+fn dashboard_create_and_start_targets_new_checkout_and_retains_failed_launch_without_duplicates() {
+    use std::os::unix::{
+        ffi::{OsStrExt, OsStringExt},
+        fs::PermissionsExt,
+    };
+    let fixture = Fixture::new();
+    let git = |args: &[&str]| {
+        let out = Command::new("/usr/bin/git")
+            .arg("-C")
+            .arg(&fixture.repository)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8(out.stdout).unwrap().trim().to_owned()
+    };
+    git(&[
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@example.invalid",
+        "commit",
+        "--allow-empty",
+        "-m",
+        "base",
+    ]);
+    let commit = git(&["rev-parse", "HEAD"]);
+    let tools = fixture.temp.path().join("tools");
+    std::fs::create_dir(&tools).unwrap();
+    for (name, path) in [("git", "/usr/bin/git"), ("ps", "/bin/ps")] {
+        std::os::unix::fs::symlink(path, tools.join(name)).unwrap();
+    }
+    let marker = fixture.temp.path().join("native-launches");
+    let wrapper = tools.join("claude");
+    std::fs::write(&wrapper,format!("#!/bin/sh\nprintf 'once\\n' >> '{}'\nprintf 'creation-cwd:%s\\r\\n' \"$PWD\"\nprintf 'creation-argv:'\nprintf '<%s>' \"$@\"\nprintf '\\r\\n'\nexec '{}' --scripted-child\n",marker.display(),env!("CARGO_BIN_EXE_agent-terminal"))).unwrap();
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let mut owner = RegistryOwner(
+        Command::new(env!("CARGO_BIN_EXE_agent-terminal"))
+            .arg("--supervisor")
+            .arg(fixture.state())
+            .env("PATH", &tools)
+            .spawn()
+            .unwrap(),
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !fixture.state().join("supervisor.sock").exists() {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let wait = |control: &mut Controller, predicate: &dyn Fn(&serde_json::Value) -> bool| {
+        let deadline = Instant::now() + Duration::from_secs(8);
+        loop {
+            let state = control.request_now(serde_json::json!("Screen"));
+            if predicate(&state) {
+                break state;
+            }
+            assert!(Instant::now() < deadline, "{state}");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    };
+    let mut control = Controller::connect(&fixture);
+    control.request(serde_json::json!({"Register":fixture.repository.as_os_str().as_bytes()}));
+    let registered = wait(&mut control, &|s| {
+        s["registry_pending"] == false
+            && s["adoption_pending"] == false
+            && !s["registry"]["projects"].as_array().unwrap().is_empty()
+    });
+    control.request(serde_json::json!({"Adopt":fixture.repository.as_os_str().as_bytes()}));
+    wait(&mut control, &|s| {
+        s["adoption_pending"] == false && s["adopted"].is_string()
+    });
+    let original = control.request(serde_json::json!({"Launch":"creation-original-running"}));
+    assert!(original["launch_result"]["error"].is_null(), "{original}");
+    let target = original["control_target"].clone();
+    drop(control);
+    let mut dashboard = Dashboard::open_with_path(
+        &fixture.repository,
+        &fixture.state(),
+        Some(tools.as_os_str()),
+    );
+    dashboard.wait("Process: Running");
+    dashboard.send(b"N");
+    dashboard.wait("New independent workspace");
+    // No title: explicitly choose local main, retain generated branch/folder,
+    // supply an optional first prompt and choose Create and start.
+    dashboard.send(b"main\t\t\tFix lambda parser");
+    dashboard.send(&[0x13]);
+    dashboard.wait("Creation receipt");
+    dashboard.wait("Phase: Created");
+    dashboard.kill();
+    let mut control = Controller::connect(&fixture);
+    let created = wait(&mut control, &|s| {
+        s["creation"]["launches"]
+            .as_array()
+            .is_some_and(|r| r.iter().any(|r| r["result"]["identity"].is_string()))
+    });
+    assert_eq!(
+        created["control_target"], target,
+        "late creation must preserve selected running workspace"
+    );
+    assert_eq!(created["lifecycle"], "Running");
+    let receipt = created["creation"]["records"][0].clone();
+    assert_eq!(receipt["commit"], commit);
+    let request = receipt["intent"]["request"].clone();
+    let folder = PathBuf::from(std::ffi::OsString::from_vec(
+        receipt["intent"]["path"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|b| b.as_u64().unwrap() as u8)
+            .collect(),
+    ));
+    assert!(folder.starts_with(fixture.state().join("workspaces")));
+    assert!(!folder.starts_with(&fixture.repository));
+    let session = created["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["task"] == request)
+        .unwrap();
+    let new_target = session["target"].clone();
+    assert_ne!(new_target, target);
+    control.request(serde_json::json!({"CreateWorkspace":receipt["intent"]}));
+    control.request(serde_json::json!({"RecoverCreation":{"request":request,"local":false}}));
+    control.request(serde_json::json!({"SelectSession":new_target}));
+    let native = wait(&mut control, &|s| {
+        s["screen"]
+            .as_str()
+            .unwrap_or("")
+            .contains("<--><Fix lambda parser>")
+    });
+    assert!(
+        native["screen"]
+            .as_str()
+            .unwrap()
+            .contains(&format!("creation-cwd:{}", folder.display())),
+        "{native}"
+    );
+    assert_eq!(std::fs::read_to_string(&marker).unwrap(), "once\n");
+    control.request(serde_json::json!({"SelectSession":target}));
+    // Codex is deliberately absent from this owner's isolated PATH. Native exec
+    // failure must keep its completed workspace and durable original outcome.
+    let failed_request = uuid::Uuid::new_v4().to_string();
+    let failed_folder = fixture.temp.path().join("failed native workspace");
+    let mut failed = receipt["intent"].clone();
+    failed["request"] = serde_json::json!(failed_request);
+    failed["branch"] = serde_json::json!("workspace/failed-native");
+    failed["path"] = serde_json::json!(failed_folder.as_os_str().as_bytes());
+    failed["agent"] = serde_json::json!("Codex");
+    control.request(serde_json::json!({"CreateWorkspace":failed}));
+    let failure = wait(&mut control, &|s| {
+        s["creation"]["launches"].as_array().is_some_and(|r| {
+            r.iter()
+                .any(|r| r["request"] == failed_request && r["result"]["error"].is_string())
+        })
+    });
+    assert_eq!(failure["control_target"], target);
+    assert_eq!(failure["lifecycle"], "Running");
+    assert!(failed_folder.join(".git").exists());
+    assert_eq!(failure["creation"]["records"][1]["phase"], "Created");
+    control.request(serde_json::json!({"CreateWorkspace":failed}));
+    control
+        .request(serde_json::json!({"RecoverCreation":{"request":failed_request,"local":false}}));
+    assert_eq!(
+        git(&["worktree", "list", "--porcelain"])
+            .matches("worktree ")
+            .count(),
+        3
+    );
+    assert_eq!(std::fs::read_to_string(&marker).unwrap(), "once\n");
+    assert_eq!(
+        failure["registry"]["projects"],
+        registered["registry"]["projects"]
+    );
+    control.request_now(serde_json::json!("Shutdown"));
+    wait(&mut control, &|s| s["stopped"] == true);
+    drop(control);
+    owner.0.wait().unwrap();
+}
