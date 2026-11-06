@@ -641,6 +641,26 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                 state.output_bytes,
             );
         }
+        if let Some(id) = codex_monitor.as_ref().and_then(|m| m.native_session())
+            && state.native_conversation.as_deref() != Some(id)
+            && uuid::Uuid::parse_str(id).is_ok()
+        {
+            let mut saved = state.clone();
+            saved.native_conversation = Some(id.to_owned());
+            if storage
+                .commands
+                .try_send(crate::persistence::Command::Save(
+                    crate::persistence::metadata(&saved),
+                    checkout.as_ref().map(|p| path_bytes(p)),
+                    task_identity.clone(),
+                ))
+                .is_ok()
+            {
+                state.native_conversation = saved.native_conversation;
+                save_pending += 1;
+                state.metadata_pending = true;
+            }
+        }
         // Accept/reject independently of the active client's commands or output.
         for _ in 0..if pending_launch.is_some() || gate_receipt.is_some() || outcome_reply {
             0
@@ -799,6 +819,8 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     if checkout.as_ref() != Some(&path) {
                         state.identity = None;
                         state.lifecycle = Lifecycle::Idle;
+                        state.native_conversation = None;
+                        state.agent = None;
                         task_identity = uuid::Uuid::new_v4().to_string();
                     }
                     state.adopted = Some(path.display().to_string());
@@ -830,6 +852,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                         return Err("Native resume unavailable: no supported saved conversation identity. h opens retained history; c Claude / x Codex explicitly starts a new conversation.".into());
                     }
                     if !continuing {
+                        if !resume { state.native_conversation = None; }
                         state.execution = Some(crate::recovery::Execution::prepared()?);
                         state.reconciled = false;
                         let session = uuid::Uuid::new_v4().to_string();
@@ -887,7 +910,8 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     codex_monitor = None;
                     state.status = crate::native_status::Status::default();
                     if codex {
-                        let status_monitor = crate::codex_status::Monitor::start(directory)?;
+                        let mut status_monitor = crate::codex_status::Monitor::start(directory)?;
+                        if resume { status_monitor.expect_session(state.native_conversation.as_ref().unwrap()); }
                         status_monitor.configure(&mut command)?;
                         codex_monitor = Some(status_monitor);
                     } else {

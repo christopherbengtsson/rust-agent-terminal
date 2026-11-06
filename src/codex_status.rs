@@ -79,6 +79,9 @@ impl Monitor {
             stopped_boundary: None,
         })
     }
+    pub fn expect_session(&mut self, session: &str) {
+        self.session = Some(session.to_owned());
+    }
     pub fn native_session(&self) -> Option<&str> {
         self.session.as_deref()
     }

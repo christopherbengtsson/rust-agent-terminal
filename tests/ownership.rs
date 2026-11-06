@@ -839,6 +839,8 @@ fn stopped_history_survives_restart_and_missing_checkout_without_launching() {
     .unwrap();
     let mut restored = fixture.open();
     restored.wait("Process: Exited");
+    restored.send(b"v");
+    restored.wait("Checkout unavailable: cannot continue in place");
     restored.send(b"h");
     restored.wait("Retained history");
     restored.wait("received: retained-context-08");
@@ -1556,6 +1558,118 @@ fn codex_status_requires_current_attributed_evidence_despite_liveness_and_prose(
             .wait("semantic status: unknown")
             .contains("Process: Running")
     );
+    dashboard.send(&[0x1d]);
+    dashboard.send(b"q");
+}
+
+#[test]
+fn codex_native_identity_survives_exit_and_resume_uses_original_id_without_new_prompt() {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = Fixture::new();
+    let tools = fixture.temp.path().join("native-tools");
+    std::fs::create_dir(&tools).unwrap();
+    let python = Command::new("which").arg("python3").output().unwrap();
+    let python = String::from_utf8(python.stdout).unwrap();
+    let wrapper = tools.join("codex");
+    let script = r#"import sys,os,re,json,shlex,subprocess
+args=sys.argv[1:]
+id='11111111-2222-4333-8444-555555555555'
+if 'resume' in args:
+    assert args[args.index('resume')+1]==id,args
+    assert '--no-daemon' in args,args
+    print('resumed-original-id-without-followup',flush=True)
+for arg in args:
+    if arg.startswith('hooks.SessionStart='):
+        helper=json.loads(re.search(r'command=("(?:[^"\\]|\\.)*")',arg).group(1))
+        subprocess.run(shlex.split(helper),input=json.dumps({'hook_event_name':'SessionStart','session_id':id}).encode(),check=True)
+os.execv(sys.argv[0]+'.child',[sys.argv[0]+'.child'])
+"#;
+    std::fs::write(&wrapper, format!("#!{}\n{script}", python.trim())).unwrap();
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let child = tools.join("codex.child");
+    std::fs::write(
+        &child,
+        format!(
+            "#!/bin/sh\nexec '{}' --scripted-child\n",
+            env!("CARGO_BIN_EXE_agent-terminal").replace('\'', "'\\''")
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(child, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let path = std::env::join_paths(
+        std::iter::once(tools).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+    )
+    .unwrap();
+    let mut dashboard =
+        Dashboard::open_with_path(&fixture.repository, &fixture.state(), Some(&path));
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted");
+    dashboard.send(b"x");
+    dashboard.wait("fixture>");
+    dashboard.send(b"original-readable-context-16\r");
+    dashboard.wait("received: original-readable-context-16");
+    dashboard.send(b"exit\r");
+    dashboard.wait("Process: Exited");
+    dashboard.kill();
+    let mut control = Controller::connect(&fixture);
+    assert_eq!(
+        control.greeting["native_conversation"],
+        "11111111-2222-4333-8444-555555555555"
+    );
+    let old_identity = control.greeting["identity"].clone();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while control.request(serde_json::json!("Screen"))["metadata_pending"] != false {
+        assert!(Instant::now() < deadline);
+    }
+    kill_owner(&fixture);
+    drop(control);
+    let mut dashboard =
+        Dashboard::open_with_path(&fixture.repository, &fixture.state(), Some(&path));
+    dashboard.wait("Process: Exited");
+    dashboard.kill();
+    let control = Controller::connect(&fixture);
+    assert_eq!(
+        control.greeting["native_conversation"],
+        "11111111-2222-4333-8444-555555555555"
+    );
+    assert_eq!(control.greeting["identity"], old_identity);
+    assert_no_owned_coding(&fixture);
+    drop(control);
+    let mut dashboard =
+        Dashboard::open_with_path(&fixture.repository, &fixture.state(), Some(&path));
+    dashboard.wait("Process: Exited");
+    dashboard.send(b"v");
+    dashboard.wait("resumed-original-id-without-followup");
+    dashboard.wait("fixture>");
+    dashboard.send(b"exit\r");
+    dashboard.wait("Process: Exited");
+    dashboard.send(b"h");
+    dashboard.send(b"n");
+    dashboard.wait("received: original-readable-context-16");
+    dashboard.send(b"q");
+}
+
+#[test]
+fn unavailable_native_recovery_retains_history_until_explicit_new_conversation() {
+    let fixture = Fixture::new();
+    let mut dashboard = fixture.open();
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted");
+    dashboard.send(b"l");
+    dashboard.wait("fixture>");
+    dashboard.send(b"independent-history-16\r");
+    dashboard.wait("received: independent-history-16");
+    dashboard.send(b"exit\r");
+    dashboard.wait("Process: Exited");
+    dashboard.send(b"v");
+    dashboard.wait("Native resume unavailable: no supported saved conversation identity");
+    dashboard.send(b"h");
+    dashboard.wait("received: independent-history-16");
+    dashboard.send(b"h");
+    dashboard.send(b"l");
+    dashboard.wait("fixture>");
     dashboard.send(&[0x1d]);
     dashboard.send(b"q");
 }
