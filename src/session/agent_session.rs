@@ -438,27 +438,34 @@ impl AgentSession {
                 self.retry_requested = false;
             }
         }
-        let progress = storage.progress.lock().unwrap().clone();
+        let progress = storage.progress_for(
+            self.state
+                .session_identity
+                .as_ref()
+                .map(|identity| identity.session.as_str()),
+        );
         self.state.capacity = progress.capacity.clone();
-        self.state.accepted_bytes = progress.accepted;
-        self.state.written_bytes = progress.written;
-        self.state.storage_wait_millis = progress
-            .operation
-            .map_or(0, |(_, since)| since.elapsed().as_millis() as u64);
-        self.state.producer_wait_millis = progress
-            .producer_wait
-            .map_or(0, |since| since.elapsed().as_millis() as u64);
-        self.state.storage_error = progress.error.clone();
-        self.state.capture_pending_bytes = progress.pending_bytes;
-        self.state.capture_high_water = progress.pending_high_water;
-        self.state.capture_backpressure_count = progress.backpressure_count;
-        self.state.capture_backpressure_micros = progress.backpressure_micros;
-        self.state.durable_bytes = progress.durable;
-        self.state.durable_flush_count = progress.flush_count;
-        self.state.durable_commits.clone_from(&progress.commits);
-        self.state.durable_completed_millis = progress.completed_millis;
-        self.state.sync_commit_micros = progress.last_flush_micros;
-        self.state.accepted_to_durable_millis = progress.accepted_to_durable_millis;
+        if !self.history.history_sealed {
+            self.state.accepted_bytes = progress.accepted;
+            self.state.written_bytes = progress.written;
+            self.state.storage_wait_millis = progress
+                .operation
+                .map_or(0, |(_, since)| since.elapsed().as_millis() as u64);
+            self.state.producer_wait_millis = progress
+                .producer_wait
+                .map_or(0, |since| since.elapsed().as_millis() as u64);
+            self.state.storage_error = progress.error.clone();
+            self.state.capture_pending_bytes = progress.pending_bytes;
+            self.state.capture_high_water = progress.pending_high_water;
+            self.state.capture_backpressure_count = progress.backpressure_count;
+            self.state.capture_backpressure_micros = progress.backpressure_micros;
+            self.state.durable_bytes = progress.durable;
+            self.state.durable_flush_count = progress.flush_count;
+            self.state.durable_commits.clone_from(&progress.commits);
+            self.state.durable_completed_millis = progress.completed_millis;
+            self.state.sync_commit_micros = progress.last_flush_micros;
+            self.state.accepted_to_durable_millis = progress.accepted_to_durable_millis;
+        }
 
         self.state.metadata_pending = self.writes.metadata_pending()
             || self.metadata_failed
@@ -672,7 +679,12 @@ impl AgentSession {
     ) {
         let directory = self.directory.clone();
         let directory = directory.as_path();
-        let progress = storage.progress.lock().unwrap().clone();
+        let progress = storage.progress_for(
+            self.state
+                .session_identity
+                .as_ref()
+                .map(|identity| identity.session.as_str()),
+        );
         let mut deferred = false;
         if !matches!(request, Request::Screen) && !self.metadata_failed {
             self.state.error = None;
@@ -781,7 +793,7 @@ impl AgentSession {
                 }
                 Request::QueryLaunch(_) => return Err("Launch request unknown to this supervisor; do not replay uncertain activity after supervisor loss".into()),
                 Request::Launch(request) | Request::LaunchClaude(request) | Request::LaunchCodex(request) | Request::Resume(request) => {
-                    if !continuing && self.execution.child.is_none() && self.execution.stopping.is_none() && (!self.history.eof || self.history.capture_done.is_some() || self.history.flush_pending || storage.progress.lock().unwrap().pending_bytes > 0 || self.metadata_failed || (matches!(self.state.lifecycle, Lifecycle::Stopped | Lifecycle::Exited | Lifecycle::Failed) && !self.history.final_flush)) {
+                    if !continuing && self.execution.child.is_none() && self.execution.stopping.is_none() && (!self.history.eof || self.history.capture_done.is_some() || self.history.flush_pending || storage.progress_for(self.state.session_identity.as_ref().map(|identity| identity.session.as_str())).pending_bytes > 0 || self.metadata_failed || (matches!(self.state.lifecycle, Lifecycle::Stopped | Lifecycle::Exited | Lifecycle::Failed) && !self.history.final_flush)) {
                         return Err("Previous session history is still pending; repair storage and press y to retry before starting another session".into());
                     }
                     if self.state.execution.is_some() && !continuing && self.execution.child.is_none() { return Err("Interrupted execution is uncertain; u reconciles process evidence. Verified reboot resolves unknown descendants; no automatic coding restart.".into()); }
@@ -1011,9 +1023,9 @@ impl AgentSession {
                     self.history.history_sealed = false;
                     self.history.seal_pending = false;
                     let session = self.state.session_identity.as_ref().ok_or("Missing prepared identity")?.session.clone();
-                    let capture = storage.output.clone();
                     launch_setup_fault(directory, "before-capture")?;
                     let mut source = self.execution.master.as_ref().unwrap().lock().unwrap().try_clone_reader()?;
+                    let capture = storage.capture_for(&session)?;
                     self.history.capture_started_here = true;
                     let (finished, done) = mpsc::sync_channel(1);
                     self.history.capture_done = Some(done);
@@ -1327,7 +1339,15 @@ impl AgentSession {
             || self.execution.stopping.is_some()
             || !self.history.eof
             || self.history.capture_done.is_some()
-            || storage.progress.lock().unwrap().pending_bytes > 0)
+            || storage
+                .progress_for(
+                    self.state
+                        .session_identity
+                        .as_ref()
+                        .map(|identity| identity.session.as_str()),
+                )
+                .pending_bytes
+                > 0)
             && !same_checkout
         {
             return Err("Stop the existing session before adopting another checkout".into());
