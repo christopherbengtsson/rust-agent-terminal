@@ -174,3 +174,41 @@ unpaced input delivery. Probe logs are local temporary files under
 `/tmp/rat-status-0690026-*`; the final focused run is
 `/tmp/rat-status-paste-final-focused.log`. A new frozen full aggregate is required
 after the fixture correction before claiming an aggregate pass.
+
+## Previously unreached screen and interaction preflights
+
+After completed ticket 14 was integrated, source `9423bc3` ran the two integration
+binaries that the failed ownership aggregates had never reached. The screen
+preflight failed its unchanged initial `size: 104x32` assertion: the child still
+had the new owner's default 100x24 geometry. The scripted interaction preflight
+failed twice waiting for `paste plain`, after earlier input/cursor assertions had
+passed. These failures were retained in
+`/tmp/rat-compat-screen-preflight.log`,
+`/tmp/rat-compat-scripted-preflight.log` and
+`/tmp/rat-compat-scripted-preflight-repeat.log`.
+
+The viewport acknowledgement remembered only dimensions. A resize accepted by the
+old owner during adoption could therefore suppress the same-sized new owner's
+resize. The cache now also identifies its exact control target, native session
+and whether its real PTY is running, while retaining queue-full retry and unusable
+geometry behavior. The adoption state test was strengthened by accepting an old
+owner's resize while adoption was pending, then requiring a new targeted resize
+before its explicit launch. A new state test covers prepared/new conversation and
+real-PTY readiness. Both went red with the previous acknowledgement policy; all
+22 App state tests then passed.
+
+The actual launch seam also records `/bin/stty size` in a Codex fixture wrapper
+before executing the scripted child, without waiting for a later size command.
+With dimensions-only acknowledgement it recorded 24 rows/100 columns and failed;
+the corrected acknowledgement recorded 32/104 and passed in 1.40 seconds. The
+original screen test then passed its exact startup, resize, styled/wide-cell,
+alternate-screen, focus, detach and reconnect assertions in 10.47 seconds.
+Changing only the viewport acknowledgement also made the unchanged scripted
+interaction test pass in 30.60 seconds: its native 24-row screen had hidden the
+later paste receipt below the dashboard's 22-row pane. No scripted input, quoting,
+paste, byte-equality, status or focus assertion was changed for this correction.
+The local green logs are `/tmp/rat-viewport-startup-green.log`,
+`/tmp/rat-compat-screen-viewport-fixed.log` and
+`/tmp/rat-compat-scripted-viewport-fixed.log`; the startup red log is
+`/tmp/rat-viewport-startup-red.log`. These are real PTY fixture results, not a new
+native CLI/version qualification. The final combined full gate remains required.

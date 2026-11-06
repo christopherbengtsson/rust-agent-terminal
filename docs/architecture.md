@@ -982,8 +982,12 @@ the original failure and the final fix/retest boundary when available.
 
 `events` defines the canonical dashboard effects, session requests, observations,
 launch results and lifecycle vocabulary. `App` accepts usable dimensions from
-`Ui`, remembers successful resize dispatch and retries a saturated bounded queue
-on the next frame. `main` only dispatches that effect and returns its result.
+`Ui`, remembers successful resize dispatch for the exact control target, native
+conversation, execution readiness and dimensions, and retries a saturated bounded
+queue on the next frame. A previous owner cannot satisfy a new owner's resize;
+the adopted parser receives its viewport before launch, and a newly running PTY
+receives it again if preparation already accepted that geometry. `main` only
+dispatches that effect and returns its result.
 The launch-intent helper shares request identity policy across explicit fixture,
 Claude, Codex and resume actions. Persistence commands retain their separate
 prepare/authorize/save meanings while carrying one named metadata snapshot.

@@ -8,6 +8,14 @@ use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 pub use crate::events::Effect;
 
+#[derive(PartialEq)]
+struct Viewport {
+    owner: String,
+    session: Option<String>,
+    running: bool,
+    dimensions: (u16, u16),
+}
+
 pub struct App {
     pub diff: Option<crate::working_diff::View>,
     pub workspaces_open: bool,
@@ -38,8 +46,8 @@ pub struct App {
     pub loading: bool,
     pub discovery_request: u64,
     pub error: Option<String>,
-    sent_viewport: Option<(u16, u16)>,
-    pending_viewport: Option<(u16, u16)>,
+    sent_viewport: Option<Viewport>,
+    pending_viewport: Option<Viewport>,
 }
 
 impl App {
@@ -85,10 +93,22 @@ impl App {
         if !self.selected_target.is_empty() && self.selected_target != self.session.control_target {
             return None;
         }
-        if self.sent_viewport == Some(dimensions) {
+        let viewport = Viewport {
+            owner: self.session.control_target.clone(),
+            session: self
+                .session
+                .session_identity
+                .as_ref()
+                .map(|identity| identity.session.clone()),
+            // Creation can finish after a resize updated only its prepared parser.
+            // Reapply that geometry when the actual native PTY becomes running.
+            running: self.session.lifecycle == crate::events::Lifecycle::Running,
+            dimensions,
+        };
+        if self.sent_viewport.as_ref() == Some(&viewport) {
             return None;
         }
-        self.pending_viewport = Some(dimensions);
+        self.pending_viewport = Some(viewport);
         Some(self.session_effect(Request::Resize {
             rows: dimensions.0,
             cols: dimensions.1,
@@ -1072,6 +1092,8 @@ mod tests {
             adoption_pending: true,
             ..Observation::default()
         });
+        assert!(app.viewport(Some((24, 100))).is_some());
+        app.viewport_dispatched(Ok(()));
         app.observe_session(Observation {
             control_target: "new-owner".into(),
             adopted: Some("other".into()),
@@ -1082,6 +1104,47 @@ mod tests {
         assert!(
             matches!(app.viewport(Some((24,100))), Some(Effect::Session(Request::Session { target, .. })) if target == "new-owner")
         );
+        app.viewport_dispatched(Ok(()));
+        assert!(
+            matches!(app.input(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE)), Some(Effect::Session(Request::Session { target, session: None, command })) if target == "new-owner" && matches!(*command, Request::Launch(_)))
+        );
+    }
+
+    #[test]
+    fn viewport_acknowledgement_is_bound_to_conversation_and_execution_readiness() {
+        let mut app = App::new("repo".into());
+        let state = |session: Option<&str>, lifecycle| Observation {
+            control_target: "owner-a".into(),
+            session_identity: session.map(|session| crate::events::SessionIdentity {
+                task: "workspace-a".into(),
+                session: session.into(),
+                request: "launch-a".into(),
+            }),
+            lifecycle,
+            ..Observation::default()
+        };
+        app.observe_session(state(None, crate::events::Lifecycle::Idle));
+        assert!(app.viewport(Some((32, 104))).is_some());
+        app.viewport_dispatched(Ok(()));
+        assert!(app.viewport(Some((32, 104))).is_none());
+        app.observe_session(state(
+            Some("new-conversation"),
+            crate::events::Lifecycle::Interrupted,
+        ));
+        assert!(
+            matches!(app.viewport(Some((32, 104))), Some(Effect::Session(Request::Session { target, session: Some(session), .. })) if target == "owner-a" && session == "new-conversation")
+        );
+        app.viewport_dispatched(Ok(()));
+        app.observe_session(state(
+            Some("new-conversation"),
+            crate::events::Lifecycle::Running,
+        ));
+        assert!(
+            app.viewport(Some((32, 104))).is_some(),
+            "the created PTY must receive the current geometry even if preparation already accepted it"
+        );
+        app.viewport_dispatched(Ok(()));
+        assert!(app.viewport(Some((32, 104))).is_none());
     }
 
     #[test]
