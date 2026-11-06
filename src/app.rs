@@ -152,6 +152,9 @@ impl App {
                 self.detached = true;
                 return Some(Effect::Detach);
             }
+            KeyCode::Char('u') if key.modifiers.is_empty() => {
+                return Some(Effect::Session(Request::Reconcile));
+            }
             KeyCode::Char('s') if key.modifiers.is_empty() => {
                 return Some(Effect::Session(Request::Stop));
             }
@@ -215,6 +218,8 @@ impl App {
     pub fn keyboard_help(&self) -> &'static str {
         if self.attached {
             "Native input · Ctrl-C interrupt · Ctrl-] / Ctrl-5 dashboard (keeps session running)"
+        } else if self.session.lifecycle == crate::session::Lifecycle::Interrupted {
+            "u reconcile execution · h history · d detach · q quit/stop · j/k select · r refresh"
         } else if self.history_open {
             "q quit/stop/retry · s stop · h live · n/p session · [/] page · j/k scroll · d detach"
         } else {
