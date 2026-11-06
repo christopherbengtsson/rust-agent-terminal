@@ -231,7 +231,7 @@ impl App {
         } else if self.history_open {
             "q quit/stop/retry · s stop · h live · n/p session · [/] page · j/k scroll · d detach"
         } else {
-            "q quit/stop · v resume · c new Claude · x new Codex · h history · a adopt · Enter attach · s stop · d detach"
+            "q quit/stop · v resume · c new Claude · x new Codex · a adopt · Enter attach · h history · s stop · d detach · j/k · r refresh"
         }
     }
 
