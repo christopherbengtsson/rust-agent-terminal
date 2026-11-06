@@ -3295,11 +3295,13 @@ impl LiveDashboard {
         }
     }
     fn wait(&self, needle: &str) -> (String, u64) {
-        self.observe(needle, Duration::from_secs(8))
-            .unwrap_or_else(|| {
-                let screen = self.latest.lock().unwrap().0.clone();
-                panic!("missing {needle}: {screen}")
-            })
+        self.wait_for(needle, Duration::from_secs(8))
+    }
+    fn wait_for(&self, needle: &str, timeout: Duration) -> (String, u64) {
+        self.observe(needle, timeout).unwrap_or_else(|| {
+            let screen = self.latest.lock().unwrap().0.clone();
+            panic!("missing {needle}: {screen}")
+        })
     }
 }
 impl Drop for LiveDashboard {
@@ -3307,6 +3309,31 @@ impl Drop for LiveDashboard {
         self.dashboard.kill();
         if let Some(collector) = self.collector.take() {
             collector.join().unwrap();
+        }
+    }
+}
+
+struct FailedMeasurementEvidence {
+    state: PathBuf,
+    evidence: PathBuf,
+}
+impl Drop for FailedMeasurementEvidence {
+    fn drop(&mut self) {
+        if self.evidence.join("history.sqlite3").exists() {
+            return;
+        }
+        let partial = self.evidence.join("failure-snapshot");
+        if std::fs::create_dir(&partial).is_err() {
+            return;
+        }
+        let _=std::fs::write(partial.join("NOTE.txt"),"Failure-time best-effort snapshot; owner may still be writing. JSONL can have an incomplete final line. Not a quiescent durability snapshot.
+");
+        if let Ok(entries) = std::fs::read_dir(&self.state) {
+            for entry in entries.flatten() {
+                if entry.file_type().is_ok_and(|kind| kind.is_file()) {
+                    let _ = std::fs::copy(entry.path(), partial.join(entry.file_name()));
+                }
+            }
         }
     }
 }
@@ -3340,12 +3367,17 @@ fn paced_session_measurement17() {
     let fixture = Fixture::new();
     let preflight = std::env::var_os("RAT_MEASURE17_QUICK").is_some();
     let phase_ms = if preflight { 4000 } else { 60000 };
+    let attached_ms = if preflight { 4000 } else { 90000 };
     let attach_samples = if preflight { 5 } else { 100 };
     let navigation_samples = if preflight { 10 } else { 200 };
     let evidence = PathBuf::from(
         std::env::var_os("RAT_MEASURE17_DIR").expect("set unique evidence directory"),
     );
     std::fs::create_dir(&evidence).unwrap();
+    let _failure_evidence = FailedMeasurementEvidence {
+        state: fixture.state(),
+        evidence: evidence.clone(),
+    };
     let raw = Arc::new(Mutex::new(
         std::fs::OpenOptions::new()
             .create_new(true)
@@ -3356,7 +3388,7 @@ fn paced_session_measurement17() {
     let log = |value: serde_json::Value| writeln!(raw.lock().unwrap(), "{value}").unwrap();
     // These are run parameters, not product capacity promises.
     log(
-        serde_json::json!({"kind":"manifest","revision":String::from_utf8(Command::new("git").args(["rev-parse","HEAD"]).output().unwrap().stdout).unwrap().trim(),"dirty":!Command::new("git").args(["diff","HEAD","--quiet"]).status().unwrap().success(),"profile":"debug","outer_terminal":"portable-pty + vt100 0.18.1; no graphical terminal/pixel latency","outer_geometry":[40,160],"healthy_duration_ms":phase_ms,"preflight_only":preflight,"healthy_rate_Bps":65536,"record_bytes":1024,"style_mix":"each record: cursor position/erase, green SGR, lambda+CJK UTF8, padded X; raw termios","navigation_samples":navigation_samples,"attach_samples":attach_samples,"rss_period_ms":1000,"lag_ms":phase_ms,"slow_write_ms":50,"slow_fault_navigation_samples":if preflight {4} else {20},"full_fault_dwell_ms":if preflight {5000} else {30000},"session_geometry_initial":[32,104],"slow_subscriber_geometry":[80,200],"fault":"debug write ENOSPC marker, not real volume exhaustion","caps":{"capture_bytes":270336,"stop_tail_bytes":1048576,"stop_tail_blocks":256,"conservative_stop_pending_cap":1318912,"storage_commands":16,"storage_events":16,"input_commands":32,"client_requests":32,"client_latest":1,"outer_blocks":8,"outer_block_bytes":4096,"frame_bytes":4194304,"commit_records":1024,"chunk_bytes":65536,"screen_max":[80,200],"scrollback":0},"instrumentation":"continuous latest screen parser/mutex; 1ms observation poll; fixture per-record and input JSONL; bounded commit ring; ps 1s, actual sampler durations recorded"}),
+        serde_json::json!({"kind":"manifest","revision":String::from_utf8(Command::new("git").args(["rev-parse","HEAD"]).output().unwrap().stdout).unwrap().trim(),"dirty":!Command::new("git").args(["diff","HEAD","--quiet"]).status().unwrap().success(),"profile":"debug","outer_terminal":"portable-pty + vt100 0.18.1; no graphical terminal/pixel latency","outer_geometry":[40,160],"healthy_duration_ms":phase_ms,"attached_duration_ms":attached_ms,"preflight_only":preflight,"healthy_rate_Bps":65536,"record_bytes":1024,"style_mix":"each record: cursor position/erase, green SGR, lambda+CJK UTF8, padded X; raw termios","navigation_samples":navigation_samples,"attach_samples":attach_samples,"rss_period_ms":1000,"lag_ms":phase_ms,"slow_write_ms":50,"slow_fault_navigation_samples":if preflight {4} else {20},"full_fault_dwell_ms":if preflight {5000} else {30000},"session_geometry_initial":[32,104],"slow_subscriber_geometry":[80,200],"fault":"debug write ENOSPC marker, not real volume exhaustion","caps":{"capture_bytes":270336,"stop_tail_bytes":1048576,"stop_tail_blocks":256,"conservative_stop_pending_cap":1318912,"storage_commands":16,"storage_events":16,"input_commands":32,"client_requests":32,"client_latest":1,"outer_blocks":8,"outer_block_bytes":4096,"frame_bytes":4194304,"commit_records":1024,"chunk_bytes":65536,"screen_max":[80,200],"scrollback":0},"instrumentation":"continuous latest screen parser/mutex; 1ms observation poll; fixture per-record and input JSONL; bounded commit ring; ps 1s, actual sampler durations recorded"}),
     );
     let binary_hash = Command::new("shasum")
         .args(["-a", "256", env!("CARGO_BIN_EXE_agent-terminal")])
@@ -3528,7 +3560,7 @@ fn paced_session_measurement17() {
     }
     dashboard.send(b"\r");
     dashboard.wait("Focus: session");
-    dashboard.send(format!("pace17 1 {phase_ms} 65536\r").as_bytes());
+    dashboard.send(format!("pace17 1 {attached_ms} 65536\r").as_bytes());
     dashboard.wait("pace17 run=1");
     for sample in 0..attach_samples {
         dashboard.send(&[0x1d]);
@@ -3549,7 +3581,10 @@ fn paced_session_measurement17() {
         );
         std::thread::sleep(Duration::from_millis(150));
     }
-    dashboard.wait("pace17-complete run=1");
+    dashboard.wait_for(
+        "pace17-complete run=1",
+        Duration::from_millis(attached_ms + 8000),
+    );
     dashboard.send(format!("pace17 2 {phase_ms} 65536\r").as_bytes());
     dashboard.wait("pace17 run=2");
     dashboard.send(&[0x1d]);
@@ -3576,7 +3611,10 @@ fn paced_session_measurement17() {
         std::thread::sleep(Duration::from_millis(150));
     }
     dashboard.send(b"\r");
-    dashboard.wait("pace17-complete run=2");
+    dashboard.wait_for(
+        "pace17-complete run=2",
+        Duration::from_millis(phase_ms + 8000),
+    );
     log(
         serde_json::json!({"kind":"parser-cost","mode":"healthy","batches_totalus_maxus":*dashboard.parse_cost.lock().unwrap()}),
     );

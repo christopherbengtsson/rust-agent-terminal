@@ -9,7 +9,8 @@ Native Claude/Codex compatibility remains the separate versioned native proof.
 The final manifest is the first line of `observations.jsonl` in the final raw
 archive. It precedes production and includes source revision/dirty state, binary
 SHA256, hardware/OS/Rust/profile, geometry, rates, duration, sample counts, caps,
-style mix, fault delays and instrumentation. Five 60-second phases offer 64KiB/s
+style mix, fault delays and instrumentation. The attached phase lasts 90 seconds; dashboard focused, fully detached, slow
+subscriber and slow-storage phases last 60 seconds each. They offer 64KiB/s
 (attached, dashboard focused, fully detached, slow subscriber) or 256KiB/s with
 50ms per-append delay (slow storage). Full storage uses synthetic debug ENOSPC
 before the real append, a 30-second saturated dwell and explicit Stop/retry.
