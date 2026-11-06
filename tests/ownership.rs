@@ -1963,8 +1963,13 @@ fn codex_status_requires_current_attributed_evidence_despite_liveness_and_prose(
     dashboard.send(b"x");
     dashboard.wait("fixture>");
     dashboard.wait("Codex evidence unavailable");
-    dashboard.send(b"Conversation interrupted; Worked for 3s; approval needed\r");
+    // The negative status payload is a real paste, not an unpaced key flood.
+    // This fixture echoes input literally, so disable its child-side wrappers.
+    dashboard.send(b"paste-off\r");
+    dashboard.wait("paste plain");
+    dashboard.send(b"\x1b[200~Conversation interrupted; Worked for 3s; approval needed\x1b[201~\r");
     dashboard.wait("received: Conversation interrupted");
+    dashboard.wait("received: Conversation interrupted; Worked for 3s; approval needed");
     assert!(
         dashboard
             .wait("semantic status: unknown")
