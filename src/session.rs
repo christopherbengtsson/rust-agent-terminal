@@ -1328,6 +1328,7 @@ pub fn scripted_child() -> io::Result<()> {
                     print!("fixture> ");
                 } else if line == b"flood13" {
                     flood_run += 1;
+                    let start_ns = fixture_clock()?;
                     let since = Instant::now();
                     let mut max_write_micros = 0;
                     let payload = "X".repeat(111);
@@ -1340,8 +1341,9 @@ pub fn scripted_child() -> io::Result<()> {
                     }
                     writeln!(
                         stdout,
-                        "flood13-complete run={flood_run} bytes=4194304 elapsed_us={} max_write_us={max_write_micros}\r",
-                        since.elapsed().as_micros()
+                        "flood13-complete run={flood_run} bytes=4194304 elapsed_us={} max_write_us={max_write_micros} start_ns={start_ns} finish_ns={}\r",
+                        since.elapsed().as_micros(),
+                        fixture_clock()?
                     )?;
                     write!(stdout, "fixture> ")?;
                 } else if line == b"history-bulk" {
@@ -1392,6 +1394,18 @@ pub fn scripted_child() -> io::Result<()> {
     }
     print!("\x1b[?2004l");
     io::stdout().flush()
+}
+
+fn fixture_clock() -> io::Result<u64> {
+    let mut time = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // SAFETY: writable timespec; the isolated fixture and harness share this kernel clock.
+    if unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut time) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(time.tv_sec as u64 * 1_000_000_000 + time.tv_nsec as u64)
 }
 
 fn ignore_term() {
