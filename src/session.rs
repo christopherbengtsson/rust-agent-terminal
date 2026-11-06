@@ -65,6 +65,8 @@ pub struct Observation {
     #[serde(default)]
     pub history_index: usize,
     #[serde(default)]
+    /// Durable raw prefix for the current session; output_bytes is owner-lifetime.
+    /// Baseline output_bytes at each launch before comparing these counters.
     pub durable_bytes: u64,
     #[serde(default)]
     pub metadata_pending: bool,
@@ -318,8 +320,28 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let listener = UnixListener::bind(&socket)?;
     fs::set_permissions(&socket, fs::Permissions::from_mode(0o600))?;
     listener.set_nonblocking(true)?;
-    let (storage, restored) = crate::persistence::Worker::start(directory)
-        .map_err(|e| io::Error::other(e.to_string()))?;
+    let (storage, restored) = match crate::persistence::Worker::start(directory) {
+        Ok(ready) => ready,
+        Err(error) => {
+            let failure = Observation {
+                error: Some(format!(
+                    "History storage unavailable: {error}; repair storage then reopen the dashboard"
+                )),
+                control_denied: true,
+                ..Observation::default()
+            };
+            let deadline = std::time::Instant::now() + Duration::from_secs(3);
+            while std::time::Instant::now() < deadline {
+                if let Ok((mut incoming, _)) = listener.accept() {
+                    let _ = send_observation(&mut incoming, &failure);
+                    break;
+                }
+                thread::sleep(Duration::from_millis(5));
+            }
+            fs::remove_file(&socket)?;
+            return Ok(());
+        }
+    };
     let mut state = restored.state;
     let mut task_identity = restored.task;
     if state.launch_request.is_empty() {
@@ -332,7 +354,15 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let mut checkout = restored
         .checkout
         .map(|bytes| PathBuf::from(std::ffi::OsString::from_vec(bytes)));
-    let mut save_pending = 0usize;
+    storage
+        .commands
+        .try_send(crate::persistence::Command::Save(
+            crate::persistence::metadata(&state),
+            checkout.as_ref().map(|p| path_bytes(p)),
+            task_identity.clone(),
+        ))?;
+    let mut save_pending = 1usize;
+    state.metadata_pending = true;
     let mut metadata_failed = false;
     let mut flush_pending = false;
     let mut final_flush = false;
@@ -463,8 +493,10 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     .is_ok()
                 {
                     save_pending += 1;
+                    state.metadata_pending = true;
                 } else {
                     metadata_failed = true;
+                    state.metadata_pending = true;
                     state.error = Some("Lifecycle metadata not saved; retry quit".into());
                     shutdown = false;
                 }
@@ -607,7 +639,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                         return Err("Launch request must contain 1–128 bytes".into());
                     }
                     if launches.len() >= 1024 {
-                        return Err("Launch request capacity reached; stop and restart the supervisor explicitly".into());
+                        return Err("Launch request capacity reached; retained outcomes are preserved and further launch is blocked".into());
                     }
                     state.launch_request = request.clone();
                     if child.is_some() || stopping.is_some() {
@@ -802,6 +834,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                 }
                 Err(error) => {
                     metadata_failed = true;
+                    state.metadata_pending = true;
                     state.error = Some(format!("Metadata not saved: {error}; retry"));
                     shutdown = false;
                 }

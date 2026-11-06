@@ -196,8 +196,10 @@ impl App {
     pub fn keyboard_help(&self) -> &'static str {
         if self.attached {
             "Native input · Ctrl-C interrupt · Ctrl-] / Ctrl-5 dashboard (keeps session running)"
+        } else if self.history_open {
+            "q quit/stop/retry · s stop · h live · n/p session · [/] page · j/k scroll · d detach"
         } else {
-            "h history · n/p session · [/] page · j/k select · r refresh · a adopt · c Claude · l fixture · Enter attach · s stop · d detach · q/Esc/Ctrl-C quit/stop"
+            "q quit/stop/retry · s stop · h history · j/k select · r refresh · a adopt · c Claude · l fixture · Enter attach · d detach"
         }
     }
 
