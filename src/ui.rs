@@ -95,7 +95,7 @@ impl Ui {
             draw_screen(frame, viewport, screen, app.attached);
         } else {
             frame.render_widget(
-                Paragraph::new("Adopt (a), then c Claude Code / l scripted fixture."),
+                Paragraph::new("Adopt (a), then c Claude Code / x Codex CLI / l scripted fixture."),
                 viewport,
             );
         }
@@ -135,7 +135,7 @@ impl Ui {
                     lines.push(Line::from(if app.session.identity.is_some() {
                         "  └ managed session · status unknown"
                     } else {
-                        "  └ adopted · c Claude / l fixture"
+                        "  └ adopted · c Claude / x Codex / l fixture"
                     }));
                 }
                 ListItem::new(lines)
@@ -209,7 +209,7 @@ impl Ui {
                     app.session
                         .identity
                         .as_deref()
-                        .unwrap_or("ready: c Claude / l fixture")
+                        .unwrap_or("ready: c Claude / x Codex / l fixture")
                 ),
                 Color::Cyan,
             )
@@ -256,7 +256,7 @@ impl Ui {
                 &compact_help
             } else {
                 compact_help = format!(
-                    "a adopt · c Claude · l fixture · Enter attach · s stop · d detach\nq quit/stop · Process: {:?} · status: unknown",
+                    "a adopt · c Claude · x Codex · l fixture · Enter attach · s stop · d detach\nq quit/stop · Process: {:?} · status: unknown",
                     app.session.lifecycle
                 );
                 &compact_help
@@ -427,6 +427,7 @@ mod tests {
             } else {
                 assert!(text.contains("Focus: dashboard"));
                 assert!(text.contains("Enter attach"));
+                assert!(text.contains("x Codex"));
                 assert!(text.contains("quit/stop"));
             }
         }
