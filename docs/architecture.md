@@ -623,6 +623,11 @@ The control queue stays independently bounded at 16 commands. Successful sealing
 releases that stream's live queue and handles. The owner retains its finalized
 byte counters and bounded commit evidence through the seal receipt and reconnect;
 an unfinished tail remains reserved.
+Accepted, written and durable counters describe the current managed-session stream,
+reset for its replacement and restore only its committed prefix. The separate
+`output_bytes` counter remains cumulative for that in-process owner's screen
+across conversations and restarts at zero on owner restoration; only it requires
+a launch baseline. Earlier M1 measurements retain their historical interpretation.
 Actual write/fsync syscall stalls still stall the sole writer for all streams.
 Native launch gates and Claude/Codex hook endpoints use distinct private short
 `/tmp/rat-<uid>-<nonce>` directories so simultaneous launches cannot replace one

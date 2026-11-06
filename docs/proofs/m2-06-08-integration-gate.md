@@ -212,3 +212,67 @@ The local green logs are `/tmp/rat-viewport-startup-green.log`,
 `/tmp/rat-compat-scripted-viewport-fixed.log`; the startup red log is
 `/tmp/rat-viewport-startup-red.log`. These are real PTY fixture results, not a new
 native CLI/version qualification. The final combined full gate remains required.
+
+
+## Scoped assembled closure (2026-11-07)
+
+The final frozen attempt included completed tickets 14 and 15 at source
+`5b3ab573f9123e9d110b0029ec637c8528ef4a4e`. Every target was prebuilt, source stayed
+clean, and every recorded executable hash matched afterward. Product SHA-256 was
+`53ac230a44608eac8b5859209768a906db96234328bd085309b930c4a0e99401`.
+The source-specific log is
+`/tmp/rat-coordination-compat-5b3ab57-all-targets-serial-nocapture.log`, ending
+`boundary_stable: true`. Units passed 74/ignored 2; editor passed 1/ignored 1;
+ownership passed 78/failed 1/ignored 2 in 498.68 seconds. Cargo exited 101 before
+scripted/screen targets. All runtime, capture, history, storage, migration, replay
+and geometry cases passed, including the complete numbered history. The sole
+failure was cleanup's unchanged `h history` assertion: editor help pushed that
+action beyond 160 columns. This aggregate remains failed.
+
+Correction `6e73aa294942874327e5df7b796237af30486d26` keeps History, Stop, Quit,
+attach/resume and live editing discoverable in concise contextual help. Rendered
+TestBackend regressions went red before correction and green afterward at 160x40
+and 60x18, asserting actual footer cells and unchanged viewports of 104x32 and
+58x11. Existing 120-column attach/Codex/resume/quit-stop checks remain unchanged;
+compact Failed stays visible in the existing title. History help correctly says
+`v raw/readable` even for Interrupted records. No layout dimensions, input action,
+status classification, capture or persistence behavior changed for this footer.
+
+The final assembled checks are:
+
+| Check | Result |
+| --- | --- |
+| Main unit target, including existing/new UI cases | 76 passed, 2 ignored |
+| Exact cleanup ownership case | passed, 2.44 seconds |
+| Scripted interaction target | passed, 30.54 seconds |
+| Screen target, including fixture-drop native cleanup | 2 passed, 10.64 seconds |
+| Locked build, format, all-target warnings-denied Clippy | passed |
+
+Final local logs are `/tmp/rat-compat-footer-units-final.log`,
+`/tmp/rat-compat-footer-cleanup-final.log`,
+`/tmp/rat-compat-footer-scripted-final.log` and
+`/tmp/rat-compat-footer-screen-final.log`. These are assembled checks after the
+sole footer failure, not a retroactive aggregate pass or one frozen binary
+interval. The scoped integration decision accepts this closure instead of
+repeating full capture solely for help text. A fresh whole-milestone aggregate
+and final global review remain required after remaining features are integrated.
+Ignored native editor/resource proofs retain their separate evidence boundaries.
+
+A cleanup audit found five old private fixture supervisors and four scripted
+children after failed or prematurely dropped older PTY harnesses; their state
+and sockets were already removed. Cleanup verified live Darwin executable paths,
+current arguments, birth times, parent/group identities and matching private
+fixture working directories, then rechecked those identities before terminating
+only confirmed children and owners. No stored PID granted signal authority, no
+unrelated process was signalled, and no escalation was needed. The local audit is
+`/tmp/rat-compat-owned-process-audit.json`. Both harnesses now consume the greeting,
+retain the private connection through confirmed Shutdown, and preserve state if
+cleanup cannot be confirmed. Final screen quit waits for dashboard exit; a new
+regression verifies the native process exits after dashboard loss. The final
+canonical-path audit found no remaining executable from this isolated worktree.
+
+Current M2 accepted/written/durable counters describe one managed-session stream,
+reset for its replacement and restore only its committed prefix. `output_bytes`
+alone remains cumulative for the in-process owner's screen across conversations,
+reinitializes on owner restoration, and needs a launch baseline. Source comments
+now make this distinction. Historical M1 measurements remain unchanged.
