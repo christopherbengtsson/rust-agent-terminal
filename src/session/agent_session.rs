@@ -182,6 +182,9 @@ impl AgentSession {
         let directory = directory.as_path();
         use crate::persistence::Completion;
         match event {
+            Completion::Registry(_) | Completion::Registered(..) => {
+                unreachable!("registry completions are supervisor-owned")
+            }
             Completion::Retried | Completion::Sealed => {}
             Completion::Cleanup(page) => self.state.cleanup = Some(page),
             Completion::Deleted(id) => {
@@ -768,7 +771,7 @@ impl AgentSession {
                 return Err("Launch reconciliation pending; wait for durable outcome".into());
             }
             match request {
-                Request::Discover { .. } | Request::Adopt(_) => unreachable!("workspace requests are supervisor-owned"),
+                Request::Discover { .. } | Request::Adopt(_) | Request::Register(_) => unreachable!("workspace requests are supervisor-owned"),
                 Request::Reconcile => {
                     if self.execution.child.is_some() || self.execution.stopping.is_some() { return Err("Session owned by current supervisor; stop it normally".into()); }
                     if let Some(evidence) = &self.state.execution { evidence.reconcile()?; }
@@ -1133,6 +1136,9 @@ impl AgentSession {
                     resized_screen
                         .parser
                         .set_size(rows.try_into().unwrap(), cols.try_into().unwrap());
+                }
+                Request::HistorySession { session, offset } => {
+                    storage.commands.try_send(crate::persistence::Command::HistorySession(session, offset)).map_err(|error| format!("History busy: {error}; retry"))?;
                 }
                 Request::History { index, offset } => {
                     self.state.history_index = index;

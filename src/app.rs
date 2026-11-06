@@ -9,6 +9,9 @@ use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 pub use crate::events::Effect;
 
 pub struct App {
+    pub workspaces_open: bool,
+    pub workspace_selected: Option<String>,
+    pub project_input: Option<String>,
     pub session: Observation,
     pub attached: bool,
     pub history_open: bool,
@@ -17,6 +20,7 @@ pub struct App {
     pub cleanup_preview: Option<crate::cleanup::Entry>,
     pub history_scroll: u16,
     history_index: usize,
+    history_session: Option<String>,
     history_offset: u64,
     pub shutdown_pending: bool,
     detached: bool,
@@ -34,6 +38,9 @@ pub struct App {
 impl App {
     pub fn new(repository: PathBuf) -> Self {
         Self {
+            workspaces_open: false,
+            workspace_selected: None,
+            project_input: None,
             sent_viewport: None,
             pending_viewport: None,
             session: Default::default(),
@@ -44,6 +51,7 @@ impl App {
             cleanup_preview: None,
             history_scroll: 0,
             history_index: 0,
+            history_session: None,
             history_offset: 0,
             shutdown_pending: false,
             detached: false,
@@ -128,6 +136,25 @@ impl App {
             observation.status.state = crate::native_status::State::Unknown;
             self.attached = false;
         }
+        if self.session.registry_pending
+            && !observation.registry_pending
+            && let Some(added) = observation.registry.workspaces.iter().find(|workspace| {
+                !self
+                    .session
+                    .registry
+                    .workspaces
+                    .iter()
+                    .any(|known| known.id == workspace.id)
+            })
+        {
+            self.workspace_selected = Some(added.id.clone());
+        }
+        if self.workspace_selected.is_none()
+            || (self.session.registry.selected.is_some()
+                && self.session.registry.selected != observation.registry.selected)
+        {
+            self.workspace_selected = observation.registry.selected.clone();
+        }
         self.session = observation;
     }
 
@@ -148,6 +175,151 @@ impl App {
                 return None;
             }
             return Some(Effect::Session(Request::Key(key)));
+        }
+        if let Some(path) = self.project_input.as_mut() {
+            match key.code {
+                KeyCode::Esc => self.project_input = None,
+                KeyCode::Enter => {
+                    let path = self.project_input.take().unwrap();
+                    if path.is_empty() {
+                        self.error = Some("Enter an existing local repository path".into());
+                        return None;
+                    }
+                    self.workspaces_open = true;
+                    return Some(Effect::Session(Request::Register(path.into_bytes())));
+                }
+                KeyCode::Backspace => {
+                    path.pop();
+                }
+                KeyCode::Char(character)
+                    if !key.modifiers.intersects(
+                        KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER,
+                    ) && path.len() < 32768 =>
+                {
+                    path.push(character);
+                }
+                _ => {}
+            }
+            return None;
+        }
+        if key.code == KeyCode::Char('A')
+            && !key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER)
+        {
+            self.project_input = Some(String::new());
+            self.workspaces_open = true;
+            return None;
+        }
+        if key.modifiers.is_empty() && key.code == KeyCode::Char('w') {
+            self.workspaces_open = !self.workspaces_open;
+            if self.workspace_selected.is_none() {
+                self.workspace_selected = self.session.registry.selected.clone().or_else(|| {
+                    self.session
+                        .registry
+                        .workspaces
+                        .first()
+                        .map(|workspace| workspace.id.clone())
+                });
+            }
+            return None;
+        }
+        if self.workspaces_open && key.modifiers.is_empty() {
+            let workspaces = &self.session.registry.workspaces;
+            let index = workspaces
+                .iter()
+                .position(|workspace| Some(&workspace.id) == self.workspace_selected.as_ref())
+                .unwrap_or(0);
+            match key.code {
+                KeyCode::Esc => {
+                    self.workspaces_open = false;
+                }
+                KeyCode::Char('j')
+                | KeyCode::Down
+                | KeyCode::Char('k')
+                | KeyCode::Up
+                | KeyCode::Char(']')
+                | KeyCode::Char('[') => {
+                    let next = match key.code {
+                        KeyCode::Char('j') | KeyCode::Down => {
+                            (index + 1).min(workspaces.len().saturating_sub(1))
+                        }
+                        KeyCode::Char('k') | KeyCode::Up => index.saturating_sub(1),
+                        KeyCode::Char(']') => ((index + 1)..workspaces.len())
+                            .find(|&next| workspaces[next].project != workspaces[index].project)
+                            .unwrap_or(index),
+                        _ => (0..index)
+                            .rev()
+                            .find(|&next| workspaces[next].project != workspaces[index].project)
+                            .unwrap_or(index),
+                    };
+                    self.workspace_selected =
+                        workspaces.get(next).map(|workspace| workspace.id.clone());
+                }
+                KeyCode::Char('h') => {
+                    let Some(session) = workspaces
+                        .get(index)
+                        .and_then(|workspace| workspace.sessions.last())
+                    else {
+                        self.error = Some("No sessions recorded for this workspace".into());
+                        return None;
+                    };
+                    self.history_session = Some(session.clone());
+                    self.history_open = true;
+                    self.workspaces_open = false;
+                    self.history_offset = 0;
+                    self.history_scroll = 0;
+                    self.session.history = None;
+                    return Some(Effect::Session(Request::HistorySession {
+                        session: session.clone(),
+                        offset: 0,
+                    }));
+                }
+                KeyCode::Enter | KeyCode::Char('a') => {
+                    let Some(workspace) = workspaces.get(index) else {
+                        self.error = Some("No retained workspace; A adds a project".into());
+                        return None;
+                    };
+                    let Some(path) = workspace.path.as_ref() else {
+                        self.error = Some("Checkout path unknown for this retained legacy workspace; history remains retained".into());
+                        return None;
+                    };
+                    use std::os::unix::ffi::OsStringExt;
+                    if key.code == KeyCode::Char('a') {
+                        return Some(Effect::Session(Request::Adopt(path.clone())));
+                    }
+                    let repository = PathBuf::from(std::ffi::OsString::from_vec(path.clone()));
+                    if repository != self.repository {
+                        self.worktrees.clear();
+                        self.selected = None;
+                    }
+                    self.repository = repository;
+                    self.loading = false;
+                    self.workspaces_open = false;
+                    return Some(Effect::Refresh);
+                }
+                KeyCode::Char('q') => {
+                    self.shutdown_pending = true;
+                    return Some(Effect::Session(Request::Shutdown));
+                }
+                KeyCode::Char('d') => {
+                    self.detached = true;
+                    return Some(Effect::Detach);
+                }
+                _ => {}
+            }
+            return None;
+        }
+        if key.modifiers.is_empty()
+            && matches!(
+                key.code,
+                KeyCode::Char('c' | 'x' | 'l' | 'v') | KeyCode::Enter
+            )
+            && self.workspace_selected.is_some()
+            && self.workspace_selected != self.session.registry.selected
+        {
+            self.error = Some("Selected workspace is not adopted; w then a explicitly adopts it before launch or attachment".into());
+            return None;
         }
         if key.modifiers.is_empty() && key.code == KeyCode::Char('g') {
             self.cleanup_open = true;
@@ -239,10 +411,12 @@ impl App {
                     self.history_offset = 0;
                 }
                 KeyCode::Char('n') if self.history_open => {
+                    self.history_session = None;
                     self.history_index += 1;
                     self.history_offset = 0;
                 }
                 KeyCode::Char('p') if self.history_open => {
+                    self.history_session = None;
                     self.history_index = self.history_index.saturating_sub(1);
                     self.history_offset = 0;
                 }
@@ -262,6 +436,12 @@ impl App {
             }
             if self.history_open && matches!(key.code, KeyCode::Char('h' | 'n' | 'p' | '[' | ']')) {
                 self.history_scroll = 0;
+                if let Some(session) = &self.history_session {
+                    return Some(Effect::Session(Request::HistorySession {
+                        session: session.clone(),
+                        offset: self.history_offset,
+                    }));
+                }
                 return Some(Effect::Session(Request::History {
                     index: self.history_index,
                     offset: self.history_offset,
@@ -331,7 +511,11 @@ impl App {
     }
 
     pub fn keyboard_help(&self) -> &'static str {
-        if self.attached {
+        if self.project_input.is_some() {
+            "Add project: existing local path · Enter register without launch · Esc cancel"
+        } else if self.workspaces_open {
+            "Workspaces: j/k select · [/] project · Enter discover · a adopt · h latest history · A add project · w/Esc back · d detach · q quit"
+        } else if self.attached {
             "Native input · Ctrl-C interrupt · Ctrl-] / Ctrl-5 dashboard (keeps session running)"
         } else if self.cleanup_open {
             "Cleanup: j/k select · n/p page · Enter preview · D confirm selected deletion · Esc cancel/back · g refresh · y capture retry · s stop · q quit"
@@ -340,11 +524,17 @@ impl App {
         } else if self.history_open {
             "q quit/stop/retry · s stop · y retry history · g cleanup · h live · n/p session · [/] page · j/k scroll · d detach"
         } else {
-            "q quit/stop · y retry history · v resume · c new Claude · x new Codex · a adopt · Enter attach · g cleanup · h history · s stop · d detach · j/k · r refresh"
+            "w workspaces · A add · Enter attach · x new Codex · v resume · q quit/stop · a adopt · c Claude · h history · g cleanup · y retry · s stop · d detach · j/k · r refresh"
         }
     }
 
     pub fn paste(&mut self, text: String) -> Option<Effect> {
+        if let Some(path) = self.project_input.as_mut() {
+            if path.len() + text.len() <= 32768 {
+                path.push_str(&text);
+            }
+            return None;
+        }
         if !self.attached {
             return None;
         }
@@ -425,6 +615,32 @@ mod tests {
             path: PathBuf::from(path),
             ..Worktree::default()
         }
+    }
+
+    #[test]
+    fn retained_workspace_picker_keeps_missing_selection_and_never_dispatches_launch() {
+        let mut app = App::new(PathBuf::from("repo"));
+        app.session
+            .registry
+            .workspaces
+            .push(crate::registry::Workspace {
+                id: "legacy-workspace".into(),
+                legacy_tasks: vec!["opaque task".into()],
+                task: "opaque task".into(),
+                name: "Retained work".into(),
+                project: None,
+                path: None,
+                checkout: None,
+                sessions: vec!["historical-session".into()],
+            });
+        let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        assert!(app.input(key(KeyCode::Char('w'))).is_none());
+        assert!(app.workspaces_open);
+        assert_eq!(app.workspace_selected.as_deref(), Some("legacy-workspace"));
+        assert!(app.input(key(KeyCode::Enter)).is_none());
+        assert!(app.error.as_deref().unwrap().contains("unknown"));
+        assert!(app.input(key(KeyCode::Char('l'))).is_none());
+        assert!(app.session.identity.is_none());
     }
 
     #[test]

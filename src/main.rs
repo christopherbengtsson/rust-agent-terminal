@@ -9,6 +9,7 @@ mod native_input;
 mod native_status;
 mod persistence;
 mod recovery;
+mod registry;
 mod session;
 mod terminal;
 mod ui;

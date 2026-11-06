@@ -97,7 +97,7 @@ fn transport(
     let mut greeting: Observation = serde_json::from_slice(&read_frame(&mut reader)?)?;
     decode_screen(&mut greeting);
     if greeting.control_denied {
-        if greeting.git_jobs_protocol != 1 {
+        if greeting.git_jobs_protocol != 1 || greeting.registry_protocol != 1 {
             events.send(greeting)?;
             return Ok(());
         }
@@ -130,9 +130,9 @@ fn transport(
         }
         return Ok(());
     }
-    if greeting.git_jobs_protocol != 1 {
+    if greeting.git_jobs_protocol != 1 || greeting.registry_protocol != 1 {
         greeting.control_denied = true;
-        greeting.error = Some("Existing supervisor does not support this dashboard's worktree protocol. Use its compatible dashboard to stop activity before upgrading; d detaches locally.".into());
+        greeting.error = Some("Existing supervisor does not support this dashboard's worktree protocol or registry protocol. Use its compatible dashboard to stop activity before upgrading; d detaches locally.".into());
         events.send(greeting)?;
         return Ok(());
     }
@@ -335,6 +335,10 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             return Ok(());
         }
     };
+    let mut registry = restored.state.registry.clone();
+    let mut registry_error = None;
+    let mut registry_operation = None;
+    let mut registering = false;
     let mut session = agent_session::AgentSession::restore(directory, restored, &storage)?;
     let mut adoption: Option<crate::git::AdoptionJob> = None;
     let mut discovery: Option<crate::git::GitWorker> = None;
@@ -384,6 +388,23 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
         {
             adoption = None;
             adoption_pending = false;
+            if registering {
+                registering = false;
+                let operation = uuid::Uuid::new_v4();
+                match result {
+                    Ok(identity) => match storage
+                        .commands
+                        .try_send(crate::persistence::Command::Register(operation, identity))
+                    {
+                        Ok(()) => registry_operation = Some(operation),
+                        Err(error) => {
+                            registry_error = Some(format!("Project not registered: {error}; retry"))
+                        }
+                    },
+                    Err(error) => registry_error = Some(error),
+                }
+                continue;
+            }
             let result = result.and_then(|identity| {
                 let previous = session.observation();
                 let same_checkout = previous.checkout_identity.as_ref().map_or_else(
@@ -394,12 +415,11 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     },
                 );
                 session.adoption_refusal(same_checkout, &storage)?;
-                session.adopt(
-                    identity,
-                    same_checkout,
-                    uuid::Uuid::new_v4().to_string(),
-                    &storage,
-                );
+                let task = registry
+                    .checkout(&identity)
+                    .map(|workspace| workspace.task.clone())
+                    .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+                session.adopt(identity, same_checkout, task, &storage);
                 Ok(())
             });
             if let Err(error) = result {
@@ -407,15 +427,35 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         while let Ok(event) = storage.events.try_recv() {
-            session.complete(event, &storage);
+            match event {
+                crate::persistence::Completion::Registry(snapshot) => registry = snapshot,
+                crate::persistence::Completion::Registered(operation, result) => {
+                    if registry_operation != Some(operation) {
+                        continue;
+                    }
+                    registry_operation = None;
+                    match result {
+                        Ok(snapshot) => registry = snapshot,
+                        Err(error) => {
+                            registry_error = Some(format!("Project not registered: {error}; retry"))
+                        }
+                    }
+                }
+                event => session.complete(event, &storage),
+            }
         }
         session.advance(&storage, adoption.is_some());
         let mut state = session.observation();
         state.subscriber_frame_high_water = subscriber_frame_high_water;
         state.git_jobs_protocol = 1;
+        state.registry_protocol = 1;
+        state.registry_pending = registering || registry_operation.is_some();
+        state.registry = registry.clone();
+        state.error = state.error.or_else(|| registry_error.clone());
         state.adoption_pending = adoption_pending;
         state.discovery = discovery_result.clone();
-        state.stopped &= quitting && adoption.is_none() && discovery.is_none();
+        state.stopped &=
+            quitting && adoption.is_none() && discovery.is_none() && registry_operation.is_none();
         if state.stopped && controller.is_none() {
             fs::remove_file(&socket)?;
             return Ok(());
@@ -428,6 +468,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     if controller.is_some() {
                         let refusal = Observation {
                             git_jobs_protocol: 1,
+                            registry_protocol: 1,
                             control_denied: true,
                             error: Some("Another dashboard controls this supervisor; close it before reconnecting".into()),
                             ..Observation::default()
@@ -542,13 +583,34 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     session.report_error(error.to_string());
                 }
             }
+            Request::Register(bytes) => {
+                registry_error = None;
+                let result = (|| -> Result<(), Box<dyn std::error::Error>> {
+                    if bytes.len() > 32768 {
+                        return Err("Repository path exceeds 32768 bytes".into());
+                    }
+                    if adoption.is_some() || registry_operation.is_some() {
+                        return Err("Project operation pending; wait or Stop to cancel".into());
+                    }
+                    adoption = Some(crate::git::AdoptionJob::start(PathBuf::from(
+                        std::ffi::OsString::from_vec(bytes),
+                    ))?);
+                    registering = true;
+                    adoption_pending = true;
+                    Ok(())
+                })();
+                if let Err(error) = result {
+                    registry_error = Some(error.to_string());
+                }
+            }
             Request::Adopt(bytes) => {
+                registry_error = None;
                 let result = (|| -> Result<(), Box<dyn std::error::Error>> {
                     session.prepare_adoption()?;
                     if bytes.len() > 32768 {
                         return Err("Checkout path exceeds 32768 bytes".into());
                     }
-                    if adoption.is_some() {
+                    if adoption.is_some() || registry_operation.is_some() {
                         return Err("Adoption already pending; wait or Stop to cancel".into());
                     }
                     adoption = Some(crate::git::AdoptionJob::start(PathBuf::from(
@@ -566,6 +628,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     job.cancel();
                 }
                 adoption_pending = false;
+                registering = false;
                 if let Some(worker) = &discovery {
                     worker.cancel();
                 }
@@ -584,9 +647,14 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
         let mut state = session.observation();
         state.subscriber_frame_high_water = subscriber_frame_high_water;
         state.git_jobs_protocol = 1;
+        state.registry_protocol = 1;
+        state.registry_pending = registering || registry_operation.is_some();
+        state.registry = registry.clone();
+        state.error = state.error.or_else(|| registry_error.clone());
         state.adoption_pending = adoption_pending;
         state.discovery = discovery_result.clone();
-        state.stopped &= quitting && adoption.is_none() && discovery.is_none();
+        state.stopped &=
+            quitting && adoption.is_none() && discovery.is_none() && registry_operation.is_none();
         if controller.is_some() {
             delivery = Some(Delivery::new(&mut state)?);
             subscriber_frame_high_water =

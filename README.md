@@ -36,11 +36,28 @@ it at any directory inside a repository or one of its linked worktrees.
 Discovery reads Git metadata; it does not create worktrees or start agents.
 Errors appear in the dashboard, where you can retry or quit.
 
+Project and workspace identities survive restart, branch/name changes and missing
+folders. Canonical Git common directories deduplicate project aliases; linked
+checkouts retain distinct workspace identities. Re-adoption selects retained work.
+Legacy tasks whose repository/path was never recorded appear under Unknown
+project with checkout unknown; the dashboard does not infer a path from display
+text. Workspace history remains readable when its checkout is unavailable.
+Adding, selecting, discovering and re-adopting never start an agent. The active
+session remains separate from browsing; stop it before adopting another checkout.
+The workspace picker temporarily occupies the session pane, including in small
+terminals; normal navigation retains Reviews above the worktree sidebar.
+
+
 | Key | Action |
 | --- | --- |
 | `j` / Down | Select next worktree |
 | `k` / Up | Select previous worktree |
 | `r` | Refresh worktrees in the background |
+| `w` | Open retained projects/workspaces; available in small terminals |
+| `A` | Enter an existing local repository path and register it without adopting or starting coding |
+| `j` / `k`, `[` / `]` in workspace picker | Select a workspace or jump between projects |
+| Enter / `a` / `h` in workspace picker | Discover selected project's worktrees / explicitly adopt selected checkout / read its latest retained session |
+| `w` / Esc in workspace picker | Return to the native session pane without changing execution |
 | `a` | Explicitly adopt the selected usable checkout |
 | `c` | Start a new Claude Code conversation in the adopted checkout (experimental) |
 | `x` | Start a new Codex CLI conversation with `--no-daemon` (experimental) |

@@ -120,6 +120,8 @@ pub fn metadata(state: &Observation) -> Box<Observation> {
     saved.decoded = None;
     saved.history = None;
     saved.discovery = None;
+    saved.registry = Default::default();
+    saved.registry_pending = false;
     saved.adoption_pending = false;
     saved.cleanup = None;
     saved.cleanup_message = None;
@@ -258,10 +260,12 @@ impl Snapshot {
     }
 }
 pub enum Command {
+    Register(uuid::Uuid, crate::git::CheckoutIdentity),
     Prepare(Snapshot),
     Authorize(Snapshot),
     Save(Snapshot),
     History(usize, u64),
+    HistorySession(String, u64),
     Cleanup(usize),
     Delete(String),
     Seal(Operation),
@@ -269,6 +273,11 @@ pub enum Command {
     Flush(Operation),
 }
 pub enum Completion {
+    Registered(
+        uuid::Uuid,
+        std::result::Result<crate::registry::Registry, String>,
+    ),
+    Registry(crate::registry::Registry),
     Retried,
     Sealed,
     Cleanup(crate::cleanup::Page),
@@ -315,10 +324,11 @@ impl Worker {
             loop {
                 // Reserve control capacity independently from capture traffic.
                 if let Ok(command) = control.try_recv() {
-                    let kind = match &command { Command::Save(..) | Command::Prepare(..) | Command::Authorize(..) => "metadata", Command::History(..) => "history", Command::Cleanup(..) | Command::Delete(..) | Command::Seal(..) => "cleanup", Command::Retry => "retry", Command::Flush(..) => "flush" };
+                    let kind = match &command { Command::Register(..) => "registry", Command::Save(..) | Command::Prepare(..) | Command::Authorize(..) => "metadata", Command::History(..) | Command::HistorySession(..) => "history", Command::Cleanup(..) | Command::Delete(..) | Command::Seal(..) => "cleanup", Command::Retry => "retry", Command::Flush(..) => "flush" };
                     status.lock().unwrap().operation = Some((kind, Instant::now()));
                     let operation = match &command { Command::Prepare(snapshot) | Command::Authorize(snapshot) | Command::Save(snapshot) => Some(snapshot.operation.clone()), Command::Flush(operation) | Command::Seal(operation) => Some(operation.clone()), _ => None };
                     let result = match command {
+                        Command::Register(id, checkout) => Ok(Completion::Registered(id, store.register(checkout).map_err(|error| error.to_string()))),
                         Command::Cleanup(index) => store.start_cleanup(index).map(|_| Completion::Sealed),
                         Command::Delete(id) => store.start_delete(&id).map(|_| Completion::Sealed),
                         Command::Seal(operation) => operation.session.as_deref().ok_or_else(|| io::Error::other("Missing session for seal").into()).and_then(|id| store.seal(id)).map(|_| Completion::Committed(operation)),
@@ -327,6 +337,7 @@ impl Worker {
                         Command::Authorize(Snapshot { operation, state, checkout, task }) => store.fault("authorize").and_then(|_| store.save(&state, checkout, task)).map(|_| Completion::Committed(operation)),
                         Command::Save(Snapshot { operation, state, checkout, task }) => store.fault("save").and_then(|_| store.save(&state, checkout, task)).map(|_| Completion::Committed(operation)),
                         Command::History(index, offset) => store.history(index, offset).map(Completion::History),
+                        Command::HistorySession(id, offset) => store.history_session(&id, offset).map(Completion::History),
                         Command::Flush(operation) => {
                             // Called only after PTY EOF: drain everything already transferred.
                             (|| {
@@ -371,6 +382,11 @@ impl Worker {
                             let _ = tx.send(Completion::Failed(previous, "duplicate stale failure".into()));
                         }
                         last_operation = Some(operation.clone());
+                    }
+                    if matches!(event, Completion::Committed(_)) {
+                        let selected: Option<String> = store.db.query_row("SELECT task FROM app WHERE id=1", [], |row| row.get(0)).optional().unwrap_or(None);
+                        if let Ok(registry) = crate::registry::snapshot(&store.db, selected.as_deref())
+                            && tx.send(Completion::Registry(registry)).is_err() { break; }
                     }
                     if tx.send(event).is_err() { break; }
                 }
@@ -486,7 +502,7 @@ impl Store {
             "PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL; PRAGMA fullfsync=ON;",
         )?;
         let version: u32 = db.pragma_query_value(None, "user_version", |r| r.get(0))?;
-        if version > 3 {
+        if version > 4 {
             return Err("History schema is newer than this executable".into());
         }
         if version == 0 {
@@ -510,6 +526,46 @@ impl Store {
                 ALTER TABLE sessions ADD COLUMN history_state TEXT NOT NULL DEFAULT 'retained';
                 PRAGMA user_version=3;",
             )?;
+            tx.commit()?;
+        }
+        if version < 4 {
+            let tx = db.transaction()?;
+            crate::registry::create(&tx)?;
+            let historical = tx
+                .prepare("SELECT id,identity,state FROM sessions ORDER BY rowid")?
+                .query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                })?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            for (id, label, json) in historical {
+                let mut state: Observation = serde_json::from_str(&json)?;
+                if state.session_identity.is_none() && state.identity.is_none() {
+                    state.identity = Some(label);
+                }
+                let state = decode_record(&serde_json::to_string(&state)?)?;
+                let identity = state.session_identity.as_ref().ok_or(
+                    "Legacy session has no attributable task identity; registry migration refused",
+                )?;
+                if identity.session != id {
+                    return Err("Legacy session UUID conflicts with its durable row; registry migration refused".into());
+                }
+                crate::registry::record(&tx, &state, None, &identity.task)?;
+            }
+            let current: Option<(String, Option<Vec<u8>>, String)> = tx
+                .query_row(
+                    "SELECT state,checkout,task FROM app WHERE id=1",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .optional()?;
+            if let Some((json, path, task)) = current {
+                crate::registry::record(&tx, &decode_record(&json)?, path.as_deref(), &task)?;
+            }
+            tx.pragma_update(None, "user_version", 4)?;
             tx.commit()?;
         }
         let mut store = Self {
@@ -806,13 +862,17 @@ impl Store {
             .optional()?;
         let Some((json, path, task)) = row else {
             return Ok(Restored {
-                state: Observation::default(),
+                state: Observation {
+                    registry: crate::registry::snapshot(&self.db, None)?,
+                    ..Observation::default()
+                },
                 checkout: None,
                 task: uuid::Uuid::new_v4().to_string(),
                 launches,
             });
         };
         let mut state: Observation = decode_record(&json)?;
+        state.registry = crate::registry::snapshot(&self.db, Some(&task))?;
         state.stopped = false;
         state.status = crate::native_status::Status::default();
         state.metadata_pending = false;
@@ -891,6 +951,30 @@ impl Store {
         #[cfg(not(debug_assertions))]
         None
     }
+    fn register(
+        &mut self,
+        checkout: crate::git::CheckoutIdentity,
+    ) -> Result<crate::registry::Registry> {
+        self.fault("registry")?;
+        let current: Option<String> = self
+            .db
+            .query_row("SELECT task FROM app WHERE id=1", [], |row| row.get(0))
+            .optional()?;
+        let registry = crate::registry::snapshot(&self.db, current.as_deref())?;
+        let task = registry
+            .checkout(&checkout)
+            .map(|workspace| workspace.task.clone())
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        let path = crate::session::path_bytes(&checkout.root);
+        let state = Observation {
+            checkout_identity: Some(checkout),
+            ..Observation::default()
+        };
+        let tx = self.db.transaction()?;
+        crate::registry::record(&tx, &state, Some(&path), &task)?;
+        tx.commit()?;
+        crate::registry::snapshot(&self.db, current.as_deref())
+    }
     fn save(&mut self, state: &Observation, path: Option<Vec<u8>>, task: String) -> Result<()> {
         let mut state = state.clone();
         state.screen.clear();
@@ -903,6 +987,7 @@ impl Store {
         let json = serde_json::to_string(&state)?;
         let tx = self.db.transaction()?;
         tx.execute("INSERT INTO app VALUES(1,?1,?2,?3) ON CONFLICT(id) DO UPDATE SET state=excluded.state,checkout=excluded.checkout,task=excluded.task", params![json,path,task])?;
+        crate::registry::record(&tx, &state, path.as_deref(), &task)?;
         if let Some(identity) = state.session_identity.as_ref() {
             tx.execute("INSERT INTO sessions(id,identity,state,created) VALUES(?1,?2,?3,unixepoch()) ON CONFLICT(id) DO UPDATE SET state=excluded.state", params![identity.session,identity.label(),json])?;
         }
@@ -1023,6 +1108,17 @@ impl Store {
             )
             .optional()?
             .ok_or("No retained session at this position")?;
+        self.history_record((id, identity, durable, json), offset)
+    }
+    fn history_session(&self, id: &str, offset: u64) -> Result<HistoryPage> {
+        let record = self.db.query_row("SELECT id,identity,durable,state FROM sessions WHERE id=?1 AND history_state='retained'", [id], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?))).optional()?.ok_or("Selected session has no retained transcript")?;
+        self.history_record(record, offset)
+    }
+    fn history_record(
+        &self,
+        (id, identity, durable, json): (String, String, u64, String),
+        offset: u64,
+    ) -> Result<HistoryPage> {
         let offset = offset.min(durable);
         let end = (offset + PAGE).min(durable);
         let mut raw = Vec::with_capacity(PAGE as usize);

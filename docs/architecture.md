@@ -589,7 +589,33 @@ the Codex status ticket establishes evidence.
 A single `persistence` worker owns the supervisor's SQLite connection and raw
 transcript files. Its versioned schema migrates transactionally from empty state
 through version 1 (app/session metadata), version 2 (launch outcomes), and
-version 3 (nullable creation age, final-capture seal and history tombstones). Records
+version 3 (nullable creation age, final-capture seal and history tombstones), and
+version 4 (projects, workspaces, opaque task aliases and session membership).
+`registry` owns canonical matching and relational persistence behind the existing
+sole storage worker. Projects use byte-exact canonical common directories;
+workspaces distinguish canonical Git directories within them. Names, selected
+rows, branches and folder availability are not identity. Existing task/request
+strings remain opaque. Migration groups only explicit task facts, retains unknown
+legacy paths/projects, checks durable UUID consistency, and rolls back visibly on
+unattributable/conflicting records. It does not change transcript extents, seals,
+tombstones, native IDs or request outcomes. The current app path bytes are retained
+only for their explicit task, never assigned to unrelated historical sessions.
+
+The supervisor separately owns registry snapshots/registration operations and the
+selected runtime's `AgentSession`. Explicit registration uses its bounded Git
+verification worker and an attributed storage command; only its matching committed
+completion publishes rows. Registration does not retarget the active session.
+Adoption selects an existing canonical workspace's retained task mapping. Registry
+reads and legacy migration never launch/resume native tools. Dashboard `w` opens a
+stable-ID picker (including compact terminals); `A` registers, Enter discovers,
+`a` explicitly adopts, and `h` reads the selected workspace's latest session by UUID.
+Discovery remains a separate context, so registration/adoption cannot mislabel
+previous worktree results as a different repository. An independent registry
+protocol capability is checked before sending any command to a live supervisor;
+lock election still precedes opening/migrating storage. Unsupported live owners
+remain authoritative and get compatible-dashboard stop/upgrade guidance.
+
+Records
 retain task/session/request identity and selected history position; checkout path
 bytes are retained for the current adopted task independently of checkout existence.
 The supervisor restores active records as interrupted and never starts a child
