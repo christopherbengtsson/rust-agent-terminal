@@ -236,6 +236,7 @@ impl Obligations {
     }
 }
 pub struct Snapshot {
+    pub workspace_name: Option<String>,
     pub operation: Operation,
     pub state: Box<Observation>,
     pub checkout: Option<Vec<u8>>,
@@ -244,6 +245,7 @@ pub struct Snapshot {
 impl Snapshot {
     pub fn new(state: &Observation, checkout: Option<&Path>, task: &str) -> Self {
         Self {
+            workspace_name: None,
             operation: Operation::new(state, Purpose::Metadata),
             state: metadata(state),
             checkout: checkout.map(crate::session::path_bytes),
@@ -260,6 +262,7 @@ impl Snapshot {
     }
 }
 pub enum Command {
+    Rename(uuid::Uuid, String, String),
     Register(uuid::Uuid, crate::git::CheckoutIdentity),
     Prepare(Snapshot),
     Authorize(Snapshot),
@@ -324,18 +327,19 @@ impl Worker {
             loop {
                 // Reserve control capacity independently from capture traffic.
                 if let Ok(command) = control.try_recv() {
-                    let kind = match &command { Command::Register(..) => "registry", Command::Save(..) | Command::Prepare(..) | Command::Authorize(..) => "metadata", Command::History(..) | Command::HistorySession(..) => "history", Command::Cleanup(..) | Command::Delete(..) | Command::Seal(..) => "cleanup", Command::Retry => "retry", Command::Flush(..) => "flush" };
+                    let kind = match &command { Command::Rename(..) | Command::Register(..) => "registry", Command::Save(..) | Command::Prepare(..) | Command::Authorize(..) => "metadata", Command::History(..) | Command::HistorySession(..) => "history", Command::Cleanup(..) | Command::Delete(..) | Command::Seal(..) => "cleanup", Command::Retry => "retry", Command::Flush(..) => "flush" };
                     status.lock().unwrap().operation = Some((kind, Instant::now()));
                     let operation = match &command { Command::Prepare(snapshot) | Command::Authorize(snapshot) | Command::Save(snapshot) => Some(snapshot.operation.clone()), Command::Flush(operation) | Command::Seal(operation) => Some(operation.clone()), _ => None };
                     let result = match command {
+                        Command::Rename(id, workspace, name) => Ok(Completion::Registered(id, store.rename(&workspace, &name).map_err(|error| error.to_string()))),
                         Command::Register(id, checkout) => Ok(Completion::Registered(id, store.register(checkout).map_err(|error| error.to_string()))),
                         Command::Cleanup(index) => store.start_cleanup(index).map(|_| Completion::Sealed),
                         Command::Delete(id) => store.start_delete(&id).map(|_| Completion::Sealed),
                         Command::Seal(operation) => operation.session.as_deref().ok_or_else(|| io::Error::other("Missing session for seal").into()).and_then(|id| store.seal(id)).map(|_| Completion::Committed(operation)),
                         Command::Retry => { since = Instant::now() - FLUSH; Ok(Completion::Retried) },
-                        Command::Prepare(Snapshot { operation, state, checkout, task }) => store.fault("prepare").and_then(|_| store.save(&state, checkout, task)).map(|_| Completion::Committed(operation)),
-                        Command::Authorize(Snapshot { operation, state, checkout, task }) => store.fault("authorize").and_then(|_| store.save(&state, checkout, task)).map(|_| Completion::Committed(operation)),
-                        Command::Save(Snapshot { operation, state, checkout, task }) => store.fault("save").and_then(|_| store.save(&state, checkout, task)).map(|_| Completion::Committed(operation)),
+                        Command::Prepare(Snapshot { operation, state, checkout, task, workspace_name }) => store.fault("prepare").and_then(|_| store.save_named(&state, checkout, task, workspace_name)).map(|_| Completion::Committed(operation)),
+                        Command::Authorize(Snapshot { operation, state, checkout, task, workspace_name }) => store.fault("authorize").and_then(|_| store.save_named(&state, checkout, task, workspace_name)).map(|_| Completion::Committed(operation)),
+                        Command::Save(Snapshot { operation, state, checkout, task, workspace_name }) => store.fault("save").and_then(|_| store.save_named(&state, checkout, task, workspace_name)).map(|_| Completion::Committed(operation)),
                         Command::History(index, offset) => store.history(index, offset).map(Completion::History),
                         Command::HistorySession(id, offset) => store.history_session(&id, offset).map(Completion::History),
                         Command::Flush(operation) => {
@@ -502,7 +506,7 @@ impl Store {
             "PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL; PRAGMA fullfsync=ON;",
         )?;
         let version: u32 = db.pragma_query_value(None, "user_version", |r| r.get(0))?;
-        if version > 4 {
+        if version > 5 {
             return Err("History schema is newer than this executable".into());
         }
         if version == 0 {
@@ -531,6 +535,9 @@ impl Store {
         if version < 4 {
             let tx = db.transaction()?;
             crate::registry::create(&tx)?;
+            tx.execute_batch(
+                "CREATE TABLE workspace_names(workspace TEXT PRIMARY KEY, source TEXT NOT NULL);",
+            )?;
             let historical = tx
                 .prepare("SELECT id,identity,state FROM sessions ORDER BY rowid")?
                 .query_map([], |row| {
@@ -566,6 +573,11 @@ impl Store {
                 crate::registry::record(&tx, &decode_record(&json)?, path.as_deref(), &task)?;
             }
             tx.pragma_update(None, "user_version", 4)?;
+            tx.commit()?;
+        }
+        if version < 5 {
+            let tx = db.transaction()?;
+            tx.execute_batch("CREATE TABLE IF NOT EXISTS workspace_names(workspace TEXT PRIMARY KEY, source TEXT NOT NULL); INSERT INTO workspace_names SELECT id,'retained' FROM workspaces WHERE true ON CONFLICT(workspace) DO UPDATE SET source='retained'; PRAGMA user_version=5;")?;
             tx.commit()?;
         }
         let mut store = Self {
@@ -975,7 +987,27 @@ impl Store {
         tx.commit()?;
         crate::registry::snapshot(&self.db, current.as_deref())
     }
+    fn rename(&mut self, workspace: &str, name: &str) -> Result<crate::registry::Registry> {
+        self.fault("registry")?;
+        let tx = self.db.transaction()?;
+        crate::registry::rename(&tx, workspace, name)?;
+        tx.commit()?;
+        let current: Option<String> = self
+            .db
+            .query_row("SELECT task FROM app WHERE id=1", [], |row| row.get(0))
+            .optional()?;
+        crate::registry::snapshot(&self.db, current.as_deref())
+    }
     fn save(&mut self, state: &Observation, path: Option<Vec<u8>>, task: String) -> Result<()> {
+        self.save_named(state, path, task, None)
+    }
+    fn save_named(
+        &mut self,
+        state: &Observation,
+        path: Option<Vec<u8>>,
+        task: String,
+        workspace_name: Option<String>,
+    ) -> Result<()> {
         let mut state = state.clone();
         state.screen.clear();
         state.formatted.clear();
@@ -988,6 +1020,9 @@ impl Store {
         let tx = self.db.transaction()?;
         tx.execute("INSERT INTO app VALUES(1,?1,?2,?3) ON CONFLICT(id) DO UPDATE SET state=excluded.state,checkout=excluded.checkout,task=excluded.task", params![json,path,task])?;
         crate::registry::record(&tx, &state, path.as_deref(), &task)?;
+        if let Some(name) = workspace_name {
+            crate::registry::name_from_prompt(&tx, &task, &name)?;
+        }
         if let Some(identity) = state.session_identity.as_ref() {
             tx.execute("INSERT INTO sessions(id,identity,state,created) VALUES(?1,?2,?3,unixepoch()) ON CONFLICT(id) DO UPDATE SET state=excluded.state", params![identity.session,identity.label(),json])?;
         }

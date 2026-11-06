@@ -978,7 +978,12 @@ impl Controller {
             object.keys().any(|key| {
                 matches!(
                     key.as_str(),
-                    "Launch" | "LaunchClaude" | "LaunchCodex" | "Resume" | "QueryLaunch"
+                    "Launch"
+                        | "LaunchNative"
+                        | "LaunchClaude"
+                        | "LaunchCodex"
+                        | "Resume"
+                        | "QueryLaunch"
                 )
             })
         });
@@ -6080,15 +6085,15 @@ fn keyboard_project_registration_and_retained_selection_work_in_normal_and_small
             dashboard.wait("Add project:");
             dashboard.send(other.as_os_str().as_encoded_bytes());
             dashboard.send(b"\r");
-            dashboard.wait("retained-project / retained-project");
+            dashboard.wait("retained-project / Workspace");
             // Registration is not adoption or execution. The explicit a action follows.
             dashboard.send(b"a");
             dashboard.wait("Adopted:");
         } else {
             dashboard.send(b"w");
-            dashboard.wait("retained-project / retained-project");
+            dashboard.wait("retained-project / Workspace");
         }
-        let screen = dashboard.wait("retained-project / retained-project");
+        let screen = dashboard.wait("retained-project / Workspace");
         assert!(screen.contains("j/k select"));
         if cols == 160 {
             assert!(screen.contains("Reviews"));
@@ -6177,4 +6182,78 @@ fn registry_migration_refuses_unattributable_legacy_record_and_preserves_databas
         std::fs::read(transcript).unwrap(),
         b"retained original bytes\xff"
     );
+}
+
+#[test]
+fn first_prompt_and_manual_names_preserve_workspace_and_conversation_identity() {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = Fixture::new();
+    let tools = fixture.temp.path().join("tools");
+    std::fs::create_dir(&tools).unwrap();
+    let wrapper = tools.join("claude");
+    std::fs::write(&wrapper, format!("#!/bin/sh\nprintf 'prompt-args:'\nprintf '<%s>' \"$@\"\nprintf '\\r\\n'\nexec '{}' --scripted-child\n", env!("CARGO_BIN_EXE_agent-terminal"))).unwrap();
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let path = std::env::join_paths(
+        std::iter::once(tools).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+    )
+    .unwrap();
+    let mut dashboard =
+        Dashboard::open_with_path(&fixture.repository, &fixture.state(), Some(&path));
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted:");
+    dashboard.send(b"C");
+    dashboard.wait("First prompt");
+    dashboard.send(b"Cancel me");
+    dashboard.send(b"\x1b");
+    dashboard.send(b"d");
+    dashboard.child.wait().unwrap();
+    let mut control = Controller::connect(&fixture);
+    assert!(control.greeting["identity"].is_null());
+    let workspace = control.greeting["registry"]["workspaces"][0].clone();
+    assert!(
+        workspace["name"]
+            .as_str()
+            .unwrap()
+            .starts_with("Workspace ")
+    );
+    let launched = control.request(serde_json::json!({"LaunchNative":{"request":"prompt07","agent":"Claude","prompt":"Fix unicode λ search"}}));
+    assert!(launched["launch_result"]["error"].is_null(), "{launched}");
+    let native = launched["native_conversation"].clone();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let state = control.request(serde_json::json!("Screen"));
+        if state["screen"]
+            .as_str()
+            .unwrap()
+            .contains("<--><Fix unicode λ search>")
+        {
+            break;
+        }
+        assert!(Instant::now() < deadline, "{state}");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let same = control.request(serde_json::json!({"LaunchNative":{"request":"prompt07","agent":"Claude","prompt":"Duplicate must never execute"}}));
+    assert_eq!(same["identity"], launched["identity"]);
+    let renamed = control.request(serde_json::json!({"RenameWorkspace":{"workspace":workspace["id"],"name":"My manual name"}}));
+    let mut state = renamed;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while state["registry_pending"] == true {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+        state = control.request(serde_json::json!("Screen"));
+    }
+    let renamed = &state["registry"]["workspaces"][0];
+    assert_eq!(renamed["name"], "My manual name");
+    assert_eq!(renamed["id"], workspace["id"]);
+    assert_eq!(renamed["path"], workspace["path"]);
+    assert_eq!(state["native_conversation"], native);
+    assert_eq!(state["identity"], launched["identity"]);
+    let repeated = control.request(serde_json::json!({"QueryLaunch":"prompt07"}));
+    assert_eq!(
+        repeated["registry"]["workspaces"][0]["name"],
+        "My manual name"
+    );
+    control.request(serde_json::json!("Stop"));
+    control.request(serde_json::json!("Shutdown"));
 }

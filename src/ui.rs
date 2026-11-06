@@ -153,7 +153,7 @@ impl Ui {
             } else if app.session.registry_pending {
                 " Registering project… ".into()
             } else {
-                " Projects / retained workspaces · A add · j/k select · Enter discover · a adopt "
+                " Projects / retained workspaces · A add · j/k select · Enter discover · a adopt · R rename "
                     .into()
             };
             frame.render_stateful_widget(
@@ -488,8 +488,30 @@ impl Ui {
             .wrap(Wrap { trim: false }),
             status,
         );
+        if let Some((_, text)) = &app.first_prompt {
+            frame.render_widget(
+                Paragraph::new(visible(text))
+                    .block(
+                        Block::bordered()
+                            .title(" First prompt · Enter starts · Esc cancels · optional "),
+                    )
+                    .wrap(Wrap { trim: false }),
+                session,
+            );
+        } else if let Some((_, text)) = &app.rename_workspace {
+            frame.render_widget(
+                Paragraph::new(visible(text))
+                    .block(Block::bordered().title(
+                        " Workspace name (local) · Enter saves · Ctrl-U clears · Esc cancels ",
+                    ))
+                    .wrap(Wrap { trim: false }),
+                session,
+            );
+        }
         let compact_help;
-        let help_text = if !app.attached
+        let help_text = if app.first_prompt.is_some() || app.rename_workspace.is_some() {
+            app.keyboard_help()
+        } else if !app.attached
             && app.project_input.is_some()
             && (frame.area().width < 80 || frame.area().height < 22)
         {
@@ -525,7 +547,7 @@ A add · h history · w/Esc back · d detach · q quit"
                 &compact_help
             } else {
                 compact_help = format!(
-                    "w workspaces · A add · a adopt · c/x new · Enter attach\nv resume · g cleanup · q quit/stop · d detach · {} {}",
+                    "w workspaces · A add · a adopt · c/x new · C/X prompt · R rename · Enter attach\nv resume · g cleanup · q quit/stop · d detach · {} {}",
                     if app.session.connection_lost {
                         format!("unknown (last seen {:?})", app.session.lifecycle)
                     } else {
