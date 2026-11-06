@@ -43,6 +43,9 @@ impl App {
     }
 
     pub fn observe_session(&mut self, observation: Observation) {
+        if !observation.launch_request.is_empty() {
+            self.launch_request = observation.launch_request.clone();
+        }
         if observation.identity.is_some() && observation.identity != self.session.identity {
             self.attached = true;
         }
@@ -101,6 +104,10 @@ impl App {
                 ))));
             }
             KeyCode::Char('l') if key.modifiers.is_empty() => {
+                if self.session.launch_result.is_some() {
+                    // An explicit new launch after a known result is a new intent.
+                    self.launch_request = uuid::Uuid::new_v4().to_string();
+                }
                 return Some(Effect::Session(Request::Launch(
                     self.launch_request.clone(),
                 )));
