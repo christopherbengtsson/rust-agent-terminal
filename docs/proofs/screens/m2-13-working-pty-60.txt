@@ -1,0 +1,18 @@
+┌ Working · Workspace 9f41a734 ────────────────────────────┐
+│Workspace 9f41a734-738d-4546-a7fe-418d94b54f3f            │
+│Checkout /private/tmp/.tmpnaQOpP/checkout with spaces     │
+│Request 7d62a9f7-020f-4201-a2ca-eeba5ea7aa05              │
+│Snapshot; not live · 1794002148409 · r refresh            │
+│Files (3) · j/k                                           │
+│> beta                                                    │
+│    new file                                              │
+│Content · line 1 · column 1                               │
+│New file (not in index)                                   │
+│agent changes while inspecting                            │
+│                                                          │
+└──────────────────────────────────────────────────────────┘
+┌ Status · semantic status: unknown ·  ────────────────────┐
+│Adopted: /private/tmp/.tmpnaQOpP/checkout with spaces ·   │
+└──────────────────────────────────────────────────────────┘
+j/k file · arrows scroll · r refresh · f/Esc back           
+s stop · q quit · d detach · PgUp/PgDn                      

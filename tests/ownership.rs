@@ -6936,6 +6936,15 @@ fn working_diff_jobs_are_workspace_owned_read_only_bounded_and_stop_cancellable(
         snapshot["identity"].is_null(),
         "inspection never launches a session"
     );
+    let target = adopted["control_target"].clone();
+    let rejected=control.request_now(serde_json::json!({"Session":{"target":target,"session":null,"command":inspect("invalid-envelope")}}));
+    assert!(
+        rejected["error"]
+            .as_str()
+            .unwrap()
+            .contains("Invalid targeted session command")
+    );
+    assert_eq!(rejected["working_diff"]["request"], "first");
     std::fs::write(&slow, b"slow Git").unwrap();
     let start = Instant::now();
     control.request_now(inspect("slow"));
@@ -6955,7 +6964,9 @@ fn working_diff_jobs_are_workspace_owned_read_only_bounded_and_stop_cancellable(
             .contains("busy")
     );
     let start = Instant::now();
-    control.request_now(serde_json::json!("Stop"));
+    control.request_now(
+        serde_json::json!({"Session":{"target":target,"session":null,"command":"Stop"}}),
+    );
     let cancelled = cleanup_wait15(&mut control, |state| {
         state["working_diff"]["request"] == "slow"
     });

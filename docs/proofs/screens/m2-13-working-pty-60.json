@@ -1,0 +1,9728 @@
+{
+  "cells": [
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 0,
+      "fg": "Default",
+      "row": 0,
+      "text": "┌",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 1,
+      "fg": "Default",
+      "row": 0,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 2,
+      "fg": "Default",
+      "row": 0,
+      "text": "W",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 3,
+      "fg": "Default",
+      "row": 0,
+      "text": "o",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 4,
+      "fg": "Default",
+      "row": 0,
+      "text": "r",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 5,
+      "fg": "Default",
+      "row": 0,
+      "text": "k",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 6,
+      "fg": "Default",
+      "row": 0,
+      "text": "i",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 7,
+      "fg": "Default",
+      "row": 0,
+      "text": "n",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 8,
+      "fg": "Default",
+      "row": 0,
+      "text": "g",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 9,
+      "fg": "Default",
+      "row": 0,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 10,
+      "fg": "Default",
+      "row": 0,
+      "text": "·",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 11,
+      "fg": "Default",
+      "row": 0,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 12,
+      "fg": "Default",
+      "row": 0,
+      "text": "W",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 13,
+      "fg": "Default",
+      "row": 0,
+      "text": "o",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 14,
+      "fg": "Default",
+      "row": 0,
+      "text": "r",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 15,
+      "fg": "Default",
+      "row": 0,
+      "text": "k",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 16,
+      "fg": "Default",
+      "row": 0,
+      "text": "s",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 17,
+      "fg": "Default",
+      "row": 0,
+      "text": "p",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 18,
+      "fg": "Default",
+      "row": 0,
+      "text": "a",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 19,
+      "fg": "Default",
+      "row": 0,
+      "text": "c",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 20,
+      "fg": "Default",
+      "row": 0,
+      "text": "e",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 21,
+      "fg": "Default",
+      "row": 0,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 22,
+      "fg": "Default",
+      "row": 0,
+      "text": "9",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 23,
+      "fg": "Default",
+      "row": 0,
+      "text": "f",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 24,
+      "fg": "Default",
+      "row": 0,
+      "text": "4",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 25,
+      "fg": "Default",
+      "row": 0,
+      "text": "1",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 26,
+      "fg": "Default",
+      "row": 0,
+      "text": "a",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 27,
+      "fg": "Default",
+      "row": 0,
+      "text": "7",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 28,
+      "fg": "Default",
+      "row": 0,
+      "text": "3",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 29,
+      "fg": "Default",
+      "row": 0,
+      "text": "4",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 30,
+      "fg": "Default",
+      "row": 0,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 31,
+      "fg": "Default",
+      "row": 0,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 32,
+      "fg": "Default",
+      "row": 0,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 33,
+      "fg": "Default",
+      "row": 0,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 34,
+      "fg": "Default",
+      "row": 0,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 35,
+      "fg": "Default",
+      "row": 0,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 36,
+      "fg": "Default",
+      "row": 0,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 37,
+      "fg": "Default",
+      "row": 0,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 38,
+      "fg": "Default",
+      "row": 0,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 39,
+      "fg": "Default",
+      "row": 0,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 40,
+      "fg": "Default",
+      "row": 0,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 41,
+      "fg": "Default",
+      "row": 0,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 42,
+      "fg": "Default",
+      "row": 0,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 43,
+      "fg": "Default",
+      "row": 0,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 44,
+      "fg": "Default",
+      "row": 0,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 45,
+      "fg": "Default",
+      "row": 0,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 46,
+      "fg": "Default",
+      "row": 0,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 47,
+      "fg": "Default",
+      "row": 0,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 48,
+      "fg": "Default",
+      "row": 0,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 49,
+      "fg": "Default",
+      "row": 0,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 50,
+      "fg": "Default",
+      "row": 0,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 51,
+      "fg": "Default",
+      "row": 0,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 52,
+      "fg": "Default",
+      "row": 0,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 53,
+      "fg": "Default",
+      "row": 0,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 54,
+      "fg": "Default",
+      "row": 0,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 55,
+      "fg": "Default",
+      "row": 0,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 56,
+      "fg": "Default",
+      "row": 0,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 57,
+      "fg": "Default",
+      "row": 0,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 58,
+      "fg": "Default",
+      "row": 0,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 59,
+      "fg": "Default",
+      "row": 0,
+      "text": "┐",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 0,
+      "fg": "Default",
+      "row": 1,
+      "text": "│",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 1,
+      "fg": "Default",
+      "row": 1,
+      "text": "W",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 2,
+      "fg": "Default",
+      "row": 1,
+      "text": "o",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 3,
+      "fg": "Default",
+      "row": 1,
+      "text": "r",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 4,
+      "fg": "Default",
+      "row": 1,
+      "text": "k",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 5,
+      "fg": "Default",
+      "row": 1,
+      "text": "s",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 6,
+      "fg": "Default",
+      "row": 1,
+      "text": "p",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 7,
+      "fg": "Default",
+      "row": 1,
+      "text": "a",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 8,
+      "fg": "Default",
+      "row": 1,
+      "text": "c",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 9,
+      "fg": "Default",
+      "row": 1,
+      "text": "e",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 10,
+      "fg": "Default",
+      "row": 1,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 11,
+      "fg": "Default",
+      "row": 1,
+      "text": "9",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 12,
+      "fg": "Default",
+      "row": 1,
+      "text": "f",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 13,
+      "fg": "Default",
+      "row": 1,
+      "text": "4",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 14,
+      "fg": "Default",
+      "row": 1,
+      "text": "1",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 15,
+      "fg": "Default",
+      "row": 1,
+      "text": "a",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 16,
+      "fg": "Default",
+      "row": 1,
+      "text": "7",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 17,
+      "fg": "Default",
+      "row": 1,
+      "text": "3",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 18,
+      "fg": "Default",
+      "row": 1,
+      "text": "4",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 19,
+      "fg": "Default",
+      "row": 1,
+      "text": "-",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 20,
+      "fg": "Default",
+      "row": 1,
+      "text": "7",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 21,
+      "fg": "Default",
+      "row": 1,
+      "text": "3",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 22,
+      "fg": "Default",
+      "row": 1,
+      "text": "8",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 23,
+      "fg": "Default",
+      "row": 1,
+      "text": "d",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 24,
+      "fg": "Default",
+      "row": 1,
+      "text": "-",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 25,
+      "fg": "Default",
+      "row": 1,
+      "text": "4",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 26,
+      "fg": "Default",
+      "row": 1,
+      "text": "5",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 27,
+      "fg": "Default",
+      "row": 1,
+      "text": "4",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 28,
+      "fg": "Default",
+      "row": 1,
+      "text": "6",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 29,
+      "fg": "Default",
+      "row": 1,
+      "text": "-",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 30,
+      "fg": "Default",
+      "row": 1,
+      "text": "a",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 31,
+      "fg": "Default",
+      "row": 1,
+      "text": "7",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 32,
+      "fg": "Default",
+      "row": 1,
+      "text": "f",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 33,
+      "fg": "Default",
+      "row": 1,
+      "text": "e",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 34,
+      "fg": "Default",
+      "row": 1,
+      "text": "-",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 35,
+      "fg": "Default",
+      "row": 1,
+      "text": "4",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 36,
+      "fg": "Default",
+      "row": 1,
+      "text": "1",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 37,
+      "fg": "Default",
+      "row": 1,
+      "text": "8",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 38,
+      "fg": "Default",
+      "row": 1,
+      "text": "d",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 39,
+      "fg": "Default",
+      "row": 1,
+      "text": "9",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 40,
+      "fg": "Default",
+      "row": 1,
+      "text": "4",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 41,
+      "fg": "Default",
+      "row": 1,
+      "text": "b",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 42,
+      "fg": "Default",
+      "row": 1,
+      "text": "5",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 43,
+      "fg": "Default",
+      "row": 1,
+      "text": "4",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 44,
+      "fg": "Default",
+      "row": 1,
+      "text": "f",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 45,
+      "fg": "Default",
+      "row": 1,
+      "text": "3",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 46,
+      "fg": "Default",
+      "row": 1,
+      "text": "f",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 47,
+      "fg": "Default",
+      "row": 1,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 48,
+      "fg": "Default",
+      "row": 1,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 49,
+      "fg": "Default",
+      "row": 1,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 50,
+      "fg": "Default",
+      "row": 1,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 51,
+      "fg": "Default",
+      "row": 1,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 52,
+      "fg": "Default",
+      "row": 1,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 53,
+      "fg": "Default",
+      "row": 1,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 54,
+      "fg": "Default",
+      "row": 1,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 55,
+      "fg": "Default",
+      "row": 1,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 56,
+      "fg": "Default",
+      "row": 1,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 57,
+      "fg": "Default",
+      "row": 1,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 58,
+      "fg": "Default",
+      "row": 1,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 59,
+      "fg": "Default",
+      "row": 1,
+      "text": "│",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 0,
+      "fg": "Default",
+      "row": 2,
+      "text": "│",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 1,
+      "fg": "Default",
+      "row": 2,
+      "text": "C",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 2,
+      "fg": "Default",
+      "row": 2,
+      "text": "h",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 3,
+      "fg": "Default",
+      "row": 2,
+      "text": "e",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 4,
+      "fg": "Default",
+      "row": 2,
+      "text": "c",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 5,
+      "fg": "Default",
+      "row": 2,
+      "text": "k",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 6,
+      "fg": "Default",
+      "row": 2,
+      "text": "o",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 7,
+      "fg": "Default",
+      "row": 2,
+      "text": "u",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 8,
+      "fg": "Default",
+      "row": 2,
+      "text": "t",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 9,
+      "fg": "Default",
+      "row": 2,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 10,
+      "fg": "Default",
+      "row": 2,
+      "text": "/",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 11,
+      "fg": "Default",
+      "row": 2,
+      "text": "p",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 12,
+      "fg": "Default",
+      "row": 2,
+      "text": "r",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 13,
+      "fg": "Default",
+      "row": 2,
+      "text": "i",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 14,
+      "fg": "Default",
+      "row": 2,
+      "text": "v",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 15,
+      "fg": "Default",
+      "row": 2,
+      "text": "a",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 16,
+      "fg": "Default",
+      "row": 2,
+      "text": "t",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 17,
+      "fg": "Default",
+      "row": 2,
+      "text": "e",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 18,
+      "fg": "Default",
+      "row": 2,
+      "text": "/",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 19,
+      "fg": "Default",
+      "row": 2,
+      "text": "t",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 20,
+      "fg": "Default",
+      "row": 2,
+      "text": "m",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 21,
+      "fg": "Default",
+      "row": 2,
+      "text": "p",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 22,
+      "fg": "Default",
+      "row": 2,
+      "text": "/",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 23,
+      "fg": "Default",
+      "row": 2,
+      "text": ".",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 24,
+      "fg": "Default",
+      "row": 2,
+      "text": "t",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 25,
+      "fg": "Default",
+      "row": 2,
+      "text": "m",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 26,
+      "fg": "Default",
+      "row": 2,
+      "text": "p",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 27,
+      "fg": "Default",
+      "row": 2,
+      "text": "n",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 28,
+      "fg": "Default",
+      "row": 2,
+      "text": "a",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 29,
+      "fg": "Default",
+      "row": 2,
+      "text": "Q",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 30,
+      "fg": "Default",
+      "row": 2,
+      "text": "O",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 31,
+      "fg": "Default",
+      "row": 2,
+      "text": "p",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 32,
+      "fg": "Default",
+      "row": 2,
+      "text": "P",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 33,
+      "fg": "Default",
+      "row": 2,
+      "text": "/",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 34,
+      "fg": "Default",
+      "row": 2,
+      "text": "c",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 35,
+      "fg": "Default",
+      "row": 2,
+      "text": "h",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 36,
+      "fg": "Default",
+      "row": 2,
+      "text": "e",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 37,
+      "fg": "Default",
+      "row": 2,
+      "text": "c",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 38,
+      "fg": "Default",
+      "row": 2,
+      "text": "k",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 39,
+      "fg": "Default",
+      "row": 2,
+      "text": "o",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 40,
+      "fg": "Default",
+      "row": 2,
+      "text": "u",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 41,
+      "fg": "Default",
+      "row": 2,
+      "text": "t",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 42,
+      "fg": "Default",
+      "row": 2,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 43,
+      "fg": "Default",
+      "row": 2,
+      "text": "w",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 44,
+      "fg": "Default",
+      "row": 2,
+      "text": "i",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 45,
+      "fg": "Default",
+      "row": 2,
+      "text": "t",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 46,
+      "fg": "Default",
+      "row": 2,
+      "text": "h",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 47,
+      "fg": "Default",
+      "row": 2,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 48,
+      "fg": "Default",
+      "row": 2,
+      "text": "s",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 49,
+      "fg": "Default",
+      "row": 2,
+      "text": "p",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 50,
+      "fg": "Default",
+      "row": 2,
+      "text": "a",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 51,
+      "fg": "Default",
+      "row": 2,
+      "text": "c",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 52,
+      "fg": "Default",
+      "row": 2,
+      "text": "e",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 53,
+      "fg": "Default",
+      "row": 2,
+      "text": "s",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 54,
+      "fg": "Default",
+      "row": 2,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 55,
+      "fg": "Default",
+      "row": 2,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 56,
+      "fg": "Default",
+      "row": 2,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 57,
+      "fg": "Default",
+      "row": 2,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 58,
+      "fg": "Default",
+      "row": 2,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 59,
+      "fg": "Default",
+      "row": 2,
+      "text": "│",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 0,
+      "fg": "Default",
+      "row": 3,
+      "text": "│",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 1,
+      "fg": "Default",
+      "row": 3,
+      "text": "R",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 2,
+      "fg": "Default",
+      "row": 3,
+      "text": "e",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 3,
+      "fg": "Default",
+      "row": 3,
+      "text": "q",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 4,
+      "fg": "Default",
+      "row": 3,
+      "text": "u",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 5,
+      "fg": "Default",
+      "row": 3,
+      "text": "e",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 6,
+      "fg": "Default",
+      "row": 3,
+      "text": "s",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 7,
+      "fg": "Default",
+      "row": 3,
+      "text": "t",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 8,
+      "fg": "Default",
+      "row": 3,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 9,
+      "fg": "Default",
+      "row": 3,
+      "text": "7",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 10,
+      "fg": "Default",
+      "row": 3,
+      "text": "d",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 11,
+      "fg": "Default",
+      "row": 3,
+      "text": "6",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 12,
+      "fg": "Default",
+      "row": 3,
+      "text": "2",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 13,
+      "fg": "Default",
+      "row": 3,
+      "text": "a",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 14,
+      "fg": "Default",
+      "row": 3,
+      "text": "9",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 15,
+      "fg": "Default",
+      "row": 3,
+      "text": "f",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 16,
+      "fg": "Default",
+      "row": 3,
+      "text": "7",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 17,
+      "fg": "Default",
+      "row": 3,
+      "text": "-",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 18,
+      "fg": "Default",
+      "row": 3,
+      "text": "0",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 19,
+      "fg": "Default",
+      "row": 3,
+      "text": "2",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 20,
+      "fg": "Default",
+      "row": 3,
+      "text": "0",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 21,
+      "fg": "Default",
+      "row": 3,
+      "text": "f",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 22,
+      "fg": "Default",
+      "row": 3,
+      "text": "-",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 23,
+      "fg": "Default",
+      "row": 3,
+      "text": "4",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 24,
+      "fg": "Default",
+      "row": 3,
+      "text": "2",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 25,
+      "fg": "Default",
+      "row": 3,
+      "text": "0",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 26,
+      "fg": "Default",
+      "row": 3,
+      "text": "1",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 27,
+      "fg": "Default",
+      "row": 3,
+      "text": "-",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 28,
+      "fg": "Default",
+      "row": 3,
+      "text": "a",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 29,
+      "fg": "Default",
+      "row": 3,
+      "text": "2",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 30,
+      "fg": "Default",
+      "row": 3,
+      "text": "c",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 31,
+      "fg": "Default",
+      "row": 3,
+      "text": "a",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 32,
+      "fg": "Default",
+      "row": 3,
+      "text": "-",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 33,
+      "fg": "Default",
+      "row": 3,
+      "text": "e",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 34,
+      "fg": "Default",
+      "row": 3,
+      "text": "e",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 35,
+      "fg": "Default",
+      "row": 3,
+      "text": "b",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 36,
+      "fg": "Default",
+      "row": 3,
+      "text": "a",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 37,
+      "fg": "Default",
+      "row": 3,
+      "text": "5",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 38,
+      "fg": "Default",
+      "row": 3,
+      "text": "e",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 39,
+      "fg": "Default",
+      "row": 3,
+      "text": "a",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 40,
+      "fg": "Default",
+      "row": 3,
+      "text": "7",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 41,
+      "fg": "Default",
+      "row": 3,
+      "text": "a",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 42,
+      "fg": "Default",
+      "row": 3,
+      "text": "a",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 43,
+      "fg": "Default",
+      "row": 3,
+      "text": "0",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 44,
+      "fg": "Default",
+      "row": 3,
+      "text": "5",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 45,
+      "fg": "Default",
+      "row": 3,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 46,
+      "fg": "Default",
+      "row": 3,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 47,
+      "fg": "Default",
+      "row": 3,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 48,
+      "fg": "Default",
+      "row": 3,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 49,
+      "fg": "Default",
+      "row": 3,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 50,
+      "fg": "Default",
+      "row": 3,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 51,
+      "fg": "Default",
+      "row": 3,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 52,
+      "fg": "Default",
+      "row": 3,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 53,
+      "fg": "Default",
+      "row": 3,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 54,
+      "fg": "Default",
+      "row": 3,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 55,
+      "fg": "Default",
+      "row": 3,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 56,
+      "fg": "Default",
+      "row": 3,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 57,
+      "fg": "Default",
+      "row": 3,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 58,
+      "fg": "Default",
+      "row": 3,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 59,
+      "fg": "Default",
+      "row": 3,
+      "text": "│",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 0,
+      "fg": "Default",
+      "row": 4,
+      "text": "│",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 1,
+      "fg": "Default",
+      "row": 4,
+      "text": "S",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 2,
+      "fg": "Default",
+      "row": 4,
+      "text": "n",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 3,
+      "fg": "Default",
+      "row": 4,
+      "text": "a",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 4,
+      "fg": "Default",
+      "row": 4,
+      "text": "p",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 5,
+      "fg": "Default",
+      "row": 4,
+      "text": "s",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 6,
+      "fg": "Default",
+      "row": 4,
+      "text": "h",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 7,
+      "fg": "Default",
+      "row": 4,
+      "text": "o",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 8,
+      "fg": "Default",
+      "row": 4,
+      "text": "t",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 9,
+      "fg": "Default",
+      "row": 4,
+      "text": ";",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 10,
+      "fg": "Default",
+      "row": 4,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 11,
+      "fg": "Default",
+      "row": 4,
+      "text": "n",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 12,
+      "fg": "Default",
+      "row": 4,
+      "text": "o",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 13,
+      "fg": "Default",
+      "row": 4,
+      "text": "t",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 14,
+      "fg": "Default",
+      "row": 4,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 15,
+      "fg": "Default",
+      "row": 4,
+      "text": "l",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 16,
+      "fg": "Default",
+      "row": 4,
+      "text": "i",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 17,
+      "fg": "Default",
+      "row": 4,
+      "text": "v",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 18,
+      "fg": "Default",
+      "row": 4,
+      "text": "e",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 19,
+      "fg": "Default",
+      "row": 4,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 20,
+      "fg": "Default",
+      "row": 4,
+      "text": "·",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 21,
+      "fg": "Default",
+      "row": 4,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 22,
+      "fg": "Default",
+      "row": 4,
+      "text": "1",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 23,
+      "fg": "Default",
+      "row": 4,
+      "text": "7",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 24,
+      "fg": "Default",
+      "row": 4,
+      "text": "9",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 25,
+      "fg": "Default",
+      "row": 4,
+      "text": "4",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 26,
+      "fg": "Default",
+      "row": 4,
+      "text": "0",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 27,
+      "fg": "Default",
+      "row": 4,
+      "text": "0",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 28,
+      "fg": "Default",
+      "row": 4,
+      "text": "2",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 29,
+      "fg": "Default",
+      "row": 4,
+      "text": "1",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 30,
+      "fg": "Default",
+      "row": 4,
+      "text": "4",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 31,
+      "fg": "Default",
+      "row": 4,
+      "text": "8",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 32,
+      "fg": "Default",
+      "row": 4,
+      "text": "4",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 33,
+      "fg": "Default",
+      "row": 4,
+      "text": "0",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 34,
+      "fg": "Default",
+      "row": 4,
+      "text": "9",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 35,
+      "fg": "Default",
+      "row": 4,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 36,
+      "fg": "Default",
+      "row": 4,
+      "text": "·",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 37,
+      "fg": "Default",
+      "row": 4,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 38,
+      "fg": "Default",
+      "row": 4,
+      "text": "r",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 39,
+      "fg": "Default",
+      "row": 4,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 40,
+      "fg": "Default",
+      "row": 4,
+      "text": "r",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 41,
+      "fg": "Default",
+      "row": 4,
+      "text": "e",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 42,
+      "fg": "Default",
+      "row": 4,
+      "text": "f",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 43,
+      "fg": "Default",
+      "row": 4,
+      "text": "r",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 44,
+      "fg": "Default",
+      "row": 4,
+      "text": "e",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 45,
+      "fg": "Default",
+      "row": 4,
+      "text": "s",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 46,
+      "fg": "Default",
+      "row": 4,
+      "text": "h",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 47,
+      "fg": "Default",
+      "row": 4,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 48,
+      "fg": "Default",
+      "row": 4,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 49,
+      "fg": "Default",
+      "row": 4,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 50,
+      "fg": "Default",
+      "row": 4,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 51,
+      "fg": "Default",
+      "row": 4,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 52,
+      "fg": "Default",
+      "row": 4,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 53,
+      "fg": "Default",
+      "row": 4,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 54,
+      "fg": "Default",
+      "row": 4,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 55,
+      "fg": "Default",
+      "row": 4,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 56,
+      "fg": "Default",
+      "row": 4,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 57,
+      "fg": "Default",
+      "row": 4,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 58,
+      "fg": "Default",
+      "row": 4,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 59,
+      "fg": "Default",
+      "row": 4,
+      "text": "│",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 0,
+      "fg": "Default",
+      "row": 5,
+      "text": "│",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 1,
+      "fg": "Default",
+      "row": 5,
+      "text": "F",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 2,
+      "fg": "Default",
+      "row": 5,
+      "text": "i",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 3,
+      "fg": "Default",
+      "row": 5,
+      "text": "l",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 4,
+      "fg": "Default",
+      "row": 5,
+      "text": "e",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 5,
+      "fg": "Default",
+      "row": 5,
+      "text": "s",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 6,
+      "fg": "Default",
+      "row": 5,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 7,
+      "fg": "Default",
+      "row": 5,
+      "text": "(",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 8,
+      "fg": "Default",
+      "row": 5,
+      "text": "3",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 9,
+      "fg": "Default",
+      "row": 5,
+      "text": ")",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 10,
+      "fg": "Default",
+      "row": 5,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 11,
+      "fg": "Default",
+      "row": 5,
+      "text": "·",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 12,
+      "fg": "Default",
+      "row": 5,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 13,
+      "fg": "Default",
+      "row": 5,
+      "text": "j",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 14,
+      "fg": "Default",
+      "row": 5,
+      "text": "/",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 15,
+      "fg": "Default",
+      "row": 5,
+      "text": "k",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 16,
+      "fg": "Default",
+      "row": 5,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 17,
+      "fg": "Default",
+      "row": 5,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 18,
+      "fg": "Default",
+      "row": 5,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 19,
+      "fg": "Default",
+      "row": 5,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 20,
+      "fg": "Default",
+      "row": 5,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 21,
+      "fg": "Default",
+      "row": 5,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 22,
+      "fg": "Default",
+      "row": 5,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 23,
+      "fg": "Default",
+      "row": 5,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 24,
+      "fg": "Default",
+      "row": 5,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 25,
+      "fg": "Default",
+      "row": 5,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 26,
+      "fg": "Default",
+      "row": 5,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 27,
+      "fg": "Default",
+      "row": 5,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 28,
+      "fg": "Default",
+      "row": 5,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 29,
+      "fg": "Default",
+      "row": 5,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 30,
+      "fg": "Default",
+      "row": 5,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 31,
+      "fg": "Default",
+      "row": 5,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 32,
+      "fg": "Default",
+      "row": 5,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 33,
+      "fg": "Default",
+      "row": 5,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 34,
+      "fg": "Default",
+      "row": 5,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 35,
+      "fg": "Default",
+      "row": 5,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 36,
+      "fg": "Default",
+      "row": 5,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 37,
+      "fg": "Default",
+      "row": 5,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 38,
+      "fg": "Default",
+      "row": 5,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 39,
+      "fg": "Default",
+      "row": 5,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 40,
+      "fg": "Default",
+      "row": 5,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 41,
+      "fg": "Default",
+      "row": 5,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 42,
+      "fg": "Default",
+      "row": 5,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 43,
+      "fg": "Default",
+      "row": 5,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 44,
+      "fg": "Default",
+      "row": 5,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 45,
+      "fg": "Default",
+      "row": 5,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 46,
+      "fg": "Default",
+      "row": 5,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 47,
+      "fg": "Default",
+      "row": 5,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 48,
+      "fg": "Default",
+      "row": 5,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 49,
+      "fg": "Default",
+      "row": 5,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 50,
+      "fg": "Default",
+      "row": 5,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 51,
+      "fg": "Default",
+      "row": 5,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 52,
+      "fg": "Default",
+      "row": 5,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 53,
+      "fg": "Default",
+      "row": 5,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 54,
+      "fg": "Default",
+      "row": 5,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 55,
+      "fg": "Default",
+      "row": 5,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 56,
+      "fg": "Default",
+      "row": 5,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 57,
+      "fg": "Default",
+      "row": 5,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 58,
+      "fg": "Default",
+      "row": 5,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 59,
+      "fg": "Default",
+      "row": 5,
+      "text": "│",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 0,
+      "fg": "Default",
+      "row": 6,
+      "text": "│",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 1,
+      "fg": "Default",
+      "row": 6,
+      "text": ">",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 2,
+      "fg": "Default",
+      "row": 6,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 3,
+      "fg": "Default",
+      "row": 6,
+      "text": "b",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 4,
+      "fg": "Default",
+      "row": 6,
+      "text": "e",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 5,
+      "fg": "Default",
+      "row": 6,
+      "text": "t",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 6,
+      "fg": "Default",
+      "row": 6,
+      "text": "a",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 7,
+      "fg": "Default",
+      "row": 6,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 8,
+      "fg": "Default",
+      "row": 6,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 9,
+      "fg": "Default",
+      "row": 6,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 10,
+      "fg": "Default",
+      "row": 6,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 11,
+      "fg": "Default",
+      "row": 6,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 12,
+      "fg": "Default",
+      "row": 6,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 13,
+      "fg": "Default",
+      "row": 6,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 14,
+      "fg": "Default",
+      "row": 6,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 15,
+      "fg": "Default",
+      "row": 6,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 16,
+      "fg": "Default",
+      "row": 6,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 17,
+      "fg": "Default",
+      "row": 6,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 18,
+      "fg": "Default",
+      "row": 6,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 19,
+      "fg": "Default",
+      "row": 6,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 20,
+      "fg": "Default",
+      "row": 6,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 21,
+      "fg": "Default",
+      "row": 6,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 22,
+      "fg": "Default",
+      "row": 6,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 23,
+      "fg": "Default",
+      "row": 6,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 24,
+      "fg": "Default",
+      "row": 6,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 25,
+      "fg": "Default",
+      "row": 6,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 26,
+      "fg": "Default",
+      "row": 6,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 27,
+      "fg": "Default",
+      "row": 6,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 28,
+      "fg": "Default",
+      "row": 6,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 29,
+      "fg": "Default",
+      "row": 6,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 30,
+      "fg": "Default",
+      "row": 6,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 31,
+      "fg": "Default",
+      "row": 6,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 32,
+      "fg": "Default",
+      "row": 6,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 33,
+      "fg": "Default",
+      "row": 6,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 34,
+      "fg": "Default",
+      "row": 6,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 35,
+      "fg": "Default",
+      "row": 6,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 36,
+      "fg": "Default",
+      "row": 6,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 37,
+      "fg": "Default",
+      "row": 6,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 38,
+      "fg": "Default",
+      "row": 6,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 39,
+      "fg": "Default",
+      "row": 6,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 40,
+      "fg": "Default",
+      "row": 6,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 41,
+      "fg": "Default",
+      "row": 6,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 42,
+      "fg": "Default",
+      "row": 6,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 43,
+      "fg": "Default",
+      "row": 6,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 44,
+      "fg": "Default",
+      "row": 6,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 45,
+      "fg": "Default",
+      "row": 6,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 46,
+      "fg": "Default",
+      "row": 6,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 47,
+      "fg": "Default",
+      "row": 6,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 48,
+      "fg": "Default",
+      "row": 6,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 49,
+      "fg": "Default",
+      "row": 6,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 50,
+      "fg": "Default",
+      "row": 6,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 51,
+      "fg": "Default",
+      "row": 6,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 52,
+      "fg": "Default",
+      "row": 6,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 53,
+      "fg": "Default",
+      "row": 6,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 54,
+      "fg": "Default",
+      "row": 6,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 55,
+      "fg": "Default",
+      "row": 6,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 56,
+      "fg": "Default",
+      "row": 6,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 57,
+      "fg": "Default",
+      "row": 6,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 58,
+      "fg": "Default",
+      "row": 6,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 59,
+      "fg": "Default",
+      "row": 6,
+      "text": "│",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 0,
+      "fg": "Default",
+      "row": 7,
+      "text": "│",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 1,
+      "fg": "Default",
+      "row": 7,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 2,
+      "fg": "Default",
+      "row": 7,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 3,
+      "fg": "Default",
+      "row": 7,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 4,
+      "fg": "Default",
+      "row": 7,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 5,
+      "fg": "Default",
+      "row": 7,
+      "text": "n",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 6,
+      "fg": "Default",
+      "row": 7,
+      "text": "e",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 7,
+      "fg": "Default",
+      "row": 7,
+      "text": "w",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 8,
+      "fg": "Default",
+      "row": 7,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 9,
+      "fg": "Default",
+      "row": 7,
+      "text": "f",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 10,
+      "fg": "Default",
+      "row": 7,
+      "text": "i",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 11,
+      "fg": "Default",
+      "row": 7,
+      "text": "l",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 12,
+      "fg": "Default",
+      "row": 7,
+      "text": "e",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 13,
+      "fg": "Default",
+      "row": 7,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 14,
+      "fg": "Default",
+      "row": 7,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 15,
+      "fg": "Default",
+      "row": 7,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 16,
+      "fg": "Default",
+      "row": 7,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 17,
+      "fg": "Default",
+      "row": 7,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 18,
+      "fg": "Default",
+      "row": 7,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 19,
+      "fg": "Default",
+      "row": 7,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 20,
+      "fg": "Default",
+      "row": 7,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 21,
+      "fg": "Default",
+      "row": 7,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 22,
+      "fg": "Default",
+      "row": 7,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 23,
+      "fg": "Default",
+      "row": 7,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 24,
+      "fg": "Default",
+      "row": 7,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 25,
+      "fg": "Default",
+      "row": 7,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 26,
+      "fg": "Default",
+      "row": 7,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 27,
+      "fg": "Default",
+      "row": 7,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 28,
+      "fg": "Default",
+      "row": 7,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 29,
+      "fg": "Default",
+      "row": 7,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 30,
+      "fg": "Default",
+      "row": 7,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 31,
+      "fg": "Default",
+      "row": 7,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 32,
+      "fg": "Default",
+      "row": 7,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 33,
+      "fg": "Default",
+      "row": 7,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 34,
+      "fg": "Default",
+      "row": 7,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 35,
+      "fg": "Default",
+      "row": 7,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 36,
+      "fg": "Default",
+      "row": 7,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 37,
+      "fg": "Default",
+      "row": 7,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 38,
+      "fg": "Default",
+      "row": 7,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 39,
+      "fg": "Default",
+      "row": 7,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 40,
+      "fg": "Default",
+      "row": 7,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 41,
+      "fg": "Default",
+      "row": 7,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 42,
+      "fg": "Default",
+      "row": 7,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 43,
+      "fg": "Default",
+      "row": 7,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 44,
+      "fg": "Default",
+      "row": 7,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 45,
+      "fg": "Default",
+      "row": 7,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 46,
+      "fg": "Default",
+      "row": 7,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 47,
+      "fg": "Default",
+      "row": 7,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 48,
+      "fg": "Default",
+      "row": 7,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 49,
+      "fg": "Default",
+      "row": 7,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 50,
+      "fg": "Default",
+      "row": 7,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 51,
+      "fg": "Default",
+      "row": 7,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 52,
+      "fg": "Default",
+      "row": 7,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 53,
+      "fg": "Default",
+      "row": 7,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 54,
+      "fg": "Default",
+      "row": 7,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 55,
+      "fg": "Default",
+      "row": 7,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 56,
+      "fg": "Default",
+      "row": 7,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 57,
+      "fg": "Default",
+      "row": 7,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 58,
+      "fg": "Default",
+      "row": 7,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 59,
+      "fg": "Default",
+      "row": 7,
+      "text": "│",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 0,
+      "fg": "Default",
+      "row": 8,
+      "text": "│",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 1,
+      "fg": "Default",
+      "row": 8,
+      "text": "C",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 2,
+      "fg": "Default",
+      "row": 8,
+      "text": "o",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 3,
+      "fg": "Default",
+      "row": 8,
+      "text": "n",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 4,
+      "fg": "Default",
+      "row": 8,
+      "text": "t",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 5,
+      "fg": "Default",
+      "row": 8,
+      "text": "e",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 6,
+      "fg": "Default",
+      "row": 8,
+      "text": "n",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 7,
+      "fg": "Default",
+      "row": 8,
+      "text": "t",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 8,
+      "fg": "Default",
+      "row": 8,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 9,
+      "fg": "Default",
+      "row": 8,
+      "text": "·",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 10,
+      "fg": "Default",
+      "row": 8,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 11,
+      "fg": "Default",
+      "row": 8,
+      "text": "l",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 12,
+      "fg": "Default",
+      "row": 8,
+      "text": "i",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 13,
+      "fg": "Default",
+      "row": 8,
+      "text": "n",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 14,
+      "fg": "Default",
+      "row": 8,
+      "text": "e",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 15,
+      "fg": "Default",
+      "row": 8,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 16,
+      "fg": "Default",
+      "row": 8,
+      "text": "1",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 17,
+      "fg": "Default",
+      "row": 8,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 18,
+      "fg": "Default",
+      "row": 8,
+      "text": "·",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 19,
+      "fg": "Default",
+      "row": 8,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 20,
+      "fg": "Default",
+      "row": 8,
+      "text": "c",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 21,
+      "fg": "Default",
+      "row": 8,
+      "text": "o",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 22,
+      "fg": "Default",
+      "row": 8,
+      "text": "l",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 23,
+      "fg": "Default",
+      "row": 8,
+      "text": "u",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 24,
+      "fg": "Default",
+      "row": 8,
+      "text": "m",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 25,
+      "fg": "Default",
+      "row": 8,
+      "text": "n",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 26,
+      "fg": "Default",
+      "row": 8,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 27,
+      "fg": "Default",
+      "row": 8,
+      "text": "1",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 28,
+      "fg": "Default",
+      "row": 8,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 29,
+      "fg": "Default",
+      "row": 8,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 30,
+      "fg": "Default",
+      "row": 8,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 31,
+      "fg": "Default",
+      "row": 8,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 32,
+      "fg": "Default",
+      "row": 8,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 33,
+      "fg": "Default",
+      "row": 8,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 34,
+      "fg": "Default",
+      "row": 8,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 35,
+      "fg": "Default",
+      "row": 8,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 36,
+      "fg": "Default",
+      "row": 8,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 37,
+      "fg": "Default",
+      "row": 8,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 38,
+      "fg": "Default",
+      "row": 8,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 39,
+      "fg": "Default",
+      "row": 8,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 40,
+      "fg": "Default",
+      "row": 8,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 41,
+      "fg": "Default",
+      "row": 8,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 42,
+      "fg": "Default",
+      "row": 8,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 43,
+      "fg": "Default",
+      "row": 8,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 44,
+      "fg": "Default",
+      "row": 8,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 45,
+      "fg": "Default",
+      "row": 8,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 46,
+      "fg": "Default",
+      "row": 8,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 47,
+      "fg": "Default",
+      "row": 8,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 48,
+      "fg": "Default",
+      "row": 8,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 49,
+      "fg": "Default",
+      "row": 8,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 50,
+      "fg": "Default",
+      "row": 8,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 51,
+      "fg": "Default",
+      "row": 8,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 52,
+      "fg": "Default",
+      "row": 8,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 53,
+      "fg": "Default",
+      "row": 8,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 54,
+      "fg": "Default",
+      "row": 8,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 55,
+      "fg": "Default",
+      "row": 8,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 56,
+      "fg": "Default",
+      "row": 8,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 57,
+      "fg": "Default",
+      "row": 8,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 58,
+      "fg": "Default",
+      "row": 8,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 59,
+      "fg": "Default",
+      "row": 8,
+      "text": "│",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 0,
+      "fg": "Default",
+      "row": 9,
+      "text": "│",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 1,
+      "fg": "Default",
+      "row": 9,
+      "text": "N",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 2,
+      "fg": "Default",
+      "row": 9,
+      "text": "e",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 3,
+      "fg": "Default",
+      "row": 9,
+      "text": "w",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 4,
+      "fg": "Default",
+      "row": 9,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 5,
+      "fg": "Default",
+      "row": 9,
+      "text": "f",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 6,
+      "fg": "Default",
+      "row": 9,
+      "text": "i",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 7,
+      "fg": "Default",
+      "row": 9,
+      "text": "l",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 8,
+      "fg": "Default",
+      "row": 9,
+      "text": "e",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 9,
+      "fg": "Default",
+      "row": 9,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 10,
+      "fg": "Default",
+      "row": 9,
+      "text": "(",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 11,
+      "fg": "Default",
+      "row": 9,
+      "text": "n",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 12,
+      "fg": "Default",
+      "row": 9,
+      "text": "o",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 13,
+      "fg": "Default",
+      "row": 9,
+      "text": "t",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 14,
+      "fg": "Default",
+      "row": 9,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 15,
+      "fg": "Default",
+      "row": 9,
+      "text": "i",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 16,
+      "fg": "Default",
+      "row": 9,
+      "text": "n",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 17,
+      "fg": "Default",
+      "row": 9,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 18,
+      "fg": "Default",
+      "row": 9,
+      "text": "i",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 19,
+      "fg": "Default",
+      "row": 9,
+      "text": "n",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 20,
+      "fg": "Default",
+      "row": 9,
+      "text": "d",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 21,
+      "fg": "Default",
+      "row": 9,
+      "text": "e",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 22,
+      "fg": "Default",
+      "row": 9,
+      "text": "x",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 23,
+      "fg": "Default",
+      "row": 9,
+      "text": ")",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 24,
+      "fg": "Default",
+      "row": 9,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 25,
+      "fg": "Default",
+      "row": 9,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 26,
+      "fg": "Default",
+      "row": 9,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 27,
+      "fg": "Default",
+      "row": 9,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 28,
+      "fg": "Default",
+      "row": 9,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 29,
+      "fg": "Default",
+      "row": 9,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 30,
+      "fg": "Default",
+      "row": 9,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 31,
+      "fg": "Default",
+      "row": 9,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 32,
+      "fg": "Default",
+      "row": 9,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 33,
+      "fg": "Default",
+      "row": 9,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 34,
+      "fg": "Default",
+      "row": 9,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 35,
+      "fg": "Default",
+      "row": 9,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 36,
+      "fg": "Default",
+      "row": 9,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 37,
+      "fg": "Default",
+      "row": 9,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 38,
+      "fg": "Default",
+      "row": 9,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 39,
+      "fg": "Default",
+      "row": 9,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 40,
+      "fg": "Default",
+      "row": 9,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 41,
+      "fg": "Default",
+      "row": 9,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 42,
+      "fg": "Default",
+      "row": 9,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 43,
+      "fg": "Default",
+      "row": 9,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 44,
+      "fg": "Default",
+      "row": 9,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 45,
+      "fg": "Default",
+      "row": 9,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 46,
+      "fg": "Default",
+      "row": 9,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 47,
+      "fg": "Default",
+      "row": 9,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 48,
+      "fg": "Default",
+      "row": 9,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 49,
+      "fg": "Default",
+      "row": 9,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 50,
+      "fg": "Default",
+      "row": 9,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 51,
+      "fg": "Default",
+      "row": 9,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 52,
+      "fg": "Default",
+      "row": 9,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 53,
+      "fg": "Default",
+      "row": 9,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 54,
+      "fg": "Default",
+      "row": 9,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 55,
+      "fg": "Default",
+      "row": 9,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 56,
+      "fg": "Default",
+      "row": 9,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 57,
+      "fg": "Default",
+      "row": 9,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 58,
+      "fg": "Default",
+      "row": 9,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 59,
+      "fg": "Default",
+      "row": 9,
+      "text": "│",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 0,
+      "fg": "Default",
+      "row": 10,
+      "text": "│",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 1,
+      "fg": "Default",
+      "row": 10,
+      "text": "a",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 2,
+      "fg": "Default",
+      "row": 10,
+      "text": "g",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 3,
+      "fg": "Default",
+      "row": 10,
+      "text": "e",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 4,
+      "fg": "Default",
+      "row": 10,
+      "text": "n",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 5,
+      "fg": "Default",
+      "row": 10,
+      "text": "t",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 6,
+      "fg": "Default",
+      "row": 10,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 7,
+      "fg": "Default",
+      "row": 10,
+      "text": "c",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 8,
+      "fg": "Default",
+      "row": 10,
+      "text": "h",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 9,
+      "fg": "Default",
+      "row": 10,
+      "text": "a",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 10,
+      "fg": "Default",
+      "row": 10,
+      "text": "n",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 11,
+      "fg": "Default",
+      "row": 10,
+      "text": "g",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 12,
+      "fg": "Default",
+      "row": 10,
+      "text": "e",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 13,
+      "fg": "Default",
+      "row": 10,
+      "text": "s",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 14,
+      "fg": "Default",
+      "row": 10,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 15,
+      "fg": "Default",
+      "row": 10,
+      "text": "w",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 16,
+      "fg": "Default",
+      "row": 10,
+      "text": "h",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 17,
+      "fg": "Default",
+      "row": 10,
+      "text": "i",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 18,
+      "fg": "Default",
+      "row": 10,
+      "text": "l",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 19,
+      "fg": "Default",
+      "row": 10,
+      "text": "e",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 20,
+      "fg": "Default",
+      "row": 10,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 21,
+      "fg": "Default",
+      "row": 10,
+      "text": "i",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 22,
+      "fg": "Default",
+      "row": 10,
+      "text": "n",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 23,
+      "fg": "Default",
+      "row": 10,
+      "text": "s",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 24,
+      "fg": "Default",
+      "row": 10,
+      "text": "p",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 25,
+      "fg": "Default",
+      "row": 10,
+      "text": "e",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 26,
+      "fg": "Default",
+      "row": 10,
+      "text": "c",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 27,
+      "fg": "Default",
+      "row": 10,
+      "text": "t",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 28,
+      "fg": "Default",
+      "row": 10,
+      "text": "i",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 29,
+      "fg": "Default",
+      "row": 10,
+      "text": "n",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 30,
+      "fg": "Default",
+      "row": 10,
+      "text": "g",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 31,
+      "fg": "Default",
+      "row": 10,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 32,
+      "fg": "Default",
+      "row": 10,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 33,
+      "fg": "Default",
+      "row": 10,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 34,
+      "fg": "Default",
+      "row": 10,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 35,
+      "fg": "Default",
+      "row": 10,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 36,
+      "fg": "Default",
+      "row": 10,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 37,
+      "fg": "Default",
+      "row": 10,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 38,
+      "fg": "Default",
+      "row": 10,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 39,
+      "fg": "Default",
+      "row": 10,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 40,
+      "fg": "Default",
+      "row": 10,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 41,
+      "fg": "Default",
+      "row": 10,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 42,
+      "fg": "Default",
+      "row": 10,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 43,
+      "fg": "Default",
+      "row": 10,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 44,
+      "fg": "Default",
+      "row": 10,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 45,
+      "fg": "Default",
+      "row": 10,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 46,
+      "fg": "Default",
+      "row": 10,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 47,
+      "fg": "Default",
+      "row": 10,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 48,
+      "fg": "Default",
+      "row": 10,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 49,
+      "fg": "Default",
+      "row": 10,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 50,
+      "fg": "Default",
+      "row": 10,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 51,
+      "fg": "Default",
+      "row": 10,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 52,
+      "fg": "Default",
+      "row": 10,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 53,
+      "fg": "Default",
+      "row": 10,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 54,
+      "fg": "Default",
+      "row": 10,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 55,
+      "fg": "Default",
+      "row": 10,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 56,
+      "fg": "Default",
+      "row": 10,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 57,
+      "fg": "Default",
+      "row": 10,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 58,
+      "fg": "Default",
+      "row": 10,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 59,
+      "fg": "Default",
+      "row": 10,
+      "text": "│",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 0,
+      "fg": "Default",
+      "row": 11,
+      "text": "│",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 1,
+      "fg": "Default",
+      "row": 11,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 2,
+      "fg": "Default",
+      "row": 11,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 3,
+      "fg": "Default",
+      "row": 11,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 4,
+      "fg": "Default",
+      "row": 11,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 5,
+      "fg": "Default",
+      "row": 11,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 6,
+      "fg": "Default",
+      "row": 11,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 7,
+      "fg": "Default",
+      "row": 11,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 8,
+      "fg": "Default",
+      "row": 11,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 9,
+      "fg": "Default",
+      "row": 11,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 10,
+      "fg": "Default",
+      "row": 11,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 11,
+      "fg": "Default",
+      "row": 11,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 12,
+      "fg": "Default",
+      "row": 11,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 13,
+      "fg": "Default",
+      "row": 11,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 14,
+      "fg": "Default",
+      "row": 11,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 15,
+      "fg": "Default",
+      "row": 11,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 16,
+      "fg": "Default",
+      "row": 11,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 17,
+      "fg": "Default",
+      "row": 11,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 18,
+      "fg": "Default",
+      "row": 11,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 19,
+      "fg": "Default",
+      "row": 11,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 20,
+      "fg": "Default",
+      "row": 11,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 21,
+      "fg": "Default",
+      "row": 11,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 22,
+      "fg": "Default",
+      "row": 11,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 23,
+      "fg": "Default",
+      "row": 11,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 24,
+      "fg": "Default",
+      "row": 11,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 25,
+      "fg": "Default",
+      "row": 11,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 26,
+      "fg": "Default",
+      "row": 11,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 27,
+      "fg": "Default",
+      "row": 11,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 28,
+      "fg": "Default",
+      "row": 11,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 29,
+      "fg": "Default",
+      "row": 11,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 30,
+      "fg": "Default",
+      "row": 11,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 31,
+      "fg": "Default",
+      "row": 11,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 32,
+      "fg": "Default",
+      "row": 11,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 33,
+      "fg": "Default",
+      "row": 11,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 34,
+      "fg": "Default",
+      "row": 11,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 35,
+      "fg": "Default",
+      "row": 11,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 36,
+      "fg": "Default",
+      "row": 11,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 37,
+      "fg": "Default",
+      "row": 11,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 38,
+      "fg": "Default",
+      "row": 11,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 39,
+      "fg": "Default",
+      "row": 11,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 40,
+      "fg": "Default",
+      "row": 11,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 41,
+      "fg": "Default",
+      "row": 11,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 42,
+      "fg": "Default",
+      "row": 11,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 43,
+      "fg": "Default",
+      "row": 11,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 44,
+      "fg": "Default",
+      "row": 11,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 45,
+      "fg": "Default",
+      "row": 11,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 46,
+      "fg": "Default",
+      "row": 11,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 47,
+      "fg": "Default",
+      "row": 11,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 48,
+      "fg": "Default",
+      "row": 11,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 49,
+      "fg": "Default",
+      "row": 11,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 50,
+      "fg": "Default",
+      "row": 11,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 51,
+      "fg": "Default",
+      "row": 11,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 52,
+      "fg": "Default",
+      "row": 11,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 53,
+      "fg": "Default",
+      "row": 11,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 54,
+      "fg": "Default",
+      "row": 11,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 55,
+      "fg": "Default",
+      "row": 11,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 56,
+      "fg": "Default",
+      "row": 11,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 57,
+      "fg": "Default",
+      "row": 11,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 58,
+      "fg": "Default",
+      "row": 11,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 59,
+      "fg": "Default",
+      "row": 11,
+      "text": "│",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 0,
+      "fg": "Default",
+      "row": 12,
+      "text": "└",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 1,
+      "fg": "Default",
+      "row": 12,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 2,
+      "fg": "Default",
+      "row": 12,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 3,
+      "fg": "Default",
+      "row": 12,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 4,
+      "fg": "Default",
+      "row": 12,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 5,
+      "fg": "Default",
+      "row": 12,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 6,
+      "fg": "Default",
+      "row": 12,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 7,
+      "fg": "Default",
+      "row": 12,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 8,
+      "fg": "Default",
+      "row": 12,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 9,
+      "fg": "Default",
+      "row": 12,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 10,
+      "fg": "Default",
+      "row": 12,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 11,
+      "fg": "Default",
+      "row": 12,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 12,
+      "fg": "Default",
+      "row": 12,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 13,
+      "fg": "Default",
+      "row": 12,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 14,
+      "fg": "Default",
+      "row": 12,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 15,
+      "fg": "Default",
+      "row": 12,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 16,
+      "fg": "Default",
+      "row": 12,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 17,
+      "fg": "Default",
+      "row": 12,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 18,
+      "fg": "Default",
+      "row": 12,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 19,
+      "fg": "Default",
+      "row": 12,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 20,
+      "fg": "Default",
+      "row": 12,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 21,
+      "fg": "Default",
+      "row": 12,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 22,
+      "fg": "Default",
+      "row": 12,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 23,
+      "fg": "Default",
+      "row": 12,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 24,
+      "fg": "Default",
+      "row": 12,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 25,
+      "fg": "Default",
+      "row": 12,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 26,
+      "fg": "Default",
+      "row": 12,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 27,
+      "fg": "Default",
+      "row": 12,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 28,
+      "fg": "Default",
+      "row": 12,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 29,
+      "fg": "Default",
+      "row": 12,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 30,
+      "fg": "Default",
+      "row": 12,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 31,
+      "fg": "Default",
+      "row": 12,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 32,
+      "fg": "Default",
+      "row": 12,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 33,
+      "fg": "Default",
+      "row": 12,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 34,
+      "fg": "Default",
+      "row": 12,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 35,
+      "fg": "Default",
+      "row": 12,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 36,
+      "fg": "Default",
+      "row": 12,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 37,
+      "fg": "Default",
+      "row": 12,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 38,
+      "fg": "Default",
+      "row": 12,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 39,
+      "fg": "Default",
+      "row": 12,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 40,
+      "fg": "Default",
+      "row": 12,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 41,
+      "fg": "Default",
+      "row": 12,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 42,
+      "fg": "Default",
+      "row": 12,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 43,
+      "fg": "Default",
+      "row": 12,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 44,
+      "fg": "Default",
+      "row": 12,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 45,
+      "fg": "Default",
+      "row": 12,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 46,
+      "fg": "Default",
+      "row": 12,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 47,
+      "fg": "Default",
+      "row": 12,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 48,
+      "fg": "Default",
+      "row": 12,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 49,
+      "fg": "Default",
+      "row": 12,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 50,
+      "fg": "Default",
+      "row": 12,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 51,
+      "fg": "Default",
+      "row": 12,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 52,
+      "fg": "Default",
+      "row": 12,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 53,
+      "fg": "Default",
+      "row": 12,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 54,
+      "fg": "Default",
+      "row": 12,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 55,
+      "fg": "Default",
+      "row": 12,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 56,
+      "fg": "Default",
+      "row": 12,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 57,
+      "fg": "Default",
+      "row": 12,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 58,
+      "fg": "Default",
+      "row": 12,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 59,
+      "fg": "Default",
+      "row": 12,
+      "text": "┘",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 0,
+      "fg": "Default",
+      "row": 13,
+      "text": "┌",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 1,
+      "fg": "Default",
+      "row": 13,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 2,
+      "fg": "Default",
+      "row": 13,
+      "text": "S",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 3,
+      "fg": "Default",
+      "row": 13,
+      "text": "t",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 4,
+      "fg": "Default",
+      "row": 13,
+      "text": "a",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 5,
+      "fg": "Default",
+      "row": 13,
+      "text": "t",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 6,
+      "fg": "Default",
+      "row": 13,
+      "text": "u",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 7,
+      "fg": "Default",
+      "row": 13,
+      "text": "s",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 8,
+      "fg": "Default",
+      "row": 13,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 9,
+      "fg": "Default",
+      "row": 13,
+      "text": "·",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 10,
+      "fg": "Default",
+      "row": 13,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 11,
+      "fg": "Default",
+      "row": 13,
+      "text": "s",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 12,
+      "fg": "Default",
+      "row": 13,
+      "text": "e",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 13,
+      "fg": "Default",
+      "row": 13,
+      "text": "m",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 14,
+      "fg": "Default",
+      "row": 13,
+      "text": "a",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 15,
+      "fg": "Default",
+      "row": 13,
+      "text": "n",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 16,
+      "fg": "Default",
+      "row": 13,
+      "text": "t",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 17,
+      "fg": "Default",
+      "row": 13,
+      "text": "i",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 18,
+      "fg": "Default",
+      "row": 13,
+      "text": "c",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 19,
+      "fg": "Default",
+      "row": 13,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 20,
+      "fg": "Default",
+      "row": 13,
+      "text": "s",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 21,
+      "fg": "Default",
+      "row": 13,
+      "text": "t",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 22,
+      "fg": "Default",
+      "row": 13,
+      "text": "a",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 23,
+      "fg": "Default",
+      "row": 13,
+      "text": "t",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 24,
+      "fg": "Default",
+      "row": 13,
+      "text": "u",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 25,
+      "fg": "Default",
+      "row": 13,
+      "text": "s",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 26,
+      "fg": "Default",
+      "row": 13,
+      "text": ":",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 27,
+      "fg": "Default",
+      "row": 13,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 28,
+      "fg": "Default",
+      "row": 13,
+      "text": "u",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 29,
+      "fg": "Default",
+      "row": 13,
+      "text": "n",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 30,
+      "fg": "Default",
+      "row": 13,
+      "text": "k",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 31,
+      "fg": "Default",
+      "row": 13,
+      "text": "n",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 32,
+      "fg": "Default",
+      "row": 13,
+      "text": "o",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 33,
+      "fg": "Default",
+      "row": 13,
+      "text": "w",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 34,
+      "fg": "Default",
+      "row": 13,
+      "text": "n",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 35,
+      "fg": "Default",
+      "row": 13,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 36,
+      "fg": "Default",
+      "row": 13,
+      "text": "·",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 37,
+      "fg": "Default",
+      "row": 13,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 38,
+      "fg": "Default",
+      "row": 13,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 39,
+      "fg": "Default",
+      "row": 13,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 40,
+      "fg": "Default",
+      "row": 13,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 41,
+      "fg": "Default",
+      "row": 13,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 42,
+      "fg": "Default",
+      "row": 13,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 43,
+      "fg": "Default",
+      "row": 13,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 44,
+      "fg": "Default",
+      "row": 13,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 45,
+      "fg": "Default",
+      "row": 13,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 46,
+      "fg": "Default",
+      "row": 13,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 47,
+      "fg": "Default",
+      "row": 13,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 48,
+      "fg": "Default",
+      "row": 13,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 49,
+      "fg": "Default",
+      "row": 13,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 50,
+      "fg": "Default",
+      "row": 13,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 51,
+      "fg": "Default",
+      "row": 13,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 52,
+      "fg": "Default",
+      "row": 13,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 53,
+      "fg": "Default",
+      "row": 13,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 54,
+      "fg": "Default",
+      "row": 13,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 55,
+      "fg": "Default",
+      "row": 13,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 56,
+      "fg": "Default",
+      "row": 13,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 57,
+      "fg": "Default",
+      "row": 13,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 58,
+      "fg": "Default",
+      "row": 13,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 59,
+      "fg": "Default",
+      "row": 13,
+      "text": "┐",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 0,
+      "fg": "Default",
+      "row": 14,
+      "text": "│",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 1,
+      "fg": "Default",
+      "row": 14,
+      "text": "A",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 2,
+      "fg": "Default",
+      "row": 14,
+      "text": "d",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 3,
+      "fg": "Default",
+      "row": 14,
+      "text": "o",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 4,
+      "fg": "Default",
+      "row": 14,
+      "text": "p",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 5,
+      "fg": "Default",
+      "row": 14,
+      "text": "t",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 6,
+      "fg": "Default",
+      "row": 14,
+      "text": "e",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 7,
+      "fg": "Default",
+      "row": 14,
+      "text": "d",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 8,
+      "fg": "Default",
+      "row": 14,
+      "text": ":",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 9,
+      "fg": "Default",
+      "row": 14,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 10,
+      "fg": "Default",
+      "row": 14,
+      "text": "/",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 11,
+      "fg": "Default",
+      "row": 14,
+      "text": "p",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 12,
+      "fg": "Default",
+      "row": 14,
+      "text": "r",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 13,
+      "fg": "Default",
+      "row": 14,
+      "text": "i",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 14,
+      "fg": "Default",
+      "row": 14,
+      "text": "v",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 15,
+      "fg": "Default",
+      "row": 14,
+      "text": "a",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 16,
+      "fg": "Default",
+      "row": 14,
+      "text": "t",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 17,
+      "fg": "Default",
+      "row": 14,
+      "text": "e",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 18,
+      "fg": "Default",
+      "row": 14,
+      "text": "/",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 19,
+      "fg": "Default",
+      "row": 14,
+      "text": "t",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 20,
+      "fg": "Default",
+      "row": 14,
+      "text": "m",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 21,
+      "fg": "Default",
+      "row": 14,
+      "text": "p",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 22,
+      "fg": "Default",
+      "row": 14,
+      "text": "/",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 23,
+      "fg": "Default",
+      "row": 14,
+      "text": ".",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 24,
+      "fg": "Default",
+      "row": 14,
+      "text": "t",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 25,
+      "fg": "Default",
+      "row": 14,
+      "text": "m",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 26,
+      "fg": "Default",
+      "row": 14,
+      "text": "p",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 27,
+      "fg": "Default",
+      "row": 14,
+      "text": "n",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 28,
+      "fg": "Default",
+      "row": 14,
+      "text": "a",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 29,
+      "fg": "Default",
+      "row": 14,
+      "text": "Q",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 30,
+      "fg": "Default",
+      "row": 14,
+      "text": "O",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 31,
+      "fg": "Default",
+      "row": 14,
+      "text": "p",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 32,
+      "fg": "Default",
+      "row": 14,
+      "text": "P",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 33,
+      "fg": "Default",
+      "row": 14,
+      "text": "/",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 34,
+      "fg": "Default",
+      "row": 14,
+      "text": "c",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 35,
+      "fg": "Default",
+      "row": 14,
+      "text": "h",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 36,
+      "fg": "Default",
+      "row": 14,
+      "text": "e",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 37,
+      "fg": "Default",
+      "row": 14,
+      "text": "c",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 38,
+      "fg": "Default",
+      "row": 14,
+      "text": "k",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 39,
+      "fg": "Default",
+      "row": 14,
+      "text": "o",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 40,
+      "fg": "Default",
+      "row": 14,
+      "text": "u",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 41,
+      "fg": "Default",
+      "row": 14,
+      "text": "t",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 42,
+      "fg": "Default",
+      "row": 14,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 43,
+      "fg": "Default",
+      "row": 14,
+      "text": "w",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 44,
+      "fg": "Default",
+      "row": 14,
+      "text": "i",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 45,
+      "fg": "Default",
+      "row": 14,
+      "text": "t",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 46,
+      "fg": "Default",
+      "row": 14,
+      "text": "h",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 47,
+      "fg": "Default",
+      "row": 14,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 48,
+      "fg": "Default",
+      "row": 14,
+      "text": "s",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 49,
+      "fg": "Default",
+      "row": 14,
+      "text": "p",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 50,
+      "fg": "Default",
+      "row": 14,
+      "text": "a",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 51,
+      "fg": "Default",
+      "row": 14,
+      "text": "c",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 52,
+      "fg": "Default",
+      "row": 14,
+      "text": "e",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 53,
+      "fg": "Default",
+      "row": 14,
+      "text": "s",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 54,
+      "fg": "Default",
+      "row": 14,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 55,
+      "fg": "Default",
+      "row": 14,
+      "text": "·",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 56,
+      "fg": "Default",
+      "row": 14,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 57,
+      "fg": "Default",
+      "row": 14,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 58,
+      "fg": "Default",
+      "row": 14,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 59,
+      "fg": "Default",
+      "row": 14,
+      "text": "│",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 0,
+      "fg": "Default",
+      "row": 15,
+      "text": "└",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 1,
+      "fg": "Default",
+      "row": 15,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 2,
+      "fg": "Default",
+      "row": 15,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 3,
+      "fg": "Default",
+      "row": 15,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 4,
+      "fg": "Default",
+      "row": 15,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 5,
+      "fg": "Default",
+      "row": 15,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 6,
+      "fg": "Default",
+      "row": 15,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 7,
+      "fg": "Default",
+      "row": 15,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 8,
+      "fg": "Default",
+      "row": 15,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 9,
+      "fg": "Default",
+      "row": 15,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 10,
+      "fg": "Default",
+      "row": 15,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 11,
+      "fg": "Default",
+      "row": 15,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 12,
+      "fg": "Default",
+      "row": 15,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 13,
+      "fg": "Default",
+      "row": 15,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 14,
+      "fg": "Default",
+      "row": 15,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 15,
+      "fg": "Default",
+      "row": 15,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 16,
+      "fg": "Default",
+      "row": 15,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 17,
+      "fg": "Default",
+      "row": 15,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 18,
+      "fg": "Default",
+      "row": 15,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 19,
+      "fg": "Default",
+      "row": 15,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 20,
+      "fg": "Default",
+      "row": 15,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 21,
+      "fg": "Default",
+      "row": 15,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 22,
+      "fg": "Default",
+      "row": 15,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 23,
+      "fg": "Default",
+      "row": 15,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 24,
+      "fg": "Default",
+      "row": 15,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 25,
+      "fg": "Default",
+      "row": 15,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 26,
+      "fg": "Default",
+      "row": 15,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 27,
+      "fg": "Default",
+      "row": 15,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 28,
+      "fg": "Default",
+      "row": 15,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 29,
+      "fg": "Default",
+      "row": 15,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 30,
+      "fg": "Default",
+      "row": 15,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 31,
+      "fg": "Default",
+      "row": 15,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 32,
+      "fg": "Default",
+      "row": 15,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 33,
+      "fg": "Default",
+      "row": 15,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 34,
+      "fg": "Default",
+      "row": 15,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 35,
+      "fg": "Default",
+      "row": 15,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 36,
+      "fg": "Default",
+      "row": 15,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 37,
+      "fg": "Default",
+      "row": 15,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 38,
+      "fg": "Default",
+      "row": 15,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 39,
+      "fg": "Default",
+      "row": 15,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 40,
+      "fg": "Default",
+      "row": 15,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 41,
+      "fg": "Default",
+      "row": 15,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 42,
+      "fg": "Default",
+      "row": 15,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 43,
+      "fg": "Default",
+      "row": 15,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 44,
+      "fg": "Default",
+      "row": 15,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 45,
+      "fg": "Default",
+      "row": 15,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 46,
+      "fg": "Default",
+      "row": 15,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 47,
+      "fg": "Default",
+      "row": 15,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 48,
+      "fg": "Default",
+      "row": 15,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 49,
+      "fg": "Default",
+      "row": 15,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 50,
+      "fg": "Default",
+      "row": 15,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 51,
+      "fg": "Default",
+      "row": 15,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 52,
+      "fg": "Default",
+      "row": 15,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 53,
+      "fg": "Default",
+      "row": 15,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 54,
+      "fg": "Default",
+      "row": 15,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 55,
+      "fg": "Default",
+      "row": 15,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 56,
+      "fg": "Default",
+      "row": 15,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 57,
+      "fg": "Default",
+      "row": 15,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 58,
+      "fg": "Default",
+      "row": 15,
+      "text": "─",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 59,
+      "fg": "Default",
+      "row": 15,
+      "text": "┘",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 0,
+      "fg": "Default",
+      "row": 16,
+      "text": "j",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 1,
+      "fg": "Default",
+      "row": 16,
+      "text": "/",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 2,
+      "fg": "Default",
+      "row": 16,
+      "text": "k",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 3,
+      "fg": "Default",
+      "row": 16,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 4,
+      "fg": "Default",
+      "row": 16,
+      "text": "f",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 5,
+      "fg": "Default",
+      "row": 16,
+      "text": "i",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 6,
+      "fg": "Default",
+      "row": 16,
+      "text": "l",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 7,
+      "fg": "Default",
+      "row": 16,
+      "text": "e",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 8,
+      "fg": "Default",
+      "row": 16,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 9,
+      "fg": "Default",
+      "row": 16,
+      "text": "·",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 10,
+      "fg": "Default",
+      "row": 16,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 11,
+      "fg": "Default",
+      "row": 16,
+      "text": "a",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 12,
+      "fg": "Default",
+      "row": 16,
+      "text": "r",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 13,
+      "fg": "Default",
+      "row": 16,
+      "text": "r",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 14,
+      "fg": "Default",
+      "row": 16,
+      "text": "o",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 15,
+      "fg": "Default",
+      "row": 16,
+      "text": "w",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 16,
+      "fg": "Default",
+      "row": 16,
+      "text": "s",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 17,
+      "fg": "Default",
+      "row": 16,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 18,
+      "fg": "Default",
+      "row": 16,
+      "text": "s",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 19,
+      "fg": "Default",
+      "row": 16,
+      "text": "c",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 20,
+      "fg": "Default",
+      "row": 16,
+      "text": "r",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 21,
+      "fg": "Default",
+      "row": 16,
+      "text": "o",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 22,
+      "fg": "Default",
+      "row": 16,
+      "text": "l",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 23,
+      "fg": "Default",
+      "row": 16,
+      "text": "l",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 24,
+      "fg": "Default",
+      "row": 16,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 25,
+      "fg": "Default",
+      "row": 16,
+      "text": "·",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 26,
+      "fg": "Default",
+      "row": 16,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 27,
+      "fg": "Default",
+      "row": 16,
+      "text": "r",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 28,
+      "fg": "Default",
+      "row": 16,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 29,
+      "fg": "Default",
+      "row": 16,
+      "text": "r",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 30,
+      "fg": "Default",
+      "row": 16,
+      "text": "e",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 31,
+      "fg": "Default",
+      "row": 16,
+      "text": "f",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 32,
+      "fg": "Default",
+      "row": 16,
+      "text": "r",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 33,
+      "fg": "Default",
+      "row": 16,
+      "text": "e",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 34,
+      "fg": "Default",
+      "row": 16,
+      "text": "s",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 35,
+      "fg": "Default",
+      "row": 16,
+      "text": "h",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 36,
+      "fg": "Default",
+      "row": 16,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 37,
+      "fg": "Default",
+      "row": 16,
+      "text": "·",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 38,
+      "fg": "Default",
+      "row": 16,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 39,
+      "fg": "Default",
+      "row": 16,
+      "text": "f",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 40,
+      "fg": "Default",
+      "row": 16,
+      "text": "/",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 41,
+      "fg": "Default",
+      "row": 16,
+      "text": "E",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 42,
+      "fg": "Default",
+      "row": 16,
+      "text": "s",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 43,
+      "fg": "Default",
+      "row": 16,
+      "text": "c",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 44,
+      "fg": "Default",
+      "row": 16,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 45,
+      "fg": "Default",
+      "row": 16,
+      "text": "b",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 46,
+      "fg": "Default",
+      "row": 16,
+      "text": "a",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 47,
+      "fg": "Default",
+      "row": 16,
+      "text": "c",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 48,
+      "fg": "Default",
+      "row": 16,
+      "text": "k",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 49,
+      "fg": "Default",
+      "row": 16,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 50,
+      "fg": "Default",
+      "row": 16,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 51,
+      "fg": "Default",
+      "row": 16,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 52,
+      "fg": "Default",
+      "row": 16,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 53,
+      "fg": "Default",
+      "row": 16,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 54,
+      "fg": "Default",
+      "row": 16,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 55,
+      "fg": "Default",
+      "row": 16,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 56,
+      "fg": "Default",
+      "row": 16,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 57,
+      "fg": "Default",
+      "row": 16,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 58,
+      "fg": "Default",
+      "row": 16,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 59,
+      "fg": "Default",
+      "row": 16,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 0,
+      "fg": "Default",
+      "row": 17,
+      "text": "s",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 1,
+      "fg": "Default",
+      "row": 17,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 2,
+      "fg": "Default",
+      "row": 17,
+      "text": "s",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 3,
+      "fg": "Default",
+      "row": 17,
+      "text": "t",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 4,
+      "fg": "Default",
+      "row": 17,
+      "text": "o",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 5,
+      "fg": "Default",
+      "row": 17,
+      "text": "p",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 6,
+      "fg": "Default",
+      "row": 17,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 7,
+      "fg": "Default",
+      "row": 17,
+      "text": "·",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 8,
+      "fg": "Default",
+      "row": 17,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 9,
+      "fg": "Default",
+      "row": 17,
+      "text": "q",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 10,
+      "fg": "Default",
+      "row": 17,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 11,
+      "fg": "Default",
+      "row": 17,
+      "text": "q",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 12,
+      "fg": "Default",
+      "row": 17,
+      "text": "u",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 13,
+      "fg": "Default",
+      "row": 17,
+      "text": "i",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 14,
+      "fg": "Default",
+      "row": 17,
+      "text": "t",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 15,
+      "fg": "Default",
+      "row": 17,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 16,
+      "fg": "Default",
+      "row": 17,
+      "text": "·",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 17,
+      "fg": "Default",
+      "row": 17,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 18,
+      "fg": "Default",
+      "row": 17,
+      "text": "d",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 19,
+      "fg": "Default",
+      "row": 17,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 20,
+      "fg": "Default",
+      "row": 17,
+      "text": "d",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 21,
+      "fg": "Default",
+      "row": 17,
+      "text": "e",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 22,
+      "fg": "Default",
+      "row": 17,
+      "text": "t",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 23,
+      "fg": "Default",
+      "row": 17,
+      "text": "a",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 24,
+      "fg": "Default",
+      "row": 17,
+      "text": "c",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 25,
+      "fg": "Default",
+      "row": 17,
+      "text": "h",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 26,
+      "fg": "Default",
+      "row": 17,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 27,
+      "fg": "Default",
+      "row": 17,
+      "text": "·",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 28,
+      "fg": "Default",
+      "row": 17,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 29,
+      "fg": "Default",
+      "row": 17,
+      "text": "P",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 30,
+      "fg": "Default",
+      "row": 17,
+      "text": "g",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 31,
+      "fg": "Default",
+      "row": 17,
+      "text": "U",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 32,
+      "fg": "Default",
+      "row": 17,
+      "text": "p",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 33,
+      "fg": "Default",
+      "row": 17,
+      "text": "/",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 34,
+      "fg": "Default",
+      "row": 17,
+      "text": "P",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 35,
+      "fg": "Default",
+      "row": 17,
+      "text": "g",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 36,
+      "fg": "Default",
+      "row": 17,
+      "text": "D",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 37,
+      "fg": "Default",
+      "row": 17,
+      "text": "n",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 38,
+      "fg": "Default",
+      "row": 17,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 39,
+      "fg": "Default",
+      "row": 17,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 40,
+      "fg": "Default",
+      "row": 17,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 41,
+      "fg": "Default",
+      "row": 17,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 42,
+      "fg": "Default",
+      "row": 17,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 43,
+      "fg": "Default",
+      "row": 17,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 44,
+      "fg": "Default",
+      "row": 17,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 45,
+      "fg": "Default",
+      "row": 17,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 46,
+      "fg": "Default",
+      "row": 17,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 47,
+      "fg": "Default",
+      "row": 17,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 48,
+      "fg": "Default",
+      "row": 17,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 49,
+      "fg": "Default",
+      "row": 17,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 50,
+      "fg": "Default",
+      "row": 17,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 51,
+      "fg": "Default",
+      "row": 17,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 52,
+      "fg": "Default",
+      "row": 17,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 53,
+      "fg": "Default",
+      "row": 17,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 54,
+      "fg": "Default",
+      "row": 17,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 55,
+      "fg": "Default",
+      "row": 17,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 56,
+      "fg": "Default",
+      "row": 17,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 57,
+      "fg": "Default",
+      "row": 17,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 58,
+      "fg": "Default",
+      "row": 17,
+      "text": " ",
+      "wide": false
+    },
+    {
+      "bg": "Default",
+      "bold": false,
+      "col": 59,
+      "fg": "Default",
+      "row": 17,
+      "text": " ",
+      "wide": false
+    }
+  ],
+  "cols": 60,
+  "hide_cursor": true,
+  "rows": 18,
+  "source": "actual dashboard outer PTY, agent-like concurrent filesystem edits; no coding child launched"
+}
