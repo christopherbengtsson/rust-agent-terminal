@@ -56,7 +56,7 @@ dashboard controls it at a time; see
 [the ownership decision](adr/0001-user-wide-supervisor.md). This separation is
 necessary because the product requires agents to survive terminal
 or dashboard loss. The scripted prototype below implements supervisor/session
-ownership; durable persistence and crash reconciliation remain planned.
+ownership, durable persistence and conservative explicit crash reconciliation.
 The supervisor owns one active session per worktree, stable session IDs, launch
 deduplication, lifecycle transitions, and explicit stop versus detach. Ordinary
 quit requests supervisor shutdown; an unexpectedly lost client does not. On
@@ -368,9 +368,9 @@ through version 1 (app/session metadata) to version 2 (launch outcomes). Records
 retain task/session/request identity and selected history position; checkout path
 bytes are retained for the current adopted task independently of checkout existence.
 The supervisor restores active records as interrupted and never starts a child
-from restored records. Replacement launch stays blocked pending ticket 09's
-execution reconciliation. Native launch phase/identity crash-window hardening
-remains ticket 09; completed metadata operations are not claims of exactly-once
+from restored records. Replacement launch stays blocked until explicit supported execution reconciliation
+(ticket 09 below). Native launch phase/identity crash-window hardening now uses
+a durable launch gate; completed metadata operations are not claims of exactly-once
 process execution.
 
 Capture transfers each at-most-4096-byte PTY read into a 64-slot lossless queue
@@ -396,3 +396,48 @@ Chronological text retains escaped terminal operations rather than discarding
 redrawn/alternate-screen content. Reading requires neither the checkout nor the
 original native conversation. Power-loss, full-volume and sustained resource
 capacity proof remain separate gates; see `docs/proofs/08-durable-history.md`.
+
+### Durable launch authorization and explicit reconciliation (ticket 09)
+
+All three launch choices now use `recovery`'s temporary same-executable gate.
+The SQLite worker first commits prepared task/session/request identity and boot
+identity before any process is created. A helper connects to a private nonce
+socket and cannot execute coding until the supervisor receives the worker's
+separate durable authorization completion. That authorization records PID,
+process start time and boot identity before the release byte is sent. The helper
+then execs the selected native tool (Codex retains `--no-daemon`); it becomes that
+process rather than remaining as another session daemon. Native exec failures
+return a distinct receipt and are saved as failed launch outcomes. A successful
+close-on-exec receipt is checked against the live process identity before a
+successful outcome is committed and acknowledged. This is not exactly-once
+execution: crashes after durable authorization can leave an uncertain outcome.
+
+Restore never releases a gate or starts an agent. It marks retained execution
+Interrupted and holds adoption/replacement exclusivity. `QueryLaunch` and retries
+of the same ID recover the retained outcome, including interrupted/uncertain
+results synthesized and committed when the crash preceded a known result.
+The 1024-result limit stays fail-closed; this change does not evict requests or
+load unbounded history. Prepared and authorization completions use the existing
+bounded persistence control channel, independently of transcript bytes.
+
+Dashboard `u` explicitly reconciles. macOS evidence uses `kern.bootsessionuuid`
+and `proc_pidinfo(PROC_PIDTBSDINFO)`'s microsecond process start time. A matching
+live identity blocks replacement and is never signaled by recovery. A different
+verified boot proves previous processes cannot survive. A never-authorized gate
+record also proves no coding could execute, so it can release its reservation.
+Reconciliation preserves Interrupted and history; starting a new conversation
+remains an explicit separate choice. `s`/`q` cannot claim confirmed stop of an
+unmanaged uncertain survivor; `d` leaves the recovery dashboard.
+
+A missing or reused PID does not establish descendant absence. After native
+execution was authorized, leader absence on the same boot can require an actual
+verified reboot before replacement. Process-group inventory provides an
+explanation, not permission to ignore escaped descendants. Unavailable identity
+or inventory remains uncertain. Legacy active/already-Interrupted records without boot evidence acquire a
+separate durable first-recovery `observed_boot` anchor. Same-boot recovery stays
+blocked; a later verified different boot can release them without inventing a
+historical launch boot. A durable reconciliation marker preserves explicitly
+reconciled Interrupted records across restart. The Linux fallback
+uses `/proc` boot/start fields for fixtures; it establishes no native macOS
+compatibility. See [the crash-window proof](proofs/09-launch-reconciliation.md)
+for the exact boundaries, simulated boot evidence and limitations.

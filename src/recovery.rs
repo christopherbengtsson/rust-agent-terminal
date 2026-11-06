@@ -1,6 +1,7 @@
 //! Launch gate and conservative process evidence. Never signals restored processes.
 use serde::{Deserialize, Serialize};
 use std::{
+    ffi::OsString,
     io::{self, Read, Write},
     os::unix::{net::UnixStream, process::CommandExt},
     path::Path,
@@ -10,6 +11,8 @@ use std::{
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Execution {
     pub boot: String,
+    #[serde(default)]
+    pub observed_boot: Option<String>,
     pub pid: Option<i32>,
     pub start: Option<(u64, u64)>,
     /// Native execution may only be released after this record commits.
@@ -19,10 +22,26 @@ impl Execution {
     pub fn prepared() -> io::Result<Self> {
         Ok(Self {
             boot: boot()?,
+            observed_boot: None,
             pid: None,
             start: None,
             released: false,
         })
+    }
+    pub fn legacy() -> io::Result<Self> {
+        Ok(Self {
+            boot: String::new(),
+            observed_boot: Some(boot()?),
+            pid: None,
+            start: None,
+            released: true,
+        })
+    }
+    pub fn anchor_legacy(&mut self) -> io::Result<()> {
+        if self.boot.is_empty() && self.observed_boot.is_none() {
+            self.observed_boot = Some(boot()?);
+        }
+        Ok(())
     }
     pub fn identify(&mut self, pid: i32) -> io::Result<()> {
         self.pid = Some(pid);
@@ -42,10 +61,13 @@ impl Execution {
         Ok(())
     }
     pub fn reconcile(&self) -> Result<(), String> {
-        if self.boot.is_empty() {
-            return Err("Legacy record has no boot identity: survivor uncertainty cannot be cleared automatically. Preserve this state and inspect unmanaged execution.".into());
-        }
         let current = boot().map_err(|e| format!("Cannot identify current boot: {e}"))?;
+        if self.boot.is_empty() {
+            return match self.observed_boot.as_deref() {
+                Some(observed) if observed != current => Ok(()),
+                _ => Err("Legacy execution has no historical boot identity. Recovery observation is durably anchored to this boot; verified reboot then u can exclude prior survivors. No replacement yet.".into()),
+            };
+        }
         if current != self.boot || !self.released {
             return Ok(());
         }
@@ -53,7 +75,7 @@ impl Execution {
             .pid
             .ok_or("Released execution has no process identity")?;
         match start(pid) {
-            Ok(actual) if Some(actual) == self.start => return Err(format!("Verified surviving process {pid}; finish it through its native tools, then retry u reconciliation. No replacement allowed.")),
+            Ok(actual) if Some(actual) == self.start => return Err(format!("Verified surviving process {pid}; no replacement allowed. Finish it through native tools; leader absence may still require verified reboot. u rechecks evidence.")),
             Ok(_) => return Err("PID reused: original descendants remain uncertain. Verified reboot is the conservative recovery path.".into()),
             Err(error) if error.raw_os_error() == Some(libc::ESRCH) => {},
             Err(error) => return Err(format!("Process identity unavailable: {error}; verified reboot is the conservative recovery path.")),
@@ -163,7 +185,22 @@ pub enum Receipt {
     Unknown(String),
 }
 
-pub fn gate(socket: &Path, nonce: &str, agent: &str) -> io::Result<()> {
+/// Prefix argv in place so native adapter arguments, cwd and environment survive.
+pub fn wrap(
+    command: &mut portable_pty::CommandBuilder,
+    socket: &Path,
+    nonce: &str,
+) -> io::Result<()> {
+    let native = std::mem::take(command.get_argv_mut());
+    let argv = command.get_argv_mut();
+    argv.push(std::env::current_exe()?.into_os_string());
+    argv.push("--launch-gate".into());
+    argv.push(socket.as_os_str().to_owned());
+    argv.push(nonce.into());
+    argv.extend(native);
+    Ok(())
+}
+pub fn gate(socket: &Path, nonce: &str, argv: Vec<OsString>) -> io::Result<()> {
     let mut stream = UnixStream::connect(socket)?;
     stream.write_all(nonce.as_bytes())?;
     let mut release = [0];
@@ -171,18 +208,11 @@ pub fn gate(socket: &Path, nonce: &str, agent: &str) -> io::Result<()> {
     if release[0] != 1 {
         return Err(io::Error::other("Launch gate not authorized"));
     }
-    let mut command = if agent == "fixture" {
-        let mut command = Command::new(std::env::current_exe()?);
-        command.arg("--scripted-child");
-        command
-    } else {
-        let mut command = Command::new(agent);
-        if agent == "codex" {
-            command.arg("--no-daemon");
-        }
-        command
-    };
-    let error = command.exec(); // UnixStream is close-on-exec: EOF is the successful exec receipt.
+    let program = argv
+        .first()
+        .ok_or_else(|| io::Error::other("Missing native executable"))?;
+    let error = Command::new(program).args(&argv[1..]).exec();
+    // UnixStream closes on exec; explicit exec failure is a distinct receipt.
     stream.write_all(error.to_string().as_bytes())?;
     Err(error)
 }

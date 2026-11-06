@@ -34,11 +34,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     if first.as_deref() == Some(std::ffi::OsStr::new("--launch-gate")) {
         let socket = PathBuf::from(arguments.next().ok_or("Missing gate socket")?);
         let nonce = arguments.next().ok_or("Missing gate nonce")?;
-        let agent = arguments.next().ok_or("Missing gate agent")?;
         return Ok(recovery::gate(
             &socket,
             nonce.to_str().ok_or("Invalid nonce")?,
-            agent.to_str().ok_or("Invalid agent")?,
+            arguments.collect(),
         )?);
     }
     if first.as_deref() == Some(std::ffi::OsStr::new("--supervisor")) {

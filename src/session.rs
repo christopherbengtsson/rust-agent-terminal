@@ -65,6 +65,8 @@ pub struct Observation {
     #[serde(default)]
     pub execution: Option<crate::recovery::Execution>,
     #[serde(default)]
+    pub reconciled: bool,
+    #[serde(default)]
     pub history: Option<crate::persistence::HistoryPage>,
     #[serde(default)]
     pub history_index: usize,
@@ -454,9 +456,12 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             crate::recovery::crash_barrier(directory, "before-result");
             match result {
                 crate::recovery::Receipt::Executed => {
-                    if let Some(evidence) = &state.execution
-                        && let Err(error) = evidence.verify_live()
-                    {
+                    let verified = state
+                        .execution
+                        .as_ref()
+                        .ok_or_else(|| io::Error::other("Launch stopped before live exec receipt"))
+                        .and_then(|evidence| evidence.verify_live());
+                    if let Err(error) = verified {
                         state.error = Some(format!(
                             "Exec receipt lost its live process identity: {error}; launch outcome uncertain"
                         ));
@@ -721,16 +726,16 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                 state.error = recorded.error.clone();
                 return Ok(());
             }
-            if pending_launch.is_some() || gate_receipt.is_some() {
-                if matches!(
+            if (pending_launch.is_some() || gate_receipt.is_some())
+                && matches!(
                     request,
                     Request::Adopt(_)
                         | Request::Launch(_)
                         | Request::LaunchClaude(_)
                         | Request::LaunchCodex(_)
-                ) {
-                    return Err("Launch reconciliation pending; wait for durable outcome".into());
-                }
+                )
+            {
+                return Err("Launch reconciliation pending; wait for durable outcome".into());
             }
             match request {
                 Request::Adopt(bytes) => {
@@ -769,6 +774,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     if child.is_some() || stopping.is_some() { return Err("Session owned by current supervisor; stop it normally".into()); }
                     if let Some(evidence) = &state.execution { evidence.reconcile()?; }
                     state.execution = None;
+                    state.reconciled = true;
                     state.error = Some("Reconciled: no released coding execution survives; history retained. Explicitly launch a new conversation when ready.".into());
                 }
                 Request::QueryLaunch(_) => return Err("Launch request unknown to this supervisor; do not replay uncertain activity after supervisor loss".into()),
@@ -787,6 +793,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     let path = checkout.as_ref().ok_or("Adopt a checkout before launch")?;
                     if !continuing {
                         state.execution = Some(crate::recovery::Execution::prepared()?);
+                        state.reconciled = false;
                         let session = uuid::Uuid::new_v4().to_string();
                         state.identity = Some(format!("task={} session={} request={request}", task_identity, session));
                         state.launch_result = None;
@@ -808,15 +815,23 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     let gate_path = directory.join("launch-gate.sock");
                     let _ = fs::remove_file(&gate_path);
                     let gate_listener = UnixListener::bind(&gate_path)?;
+                    gate_listener.set_nonblocking(true)?;
                     fs::set_permissions(&gate_path, fs::Permissions::from_mode(0o600))?;
                     let nonce = uuid::Uuid::new_v4().to_string();
-                    let mut command = CommandBuilder::new(std::env::current_exe()?);
-                    command.arg("--launch-gate");
-                    command.arg(&gate_path);
-                    command.arg(&nonce);
-                    command.arg(if claude { "claude" } else if codex { "codex" } else { "fixture" });
+                    let mut command = if claude {
+                        CommandBuilder::new("claude")
+                    } else if codex {
+                        let mut command = CommandBuilder::new("codex");
+                        command.arg("--no-daemon");
+                        command
+                    } else {
+                        let mut command = CommandBuilder::new(std::env::current_exe()?);
+                        command.arg("--scripted-child");
+                        command
+                    };
                     command.env("TERM", "xterm-256color");
                     command.cwd(path);
+                    crate::recovery::wrap(&mut command, &gate_path, &nonce)?;
                     let launched = pty.slave.spawn_command(command).map_err(|error| {
                         if claude {
                             format!("Claude Code launch failed: {error}. Install claude on PATH, run claude auth login in your usual terminal, then explicitly retry c; adopted checkout retained")
@@ -849,7 +864,16 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     gate_receipt = Some(result);
                     thread::spawn(move || {
                         let result = (|| -> io::Result<crate::recovery::Receipt> {
-                            let (mut stream, _) = gate_listener.accept()?;
+                            let deadline = std::time::Instant::now() + Duration::from_secs(2);
+                            let mut stream = loop {
+                                match gate_listener.accept() {
+                                    Ok((stream, _)) => break stream,
+                                    Err(error) if error.kind() == io::ErrorKind::WouldBlock && std::time::Instant::now() < deadline => thread::sleep(Duration::from_millis(5)),
+                                    Err(error) => return Err(error),
+                                }
+                            };
+                            // macOS accepted sockets inherit nonblocking status.
+                            stream.set_nonblocking(false)?;
                             stream.set_read_timeout(Some(Duration::from_secs(5)))?;
                             let mut actual = vec![0; nonce.len()];
                             stream.read_exact(&mut actual)?;
@@ -861,8 +885,8 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                             if !error.is_empty() { return Ok(crate::recovery::Receipt::ExecFailed(error)); }
                             Ok(crate::recovery::Receipt::Executed)
                         })().unwrap_or_else(|e| crate::recovery::Receipt::Unknown(e.to_string()));
-                        let _ = receipt.send(result);
                         let _ = fs::remove_file(gate_path);
+                        let _ = receipt.send(result);
                     });
                     storage.commands.try_send(crate::persistence::Command::Authorize(crate::persistence::metadata(&state), Some(path_bytes(path)), task_identity.clone()))?;
                     save_pending += 1;
@@ -970,6 +994,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                 }
                 Request::Screen => {}
                 Request::Stop | Request::Shutdown => {
+                    gate_release = None;
                     if child.is_none() && state.execution.is_some() {
                         return Err("Interrupted execution remains uncertain; u reconciles evidence, d detaches. A missing native leader may require verified reboot before replacement or confirmed shutdown.".into());
                     }

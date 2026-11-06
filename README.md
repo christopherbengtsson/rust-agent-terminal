@@ -57,7 +57,7 @@ Native `exit` retains the latest screen and task/session attribution and returns
 to dashboard focus. A subsequent explicit launch creates a new session.
 Neither native exit nor stop deletes working files. Detach restores the terminal
 and closes only the dashboard connection. Unexpected dashboard loss also preserves
-execution. No durable-history flush is implemented; that remains ticket 08.
+execution. Quit waits for durable history flush; a failed flush remains visible and retryable.
 
 Bracketed paste is enabled on the outer terminal and forwarded with delimiters
 when the child requests that mode; otherwise multiline paste normalizes line
@@ -97,9 +97,10 @@ lock; only its owner can remove a stale, refused socket. A live or uncertain
 endpoint is never displaced. Keep the lock file in place, including after shutdown.
 Use separate private `--state-dir` directories only for isolated experiments.
 
-This prototype has no durable metadata/history, supervisor-crash launch
-reconciliation, or cleanup of processes that escape the managed process group. Do not use it for real coding
-work. Dashboard loss preserves the supervisor and fixture; reconnect and quit
+The durable-history and launch-recovery sections below describe current storage
+and recovery behavior. Cleanup of processes that escape the managed process
+group remains unproved; interrupted native execution can require verified reboot
+before replacement. Dashboard loss preserves the supervisor and fixture; reconnect and quit
 normally to clean up. Do not remove a socket for a running supervisor. The bounded
 parsed screen follows the session pane viewport (up to 200×80 cells), without
 scrollback; it is not history. The PTY and parser resize together, including
@@ -163,3 +164,20 @@ records without starting coding; unresolved execution blocks replacement launch.
 An abrupt failure can lose output beyond the committed prefix. See
 [the history proof](docs/proofs/08-durable-history.md) for tested boundaries and
 preliminary healthy-storage observations.
+
+### Recovering an interrupted launch
+
+After supervisor loss, the dashboard restores **Interrupted** execution and
+retained history without starting coding. Press `u` to reconcile, `h` for history,
+or `d` to detach. A successful reconciliation retains the interrupted record;
+choose `c`, `x` or `l` explicitly to start a new conversation. This is separate
+from native conversation resume.
+
+A verified surviving process blocks replacement; recovery does not kill a
+restored PID. If native execution was authorized and its leader has disappeared,
+same-boot checks cannot rule out escaped descendants: a verified reboot may be
+required before `u` can release the reservation. Missing process evidence stays
+blocked. `s` and `q` do not falsely confirm that uncertain unmanaged execution
+stopped. Launch requests and their known results survive supervisor restart;
+retrying the same request does not start another agent. See the
+[launch recovery proof](docs/proofs/09-launch-reconciliation.md).

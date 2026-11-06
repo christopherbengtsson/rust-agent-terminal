@@ -250,14 +250,13 @@ impl Store {
                 state.lifecycle,
                 Lifecycle::Running | Lifecycle::Stopping | Lifecycle::StopFailed
             )
+            || (state.lifecycle == Lifecycle::Interrupted && !state.reconciled)
         {
             if state.execution.is_none() {
-                state.execution = Some(crate::recovery::Execution {
-                    boot: String::new(),
-                    pid: None,
-                    start: None,
-                    released: true,
-                });
+                state.execution = Some(crate::recovery::Execution::legacy()?);
+            }
+            if let Some(evidence) = state.execution.as_mut() {
+                evidence.anchor_legacy()?;
             }
             state.lifecycle = Lifecycle::Interrupted;
             state.error = Some("Interrupted supervisor: retained history available; execution is uncertain. No automatic restart. u reconciles; absent native leader may require verified reboot.".into());
@@ -271,10 +270,10 @@ impl Store {
             self.save(&state, path.clone(), task.clone())?;
         }
         let mut launches = launches;
-        if let Some(result) = &state.launch_result {
-            if !launches.iter().any(|known| known.request == result.request) {
-                launches.push(result.clone());
-            }
+        if let Some(result) = &state.launch_result
+            && !launches.iter().any(|known| known.request == result.request)
+        {
+            launches.push(result.clone());
         }
         Ok(Restored {
             state,

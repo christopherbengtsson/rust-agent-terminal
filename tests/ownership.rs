@@ -1417,3 +1417,93 @@ fn failed_gate_exec_result_survives_supervisor_restart_without_retrying_native_c
     assert_no_owned_coding(&fixture);
     control.request(serde_json::json!("Shutdown"));
 }
+
+#[test]
+fn legacy_interrupted_record_anchors_observation_boot_then_recovers_after_later_boot() {
+    use std::os::unix::{ffi::OsStrExt, fs::PermissionsExt};
+    let fixture = Fixture::new();
+    std::fs::create_dir(fixture.state()).unwrap();
+    std::fs::set_permissions(fixture.state(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    // A literal version-one legacy fixture, consumed through the real supervisor.
+    let db = rusqlite::Connection::open(fixture.state().join("history.sqlite3")).unwrap();
+    db.execute_batch("CREATE TABLE app (id INTEGER PRIMARY KEY CHECK(id=1), state TEXT NOT NULL, checkout BLOB, task TEXT NOT NULL); CREATE TABLE sessions (id TEXT PRIMARY KEY, identity TEXT NOT NULL, state TEXT NOT NULL, durable INTEGER NOT NULL DEFAULT 0); PRAGMA user_version=1;").unwrap();
+    let old = serde_json::json!({"adopted":"legacy checkout", "identity":null, "screen":"", "formatted":"", "rows":24, "cols":100, "output_bytes":0, "error":null, "stopped":false, "lifecycle":"Interrupted", "control_denied":false, "launch_request":"legacy-uncertain-09"});
+    db.execute(
+        "INSERT INTO app VALUES(1,?1,?2,'legacy-task')",
+        rusqlite::params![old.to_string(), fixture.repository.as_os_str().as_bytes()],
+    )
+    .unwrap();
+    drop(db);
+    let mut dashboard = fixture.open();
+    dashboard.wait("Process: Interrupted");
+    dashboard.kill();
+    let mut control = Controller::connect(&fixture);
+    let uncertain = control.request(serde_json::json!("Reconcile"));
+    assert!(uncertain["error"].as_str().unwrap().contains("Legacy"));
+    assert_eq!(
+        uncertain["execution"]["boot"], "",
+        "do not invent historical launch boot"
+    );
+    let anchor = uncertain["execution"]["observed_boot"]
+        .as_str()
+        .expect("first recovery observation must provide future reboot route")
+        .to_owned();
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        if control.request(serde_json::json!("Screen"))["metadata_pending"] == false {
+            break;
+        }
+        assert!(Instant::now() < deadline);
+    }
+    kill_owner(&fixture);
+    drop(control);
+    let mut dashboard = fixture.open();
+    dashboard.wait("Process: Interrupted");
+    dashboard.kill();
+    let mut control = Controller::connect(&fixture);
+    assert_eq!(control.greeting["execution"]["observed_boot"], anchor);
+    assert!(!control.request(serde_json::json!("Reconcile"))["execution"].is_null());
+    kill_owner(&fixture);
+    drop(control);
+    let mut dashboard = Dashboard::open_config(
+        &fixture.repository,
+        &fixture.state(),
+        None,
+        Some("legacy-future-boot-09"),
+    );
+    dashboard.wait("Process: Interrupted");
+    dashboard.kill();
+    let mut control = Controller::connect(&fixture);
+    wait_reconciled(&mut control);
+    assert_no_owned_coding(&fixture);
+    let result = control.request(serde_json::json!({"Launch":"explicit-after-legacy-recovery"}));
+    assert!(result["launch_result"]["error"].is_null(), "{result}");
+    fixture.assert_one_owner_and_child();
+    control.request(serde_json::json!("Shutdown"));
+}
+
+#[test]
+fn launch_gate_preserves_native_arguments_environment_and_checkout() {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = Fixture::new();
+    let tools = fixture.temp.path().join("native tools with spaces");
+    std::fs::create_dir(&tools).unwrap();
+    let codex = tools.join("codex");
+    std::fs::write(&codex, "#!/bin/sh\nfor arg in \"$@\"; do\n if [ \"$arg\" = --no-daemon ]; then printf 'native-no-daemon-preserved\\r\\n'; fi\ndone\nprintf 'native-term:%s\\r\\n' \"$TERM\"\nprintf 'native-cwd:%s\\r\\n' \"$PWD\"\nexec /bin/cat\n").unwrap();
+    std::fs::set_permissions(codex, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let path = std::env::join_paths(
+        std::iter::once(tools).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+    )
+    .unwrap();
+    let mut dashboard =
+        Dashboard::open_with_path(&fixture.repository, &fixture.state(), Some(&path));
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted");
+    dashboard.send(b"x");
+    dashboard.wait("native-no-daemon-preserved");
+    dashboard.wait("native-term:xterm-256color");
+    dashboard.wait(&format!("native-cwd:{}", fixture.repository.display()));
+    dashboard.send(&[0x1d]);
+    dashboard.send(b"q");
+}
