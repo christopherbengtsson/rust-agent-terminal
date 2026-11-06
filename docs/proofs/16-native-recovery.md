@@ -171,3 +171,12 @@ the integration merger, avoiding another duplicate multi-minute resource
 workload. Earlier failed aggregate runs are not represented as passing that
 combined check. No physical reboot, active real-native supervisor-crash recovery,
 other native versions or full resume-management workflow is established here.
+
+The combined check subsequently passed on `be1b40b`, integrated by `e2cfef3`:
+22 unit tests, 33 ownership/history/recovery scenarios (197.55 s), scripted
+interaction/status (14.50 s), and screen integration (8.18 s). The ignored
+restoration probe was exercised by its parent test. Locked build, formatting,
+and all-target warnings-denied Clippy passed. This includes the corrected
+controller-release scenario, partial-frame delivery, and bounded OSC parser.
+See [the combined verification record](13-slow-subscribers.md). Later storage
+fault and final milestone checks remain separate.

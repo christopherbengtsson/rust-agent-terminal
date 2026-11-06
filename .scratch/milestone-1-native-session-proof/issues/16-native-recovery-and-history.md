@@ -35,3 +35,9 @@ of scope. The final combined all-target run is pending integration; focused fina
 native/recovery, unchanged safety diagnostic, unit/render, build, formatting and
 Clippy checks passed. Earlier aggregate failures and their causal corrections
 are recorded rather than described as aggregate passes.
+
+The combined all-target check subsequently passed on `be1b40b`, integrated by
+`e2cfef3`: 22 unit tests, 33 ownership/history/recovery scenarios, scripted
+interaction/status, and screen integration. Build, formatting, and Clippy also
+passed; the earlier pending combined verification is complete. See the ticket 13
+record for the exact source hashes and raw results.
