@@ -456,3 +456,21 @@ reestablishing modal confidence. Status is cleared for persistence and restored
 as unknown, rather than reviving an old current-state claim. Monitoring failure
 does not prevent ordinary native launch. See the [partial proof and remaining
 gates](proofs/10-claude-status.md); this does not resolve the status support gate.
+
+### Slow-subscriber isolation (ticket 13)
+
+The supervisor serializes one finite response at a time. A retained partial-write
+cursor advances through at most 64KiB of nonblocking socket output per pass;
+control/ownership and storage completions continue between passes. A frame that
+cannot complete in 500ms closes its socket and records a visible reconnect
+reason. Reopening receives a coherent current replacement snapshot with its
+parsed-byte boundary and the same session identity, never an output delta backlog.
+The exact transcript is independently captured through 64 x 4096-byte slots,
+with a worker block and a waiting producer block: at most 270336 pending owned
+raw bytes. Capture blocks on saturation and reports pending high-water and actual
+backpressure count/wait time. Screens retain zero scrollback and at most 200x80
+cells per primary/alternate screen; protocol frames remain capped at 4MiB.
+Connection loss keeps the last identity/lifecycle, labels process state unknown
+and revokes semantic status. `d` exits locally even after transport loss; reopen
+resynchronizes without launching. `q` still requires confirmed stop and flush.
+See [caps and preliminary resource proof](proofs/13-slow-subscribers.md).

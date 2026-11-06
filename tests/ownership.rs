@@ -1673,3 +1673,420 @@ fn unavailable_native_recovery_retains_history_until_explicit_new_conversation()
     dashboard.send(&[0x1d]);
     dashboard.send(b"q");
 }
+
+#[test]
+fn slow_subscriber_disconnects_with_reason_and_reconnects_coherently() {
+    let fixture = Fixture::new();
+    let mut dashboard = fixture.open();
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted");
+    dashboard.send(b"l");
+    dashboard.wait("fixture>");
+    dashboard.kill();
+    let mut slow = Controller::connect(&fixture);
+    let identity = slow.greeting["identity"].clone();
+    slow.request(serde_json::json!({"Resize":{"rows":80,"cols":200}}));
+    slow.request(serde_json::json!({"Input":b"mosaic\r".to_vec()}));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let state = slow.request(serde_json::json!("Screen"));
+        if state["screen"]
+            .as_str()
+            .unwrap()
+            .contains("max geometry complete")
+        {
+            break;
+        }
+        assert!(Instant::now() < deadline);
+    }
+    // Stop reading the real supervisor transport. A maximum styled screen is
+    // larger than the socket buffer, forcing partial writes and real lag.
+    slow.send(serde_json::json!("Screen"));
+    std::thread::sleep(Duration::from_millis(50));
+    let since = Instant::now();
+    let competing =
+        std::os::unix::net::UnixStream::connect(fixture.state().join("supervisor.sock")).unwrap();
+    competing
+        .set_read_timeout(Some(Duration::from_millis(300)))
+        .unwrap();
+    let mut refusal = String::new();
+    std::io::BufRead::read_line(&mut std::io::BufReader::new(competing), &mut refusal).unwrap();
+    let refusal: serde_json::Value = serde_json::from_str(&refusal).unwrap();
+    assert_eq!(refusal["control_denied"], true);
+    assert!(
+        since.elapsed() < Duration::from_millis(300),
+        "ownership refusal must not wait for slow snapshot"
+    );
+    std::thread::sleep(Duration::from_millis(750));
+    drop(slow);
+    let mut resumed = Controller::connect(&fixture);
+    assert_eq!(resumed.greeting["identity"], identity);
+    assert!(
+        resumed.greeting["error"]
+            .as_str()
+            .unwrap_or("")
+            .contains("Slow dashboard"),
+        "missing explicit slow-subscriber reason"
+    );
+    assert!(
+        resumed.greeting["screen"]
+            .as_str()
+            .unwrap()
+            .contains("max geometry complete")
+    );
+    let state = resumed.request(serde_json::json!({"Input":b"identity\r".to_vec()}));
+    assert_eq!(state["identity"], identity);
+    resumed.request(serde_json::json!("Shutdown"));
+}
+
+#[test]
+fn sustained_capture_crosses_caps_while_attached_focused_detached_and_lagged() {
+    use std::sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    };
+    let fixture = Fixture::new();
+    assert!(
+        Command::new("git")
+            .arg("-C")
+            .arg(&fixture.repository)
+            .args([
+                "-c",
+                "user.name=Proof",
+                "-c",
+                "user.email=proof@example.invalid",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "proof13"
+            ])
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    assert!(
+        Command::new("git")
+            .arg("-C")
+            .arg(&fixture.repository)
+            .args(["worktree", "add", "-b", "other13"])
+            .arg(fixture.temp.path().join("other13"))
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    let evidence = std::env::var_os("RAT_RESOURCE_EVIDENCE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| fixture.temp.path().join("13-resource.jsonl"));
+    let file = Arc::new(Mutex::new(
+        std::fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&evidence)
+            .unwrap(),
+    ));
+    let origin = Instant::now();
+    let record = |value: serde_json::Value| {
+        writeln!(file.lock().unwrap(), "{value}").unwrap();
+    };
+    record(
+        serde_json::json!({"kind":"manifest", "revision":String::from_utf8(Command::new("git").args(["rev-parse","HEAD"]).output().unwrap().stdout).unwrap().trim(), "tracked_source_dirty":!Command::new("git").args(["diff","HEAD","--quiet"]).status().unwrap().success(), "profile":"debug", "record_bytes":128,"records_per_phase":32768,"phases":["attached","dashboard-focused","fully-detached","slow-subscriber"],"capture_pending_cap":270336,"frame_cap":4194304,"screen":[80,200],"scrollback":0,"rss_sample_period_ms":100}),
+    );
+    for (command, args) in [
+        ("uname", vec!["-mrs"]),
+        ("rustc", vec!["--version"]),
+        (
+            "sysctl",
+            vec!["-n", "hw.model", "hw.memsize", "hw.logicalcpu"],
+        ),
+    ] {
+        record(
+            serde_json::json!({"kind":"environment","command":command,"output":String::from_utf8_lossy(&Command::new(command).args(args).output().unwrap().stdout)}),
+        );
+    }
+    let mut dashboard = fixture.open();
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted");
+    dashboard.send(b"l");
+    let start = dashboard.wait("fixture>");
+    let child: u32 = start
+        .split("pid=")
+        .nth(1)
+        .unwrap()
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let processes = String::from_utf8(
+        Command::new("ps")
+            .args(["-Ao", "pid,ppid,command"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    let owner: u32 = processes
+        .lines()
+        .find(|line| {
+            line.contains("--supervisor") && line.contains(fixture.state().to_str().unwrap())
+        })
+        .unwrap()
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let pids = Arc::new(Mutex::new(vec![
+        owner,
+        child,
+        dashboard.child.process_id().unwrap(),
+    ]));
+    record(
+        serde_json::json!({"kind":"pids","supervisor":owner,"child":child,"dashboard":dashboard.child.process_id()}),
+    );
+    let done = Arc::new(AtomicBool::new(false));
+    let sampler = {
+        let file = file.clone();
+        let done = done.clone();
+        let pids = pids.clone();
+        std::thread::spawn(move || {
+            while !done.load(Ordering::Relaxed) {
+                let list = pids
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .map(u32::to_string)
+                    .collect::<Vec<_>>()
+                    .join(",");
+                let since = Instant::now();
+                let output = Command::new("ps")
+                    .args(["-p", &list, "-o", "pid=,ppid=,rss=,etime=,command="])
+                    .output()
+                    .unwrap();
+                writeln!(file.lock().unwrap(),"{}",serde_json::json!({"kind":"rss","elapsed_us":origin.elapsed().as_micros(),"sampler_us":since.elapsed().as_micros(),"ps":String::from_utf8_lossy(&output.stdout)})).unwrap();
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        })
+    };
+    dashboard.send(b"flood13\r");
+    let complete = dashboard.wait("flood13-complete run=1");
+    record(
+        serde_json::json!({"kind":"phase","mode":"attached","elapsed_us":origin.elapsed().as_micros(),"visible":complete}),
+    );
+    dashboard.send(b"flood13\r");
+    dashboard.send(&[0x1d]);
+    dashboard.wait("Focus: dashboard");
+    for _ in 0..5 {
+        let since = Instant::now();
+        dashboard.send(b"j");
+        dashboard.wait("Branch: other13");
+        record(
+            serde_json::json!({"kind":"navigation","key":"j","visible_us":since.elapsed().as_micros()}),
+        );
+        let since = Instant::now();
+        dashboard.send(b"k");
+        dashboard.wait("Branch: main");
+        record(
+            serde_json::json!({"kind":"navigation","key":"k","visible_us":since.elapsed().as_micros()}),
+        );
+        dashboard.send(b"r");
+    }
+    let since = Instant::now();
+    dashboard.send(b"\r");
+    dashboard.wait("Focus: session");
+    let screen_ready_us = since.elapsed().as_micros();
+    dashboard.send(b"attach13-nonce\r");
+    dashboard.wait("received: attach13-nonce");
+    record(
+        serde_json::json!({"kind":"attach","focus_frame_us":screen_ready_us,"screen_and_input_visible_us":since.elapsed().as_micros(),"boundary":"coherent replacement snapshots and unique fixture input ACK; child may finish its unpaced burst before reading input"}),
+    );
+    let complete = dashboard.wait("flood13-complete run=2");
+    record(
+        serde_json::json!({"kind":"phase","mode":"dashboard-focused","elapsed_us":origin.elapsed().as_micros(),"visible":complete}),
+    );
+    dashboard.kill();
+    let mut control = Controller::connect(&fixture);
+    let identity = control.greeting["identity"].clone();
+    control.request(serde_json::json!({"Input":b"flood13\r".to_vec()}));
+    drop(control);
+    std::thread::sleep(Duration::from_secs(3));
+    let mut control = Controller::connect(&fixture);
+    assert!(
+        control.greeting["screen"]
+            .as_str()
+            .unwrap()
+            .contains("flood13-complete run=3")
+    );
+    record(
+        serde_json::json!({"kind":"phase","mode":"fully-detached","elapsed_us":origin.elapsed().as_micros(),"observation":control.greeting}),
+    );
+    control.request(serde_json::json!({"Resize":{"rows":80,"cols":200}}));
+    control.request(serde_json::json!({"Input":b"mosaic\r".to_vec()}));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !control.request(serde_json::json!("Screen"))["screen"]
+        .as_str()
+        .unwrap()
+        .contains("max geometry complete")
+    {
+        assert!(Instant::now() < deadline);
+    }
+    control.send(serde_json::json!({"Input":b"flood13\r".to_vec()}));
+    // The response captures the large styled screen before the child erases it;
+    // do not read that actual socket, forcing its one-frame backlog to saturate.
+    std::thread::sleep(Duration::from_secs(3));
+    drop(control);
+    let mut control = Controller::connect(&fixture);
+    assert_eq!(control.greeting["identity"], identity);
+    assert!(
+        control.greeting["screen"]
+            .as_str()
+            .unwrap()
+            .contains("flood13-complete run=4")
+    );
+    assert!(
+        control.greeting["error"]
+            .as_str()
+            .unwrap_or("")
+            .contains("Slow dashboard")
+    );
+    record(
+        serde_json::json!({"kind":"phase","mode":"slow-subscriber","elapsed_us":origin.elapsed().as_micros(),"observation":control.greeting}),
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let final_state = loop {
+        let state = control.request(serde_json::json!("Screen"));
+        if state["durable_bytes"] == state["output_bytes"] {
+            break state;
+        }
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert!(final_state["capture_high_water"].as_u64().unwrap() <= 66 * 4096);
+    assert!(
+        final_state["capture_backpressure_count"].as_u64().unwrap() > 0,
+        "workload must actually saturate capture queue"
+    );
+    assert!(final_state["subscriber_frame_high_water"].as_u64().unwrap() <= 4 * 1024 * 1024);
+    record(serde_json::json!({"kind":"bounds","state":final_state}));
+    control.request(serde_json::json!({"Resize":{"rows":24,"cols":100}}));
+    control.request(serde_json::json!({"Input":b"exit\r".to_vec()}));
+    let mut offset = 0;
+    let mut text = String::new();
+    loop {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let page = loop {
+            let state = control.request(serde_json::json!({"History":{"index":0,"offset":offset}}));
+            if state["history"]["offset"].as_u64() == Some(offset) {
+                break state["history"].clone();
+            }
+            assert!(Instant::now() < deadline);
+        };
+        assert!(
+            text.len() < 32 * 1024 * 1024,
+            "finite fixture history bound"
+        );
+        text.push_str(page["text"].as_str().unwrap());
+        if let Some(next) = page["next"].as_u64() {
+            offset = next;
+        } else {
+            break;
+        }
+    }
+    let records: Vec<u32> = text
+        .lines()
+        .filter_map(|line| {
+            line.split_once("flood13:")
+                .and_then(|(_, rest)| rest.get(..6))
+                .and_then(|n| n.parse().ok())
+        })
+        .collect();
+    assert_eq!(
+        records,
+        (0..4).flat_map(|_| 0..32768).collect::<Vec<_>>(),
+        "history must contain each numbered record exactly once across lag and reconnect"
+    );
+    for line in text
+        .lines()
+        .filter(|line| line.contains("flood13-complete"))
+    {
+        record(serde_json::json!({"kind":"producer","line":line}));
+    }
+    record(
+        serde_json::json!({"kind":"continuity","records":records.len(),"durable_bytes":final_state["durable_bytes"],"elapsed_us":origin.elapsed().as_micros()}),
+    );
+    control.request(serde_json::json!("Shutdown"));
+    done.store(true, Ordering::Relaxed);
+    sampler.join().unwrap();
+    eprintln!("resource evidence: {}", evidence.display());
+}
+
+#[test]
+fn disconnected_dashboard_retains_identity_and_detaches_locally_before_reopen() {
+    let fixture = Fixture::new();
+    let mut dashboard = fixture.open();
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted");
+    dashboard.send(b"l");
+    let original = dashboard.wait("fixture>");
+    let pid = original
+        .split("pid=")
+        .nth(1)
+        .unwrap()
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .to_owned();
+    let processes = Command::new("ps")
+        .args(["-Ao", "pid,ppid,command"])
+        .output()
+        .unwrap();
+    let processes = String::from_utf8(processes.stdout).unwrap();
+    let owner: i32 = processes
+        .lines()
+        .find(|line| {
+            line.contains("--supervisor") && line.contains(fixture.state().to_str().unwrap())
+        })
+        .unwrap()
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap();
+    struct Resume(i32);
+    impl Drop for Resume {
+        fn drop(&mut self) {
+            // SAFETY: only the isolated test supervisor's known PID is resumed.
+            unsafe {
+                libc::kill(self.0, libc::SIGCONT);
+            }
+        }
+    }
+    let resume = Resume(owner);
+    // SAFETY: pause only the isolated test supervisor to force a real transport timeout.
+    assert_eq!(unsafe { libc::kill(owner, libc::SIGSTOP) }, 0);
+    dashboard.wait("press d to detach locally");
+    let lost = dashboard.wait("Process: unknown (last seen Running)");
+    assert!(lost.contains("session="));
+    assert!(!lost.contains("Process: Idle"));
+    dashboard.send(b"d");
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while dashboard.child.try_wait().unwrap().is_none() {
+        assert!(
+            Instant::now() < deadline,
+            "d must exit without waiting on dead transport"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    drop(resume);
+    let mut reopened = fixture.open();
+    assert!(reopened.wait("fixture>").contains(&format!("pid={pid}")));
+    reopened.send(b"identity\r");
+    reopened.wait(&format!("same-child pid={pid}"));
+    reopened.send(&[0x1d]);
+    reopened.send(b"q");
+}
