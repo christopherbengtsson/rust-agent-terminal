@@ -86,6 +86,7 @@ fn execute(
     let mut child: Option<std::process::Child> = None;
     let mut released = false;
     let mut receipt_uncertain = false;
+    let mut exec_failed = false;
     let mut scope = None;
     let mut stdout = None;
     let mut stderr = None;
@@ -232,6 +233,7 @@ fn execute(
             thread::sleep(Duration::from_millis(5));
         }
         if !failure.is_empty() {
+            exec_failed = true;
             return Err(format!(
                 "Setup exec failed: {}",
                 String::from_utf8_lossy(&failure)
@@ -362,7 +364,10 @@ fn execute(
     tail.lock().unwrap().apply(&mut record);
     record.phase = if cancel.load(Ordering::Acquire) {
         Phase::Cancelled
-    } else if receipt_uncertain || output_error.is_some() {
+    } else if receipt_uncertain
+        || output_error.is_some()
+        || (released && result.is_err() && !exec_failed)
+    {
         Phase::Uncertain
     } else if result.as_ref().is_ok_and(|status| status.success()) {
         Phase::Succeeded
