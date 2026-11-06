@@ -1,0 +1,32 @@
+
+ ▐▛███▛█   Claude Code v2.1.318
+▝▜██████▀  Haiku 5.5 with medium effort · API Usage Billing
+ ▝▝   ▝▝   /private/tmp/rat-claude-proof-checkout
+
+  ⎿  SessionStart:startup hook error
+  ⎿  Failed with non-blocking status code: /bin/sh: ${CLAUDE_PLUGIN_ROOT}/hooks/run-hook.cmd: No such
+     file or directory
+
+❯ Reply exactly: native-proof λ 界. Do not use tools or write files.
+
+⏺ native-proof λ 界
+
+✻ Cogitated for 1s · done 1:44 PM
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                                                ✔ Update installed · Restart to update
+────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏸ manual mode on · ? for shortcuts

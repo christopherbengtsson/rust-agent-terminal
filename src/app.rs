@@ -100,6 +100,11 @@ impl App {
                     &tree.path,
                 ))));
             }
+            KeyCode::Char('c') if key.modifiers.is_empty() => {
+                return Some(Effect::Session(Request::LaunchClaude(
+                    self.launch_request.clone(),
+                )));
+            }
             KeyCode::Char('l') if key.modifiers.is_empty() => {
                 return Some(Effect::Session(Request::Launch(
                     self.launch_request.clone(),
@@ -128,7 +133,7 @@ impl App {
         if self.attached {
             "Native input · Ctrl-C interrupt · Ctrl-] / Ctrl-5 dashboard (keeps session running)"
         } else {
-            "j/k select · r refresh · a adopt · l fixture · Enter attach · s stop · d detach · q/Esc/Ctrl-C quit/stop"
+            "j/k select · r refresh · a adopt · c Claude · l fixture · Enter attach · s stop · d detach · q/Esc/Ctrl-C quit/stop"
         }
     }
 
@@ -200,6 +205,19 @@ mod tests {
             path: PathBuf::from(path),
             ..Worktree::default()
         }
+    }
+
+    #[test]
+    fn claude_is_an_explicit_launch_choice_separate_from_fixture() {
+        let mut app = App::new("repo".into());
+        assert!(
+            matches!(app.input(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE)),
+            Some(Effect::Session(Request::LaunchClaude(id))) if id == app.launch_request)
+        );
+        assert!(
+            matches!(app.input(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE)),
+            Some(Effect::Session(Request::Launch(id))) if id == app.launch_request)
+        );
     }
 
     #[test]

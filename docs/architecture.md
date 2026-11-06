@@ -309,3 +309,15 @@ never writes raw child controls to the outer terminal. One queued snapshot
 resynchronizes lagging dashboards; this is ephemeral screen state rather than
 retained history. Framed transport is capped at 4 MiB for bounded styled snapshots.
 See [the proof and visual comparison](proofs/04-session-screen.md).
+
+### Experimental Claude launch (ticket 05)
+
+Dashboard `c` explicitly starts `claude` from the supervisor's inherited PATH,
+with the PTY working directory set directly to the adopted canonical checkout.
+`l` remains the safe scripted fixture choice. Native credentials and prompts stay
+with Claude; the product has no credential store and makes no global/repository
+configuration edits. Startup errors explain installation/login and explicit retry,
+while discovery and adoption remain available. A live child refuses either launch
+choice. The observation labels the launched tool independently of process lifecycle;
+semantic status remains unknown. See [native proof](proofs/05-claude-native.md)
+for versioned results and unresolved compatibility gates.
