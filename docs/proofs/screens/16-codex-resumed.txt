@@ -1,0 +1,36 @@
+Native conversation: 01a1b119-bc22-7680-9457-78fe79526d35
+Managed identity: task=d35710c7-a58e-4b66-9104-73b2fc1ee952 session=7d82f17e-bd0c-4fb7-bccb-e21889253942 request=5e507096-ca12-48f3-a174-e5d92a213f60
+Native child PID: 34108
+
+ 
+  >_ OpenAI Codex (v0.167.0)
+     /private/tmp/rat16-codex-checkout
+ 
+ 
+› Remember this conversation-only token: violet-comet-16-b831. Reply exactly STORED. Do not use tools,
+  write files, or repeat the token.
+ 
+ 
+• STORED
+ 
+  Worked for 3s • 14:44                                                                                 
+ 
+ 
+› What exact conversation-only token did I ask you to remember earlier? Reply with that token only. Do
+  not use tools or read files.
+ 
+ 
+• violet-comet-16-b831
+ 
+  Worked for 3s • 14:49                                                                                 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+› Ask Codex to do anything
+ 
+  GPT-6.1-Sol medium · /private/tmp/rat16-codex-checkout · Remember conversation token
+  ← for agents · ? for shortcuts

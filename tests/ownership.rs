@@ -1312,6 +1312,8 @@ fn surviving_native_execution_blocks_replacement_then_different_boot_reconciles(
         control.request(serde_json::json!({"QueryLaunch":request}))["launch_result"],
         result
     );
+    let resume = control.request(serde_json::json!({"Resume":"must-not-resume-survivor"}));
+    assert!(resume["error"].as_str().unwrap().contains("uncertain"));
     let blocked = control.request(serde_json::json!({"Launch":"must-not-compete"}));
     assert!(blocked["error"].as_str().unwrap().contains("uncertain"));
     let stop = control.request(serde_json::json!("Stop"));
@@ -2089,4 +2091,60 @@ fn disconnected_dashboard_retains_identity_and_detaches_locally_before_reopen() 
     reopened.wait(&format!("same-child pid={pid}"));
     reopened.send(&[0x1d]);
     reopened.send(b"q");
+}
+
+#[test]
+fn prior_boot_native_record_stays_interrupted_until_explicit_reconcile_then_resume() {
+    use std::os::unix::{ffi::OsStrExt, fs::PermissionsExt};
+    let fixture = Fixture::new();
+    std::fs::create_dir(fixture.state()).unwrap();
+    std::fs::set_permissions(fixture.state(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let tools = fixture.temp.path().join("tools");
+    std::fs::create_dir(&tools).unwrap();
+    let wrapper = tools.join("claude");
+    std::fs::write(&wrapper,format!("#!/bin/sh\nprintf 'native-recovery-args:'\nprintf '<%s>' \"$@\"\nprintf '\\r\\n'\nexec '{}' --scripted-child\n",env!("CARGO_BIN_EXE_agent-terminal").replace('\'',"'\\''"))).unwrap();
+    std::fs::set_permissions(wrapper, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let path = std::env::join_paths(
+        std::iter::once(tools).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+    )
+    .unwrap();
+    let db = rusqlite::Connection::open(fixture.state().join("history.sqlite3")).unwrap();
+    db.execute_batch("CREATE TABLE app (id INTEGER PRIMARY KEY CHECK(id=1), state TEXT NOT NULL, checkout BLOB, task TEXT NOT NULL); CREATE TABLE sessions (id TEXT PRIMARY KEY, identity TEXT NOT NULL, state TEXT NOT NULL, durable INTEGER NOT NULL DEFAULT 0); PRAGMA user_version=1;").unwrap();
+    let identity =
+        "task=task16 session=33333333-4444-4555-8666-777777777777 request=prior-native-16";
+    let old = serde_json::json!({"adopted":fixture.repository.display().to_string(),"identity":identity,"agent":"Claude Code","native_conversation":"11111111-2222-4333-8444-555555555555","screen":"","formatted":"","rows":24,"cols":100,"output_bytes":0,"error":null,"stopped":false,"lifecycle":"Running","control_denied":false,"launch_request":"prior-native-16","execution":{"boot":"injected-prior-boot-16","pid":null,"start":null,"released":true}});
+    db.execute(
+        "INSERT INTO app VALUES(1,?1,?2,'task16')",
+        rusqlite::params![old.to_string(), fixture.repository.as_os_str().as_bytes()],
+    )
+    .unwrap();
+    db.execute(
+        "INSERT INTO sessions VALUES(?1,?2,?3,0)",
+        rusqlite::params![
+            "33333333-4444-4555-8666-777777777777",
+            identity,
+            old.to_string()
+        ],
+    )
+    .unwrap();
+    drop(db);
+    let mut dashboard =
+        Dashboard::open_with_path(&fixture.repository, &fixture.state(), Some(&path));
+    dashboard.wait("Process: Interrupted");
+    dashboard.kill();
+    let mut control = Controller::connect(&fixture);
+    assert_no_owned_coding(&fixture);
+    let blocked = control.request(serde_json::json!({"Resume":"before-reconciliation-16"}));
+    assert!(blocked["error"].as_str().unwrap().contains("uncertain"));
+    wait_reconciled(&mut control);
+    assert_no_owned_coding(&fixture);
+    drop(control);
+    let mut dashboard =
+        Dashboard::open_with_path(&fixture.repository, &fixture.state(), Some(&path));
+    dashboard.wait("Process: Interrupted");
+    dashboard.send(b"v");
+    dashboard.wait("native-recovery-args:<--resume><11111111-2222-4333-8444-555555555555>");
+    dashboard.wait("fixture>");
+    dashboard.send(&[0x1d]);
+    dashboard.send(b"q");
 }

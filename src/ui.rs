@@ -326,7 +326,7 @@ impl Ui {
                 &compact_help
             } else {
                 compact_help = format!(
-                    "a adopt · c Claude · x Codex · l fixture · Enter attach · s stop · d detach\nq quit/stop · Process: {} · status: {}",
+                    "v resume · c new Claude · x new Codex · Enter attach\nq quit/stop · Process: {} · status: {}",
                     if app.session.connection_lost {
                         format!("unknown (last seen {:?})", app.session.lifecycle)
                     } else {
@@ -502,7 +502,8 @@ mod tests {
             } else {
                 assert!(text.contains("Focus: dashboard"));
                 assert!(text.contains("Enter attach"));
-                assert!(text.contains("x Codex"));
+                assert!(text.contains("x new Codex"));
+                assert!(text.contains("v resume"));
                 assert!(text.contains("quit/stop"));
             }
         }
