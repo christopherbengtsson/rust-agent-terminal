@@ -1405,6 +1405,10 @@ impl AgentSession {
     }
     pub(super) fn reserved(&self) -> bool {
         self.state.execution.is_some()
+            || !self.history.eof
+            || self.history.capture_done.is_some()
+            || self.history.flush_pending
+            || (self.history.capture_started_here && !self.history.history_sealed)
             || self.execution.child.is_some()
             || self.execution.stopping.is_some()
             || self.launch.pending_launch.is_some()

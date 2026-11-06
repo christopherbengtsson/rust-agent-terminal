@@ -137,6 +137,8 @@ pub fn metadata(state: &Observation) -> Box<Observation> {
     saved.history = None;
     saved.discovery = None;
     saved.registry = Default::default();
+    saved.sessions.clear();
+    saved.control_target.clear();
     saved.registry_pending = false;
     saved.adoption_pending = false;
     saved.cleanup = None;
