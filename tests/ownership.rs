@@ -6745,6 +6745,10 @@ fn keyboard_switches_live_workspaces_and_reconnects_in_normal_and_small_ptys() {
         dashboard.send(b"j\r");
         let b_screen = dashboard.wait("workspace-B-visible");
         assert!(!b_screen.contains("workspace-A-visible"));
+        assert!(
+            !b_screen.contains("Session changed before command delivery"),
+            "selection must wait for B's identity before automatic resize: {b_screen}"
+        );
         if cols == 60 {
             capture(&dashboard, cols, rows, "B");
         }

@@ -78,6 +78,9 @@ impl App {
     /// Ui computes geometry; App decides whether a new usable size needs dispatch.
     pub fn viewport(&mut self, dimensions: Option<(u16, u16)>) -> Option<Effect> {
         let dimensions = dimensions?;
+        if !self.selected_target.is_empty() && self.selected_target != self.session.control_target {
+            return None;
+        }
         if self.sent_viewport == Some(dimensions) {
             return None;
         }
@@ -881,6 +884,10 @@ mod tests {
         app.input(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE));
         assert!(
             matches!(app.input(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)), Some(Effect::Session(Request::SelectSession(target))) if target == "owner-b")
+        );
+        assert!(
+            app.viewport(Some((24, 100))).is_none(),
+            "geometry waits for the selected owner's identity"
         );
         app.observe_session(Observation {
             control_target: "owner-a".into(),
