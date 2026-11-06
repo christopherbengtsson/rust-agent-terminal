@@ -111,3 +111,14 @@ and all-target tests passed before final integration (18 unit tests plus one
 ignored subprocess probe driven by terminal restoration, 13 ownership scenarios,
 scripted interaction and styled-screen proof). Final integration verification is
 recorded below.
+
+Final integration: merged `b722dfd` (ticket 08 durable history) into the ticket 11
+branch and included LaunchCodex in the save trigger, shared retained request map
+and interrupted-execution guard. Agent labels flow through the existing durable
+metadata. `cargo build --locked`, `cargo fmt --all -- --check`,
+`cargo clippy --locked --all-targets -- -D warnings` and
+`cargo test --locked --all-targets` passed: 18 unit tests, one ignored subprocess
+probe exercised by the passing restoration test, 20 ownership scenarios (36.08s),
+scripted interaction (3.64s), and screen proof. The final native run itself was
+before this persistence merge; the native launch/input/process path was preserved,
+and merged behavior was checked through the real dashboard/supervisor seam.

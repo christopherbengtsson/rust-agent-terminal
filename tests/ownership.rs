@@ -165,6 +165,8 @@ impl Fixture {
 impl Drop for Fixture {
     fn drop(&mut self) {
         // Only the isolated test endpoint can be stopped by this cleanup.
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(self.state(), std::fs::Permissions::from_mode(0o700));
         use std::os::unix::net::UnixStream;
         for _ in 0..20 {
             if let Ok(mut stream) = UnixStream::connect(self.state().join("supervisor.sock")) {
@@ -785,4 +787,328 @@ fn streaming_child_keeps_screen_sequence_identity_and_resize_after_dashboard_dea
     reopened.send(b"r");
     reopened.wait("Project / worktrees (1)");
     reopened.send(b"q");
+}
+
+#[test]
+fn stopped_history_survives_restart_and_missing_checkout_without_launching() {
+    let fixture = Fixture::new();
+    let mut dashboard = fixture.open();
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted");
+    dashboard.send(b"l");
+    dashboard.wait("fixture>");
+    dashboard.send(b"retained-context-08\r");
+    dashboard.wait("received: retained-context-08");
+    dashboard.send(b"exit\r");
+    dashboard.wait("Process: Exited");
+    dashboard.send(b"q");
+    let deadline = Instant::now() + Duration::from_secs(8);
+    while dashboard.child.try_wait().unwrap().is_none() {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    std::fs::rename(
+        &fixture.repository,
+        fixture.temp.path().join("removed-checkout"),
+    )
+    .unwrap();
+    let mut restored = fixture.open();
+    restored.wait("Process: Exited");
+    restored.send(b"h");
+    restored.wait("Retained history");
+    restored.wait("received: retained-context-08");
+    restored.wait("\\u{1b}[?2004h");
+    assert!(
+        !restored
+            .screen
+            .screen()
+            .contents()
+            .contains("Focus: session")
+    );
+    restored.send(b"q");
+}
+
+#[test]
+fn chronological_history_retains_erased_and_alternate_screen_text_safely() {
+    let fixture = Fixture::new();
+    let mut dashboard = fixture.open();
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted");
+    dashboard.send(b"l");
+    dashboard.wait("fixture>");
+    dashboard.send(b"history-controls\r");
+    dashboard.wait("after-history-controls");
+    dashboard.send(b"exit\r");
+    dashboard.wait("Process: Exited");
+    dashboard.send(b"h");
+    let history = dashboard.wait("erased-response-08");
+    assert!(history.contains("alternate-response-08"));
+    assert!(history.contains("\\u{1b}[2K"));
+    assert!(
+        history.find("erased-response-08").unwrap()
+            < history.find("alternate-response-08").unwrap()
+    );
+    dashboard.send(b"q");
+}
+
+#[test]
+fn abrupt_supervisor_loss_recovers_acknowledged_prefix_without_automatic_coding() {
+    let fixture = Fixture::new();
+    let mut dashboard = fixture.open();
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted");
+    dashboard.send(b"l");
+    let initial = dashboard.wait("fixture>");
+    let child_pid = initial
+        .split("pid=")
+        .nth(1)
+        .unwrap()
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .to_string();
+    dashboard.send(b"durable-prefix-08\r");
+    dashboard.wait("received: durable-prefix-08");
+    dashboard.kill();
+    let mut control = Controller::connect(&fixture);
+    let identity = control.greeting["identity"].clone();
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let durable = loop {
+        let state = control.request(serde_json::json!("Screen"));
+        if state["durable_bytes"].as_u64().unwrap_or(0) >= state["output_bytes"].as_u64().unwrap()
+            && state["durable_flush_count"].as_u64().unwrap_or(0) > 0
+        {
+            break state;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "pending output never became durable: {state}"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    eprintln!(
+        "durable prefix: {} bytes; accepted-to-durable {} ms; sync+commit {} us",
+        durable["durable_bytes"],
+        durable["accepted_to_durable_millis"],
+        durable["sync_commit_micros"]
+    );
+    let processes = Command::new("ps")
+        .args(["-Ao", "pid,ppid,command"])
+        .output()
+        .unwrap();
+    let owner: String = String::from_utf8(processes.stdout)
+        .unwrap()
+        .lines()
+        .find(|line| {
+            line.contains("--supervisor") && line.contains(fixture.state().to_str().unwrap())
+        })
+        .unwrap()
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .to_owned();
+    assert!(
+        Command::new("kill")
+            .args(["-KILL", &owner])
+            .status()
+            .unwrap()
+            .success()
+    );
+    drop(control);
+    // The fixture process identity is known directly from this isolated run;
+    // cleanup is test responsibility, not product reconciliation evidence.
+    let _ = Command::new("kill").args(["-KILL", &child_pid]).status();
+    let mut restored = fixture.open();
+    restored.wait("Process: Interrupted");
+    restored.wait("No automatic restart");
+    restored.send(b"h");
+    restored.wait("received: durable-prefix-08");
+    restored.kill();
+    let mut control = Controller::connect(&fixture);
+    assert_eq!(control.greeting["identity"], identity);
+    let blocked = control.request(serde_json::json!({"Launch":"replacement-must-not-run"}));
+    assert!(blocked["error"].as_str().unwrap().contains("uncertain"));
+    control.request(serde_json::json!("Shutdown"));
+}
+
+#[test]
+fn healthy_output_reports_real_durable_boundaries_within_one_second() {
+    let fixture = Fixture::new();
+    let mut dashboard = fixture.open();
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted");
+    dashboard.send(b"l");
+    dashboard.wait("fixture>");
+    dashboard.kill();
+    let mut control = Controller::connect(&fixture);
+    control.request(serde_json::json!({"Input":b"stream\rstream\rstream\r".to_vec()}));
+    let started = Instant::now();
+    let mut samples = Vec::new();
+    let mut previous_count = 0;
+    let mut last = serde_json::Value::Null;
+    while started.elapsed() < Duration::from_secs(4) {
+        let state = control.request(serde_json::json!("Screen"));
+        let count = state["durable_flush_count"].as_u64().unwrap();
+        if count > previous_count {
+            samples.push((
+                state["durable_completed_millis"].as_u64().unwrap(),
+                state["accepted_to_durable_millis"].as_u64().unwrap(),
+                state["sync_commit_micros"].as_u64().unwrap(),
+            ));
+            previous_count = count;
+        }
+        last = state;
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    eprintln!(
+        "durable samples (completion ms, accepted age ms, file sync + SQLite commit us): {samples:?}"
+    );
+    assert!(
+        samples.len() >= 10,
+        "must observe streaming boundaries, not idle timer ticks"
+    );
+    for sample in &samples {
+        assert!(
+            sample.1 < 1000,
+            "healthy accepted output exceeded target: {sample:?}"
+        );
+    }
+    for pair in samples.windows(2) {
+        assert!(
+            pair[1].0 - pair[0].0 < 1000,
+            "healthy durable interval exceeded target: {pair:?}"
+        );
+    }
+    assert_eq!(last["durable_bytes"], last["output_bytes"]);
+    control.request(serde_json::json!("Shutdown"));
+}
+
+#[test]
+fn version_one_metadata_migrates_through_real_supervisor_without_losing_history() {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = Fixture::new();
+    std::fs::create_dir(fixture.state()).unwrap();
+    std::fs::set_permissions(fixture.state(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let db = rusqlite::Connection::open(fixture.state().join("history.sqlite3")).unwrap();
+    db.execute_batch("CREATE TABLE app (id INTEGER PRIMARY KEY CHECK(id=1), state TEXT NOT NULL, checkout BLOB, task TEXT NOT NULL); CREATE TABLE sessions (id TEXT PRIMARY KEY, identity TEXT NOT NULL, state TEXT NOT NULL, durable INTEGER NOT NULL DEFAULT 0); PRAGMA user_version=1;").unwrap();
+    drop(db);
+    let mut dashboard = fixture.open();
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted");
+    dashboard.send(b"l");
+    dashboard.wait("fixture>");
+    dashboard.send(b"migrated-history-08\r");
+    dashboard.wait("received: migrated-history-08");
+    dashboard.send(b"exit\r");
+    dashboard.wait("Process: Exited");
+    dashboard.send(b"h");
+    dashboard.wait("received: migrated-history-08");
+    dashboard.send(b"q");
+}
+
+#[test]
+fn failed_final_storage_commit_keeps_quit_visible_until_explicit_retry() {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = Fixture::new();
+    let mut dashboard = fixture.open();
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted");
+    dashboard.send(b"l");
+    dashboard.wait("fixture>");
+    std::fs::set_permissions(fixture.state(), std::fs::Permissions::from_mode(0o500)).unwrap();
+    dashboard.send(b"pending-final-history-08\r");
+    dashboard.wait("received: pending-final-history-08");
+    dashboard.send(&[0x1d]);
+    dashboard.wait("Focus: dashboard");
+    dashboard.send(b"q");
+    dashboard.wait("readonly database");
+    assert!(
+        dashboard.child.try_wait().unwrap().is_none(),
+        "failed storage cannot acknowledge quit"
+    );
+    std::fs::set_permissions(fixture.state(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    dashboard.send(b"q");
+    let deadline = Instant::now() + Duration::from_secs(8);
+    while dashboard.child.try_wait().unwrap().is_none() {
+        assert!(
+            Instant::now() < deadline,
+            "retry must commit the retained pending output"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let mut restored = fixture.open();
+    restored.send(b"h");
+    restored.wait("received: pending-final-history-08");
+    restored.send(b"q");
+}
+
+#[test]
+fn bounded_history_pages_recover_every_record_across_multiple_chunks() {
+    let fixture = Fixture::new();
+    let mut dashboard = fixture.open();
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted");
+    dashboard.send(b"l");
+    dashboard.wait("fixture>");
+    dashboard.send(b"history-bulk\r");
+    dashboard.wait("history-bulk-complete");
+    dashboard.send(b"exit\r");
+    dashboard.wait("Process: Exited");
+    dashboard.kill();
+    let mut control = Controller::connect(&fixture);
+    let mut offset = 0;
+    let mut text = String::new();
+    loop {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let page = loop {
+            let observation =
+                control.request(serde_json::json!({"History":{"index":0,"offset":offset}}));
+            if observation["history"]["offset"].as_u64() == Some(offset) {
+                break observation["history"].clone();
+            }
+            assert!(Instant::now() < deadline);
+        };
+        let part = page["text"].as_str().unwrap();
+        assert!(
+            part.len() <= 2048 * 10,
+            "readable page must have a finite expansion bound"
+        );
+        text.push_str(part);
+        match page["next"].as_u64() {
+            Some(next) => {
+                assert!(next > offset);
+                offset = next;
+            }
+            None => break,
+        }
+    }
+    let records: Vec<u32> = text
+        .lines()
+        .filter_map(|line| {
+            line.split_once("bulk08:")
+                .map(|(_, rest)| rest)
+                .map(|line| line[..5].parse().unwrap())
+        })
+        .collect();
+    assert_eq!(records, (0..6000).collect::<Vec<_>>());
+    let chunks: Vec<_> = std::fs::read_dir(fixture.state())
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "transcript")
+        })
+        .collect();
+    assert!(chunks.len() >= 7);
+    for chunk in chunks {
+        assert!(std::fs::metadata(chunk).unwrap().len() <= 65536);
+    }
+    control.request(serde_json::json!("Shutdown"));
 }
