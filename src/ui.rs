@@ -293,7 +293,12 @@ impl Ui {
             status,
         );
         let compact_help;
-        let help_text = if frame.area().width < 80 || frame.area().height < 22 {
+        let help_text = if !app.attached
+            && app.session.lifecycle == crate::session::Lifecycle::Interrupted
+            && (frame.area().width < 80 || frame.area().height < 22)
+        {
+            "u reconcile · h history · d detach\nProcess: Interrupted · no automatic restart"
+        } else if frame.area().width < 80 || frame.area().height < 22 {
             if app.attached {
                 compact_help = format!(
                     "Ctrl-C interrupt · Ctrl-] dashboard\nProcess: {:?} · status: {}",
@@ -478,6 +483,32 @@ mod tests {
                 assert!(text.contains("x Codex"));
                 assert!(text.contains("quit/stop"));
             }
+        }
+    }
+
+    #[test]
+    fn interrupted_execution_shows_explicit_reconciliation_in_normal_and_small_layouts() {
+        let mut app = App::new("repo".into());
+        app.session.lifecycle = crate::session::Lifecycle::Interrupted;
+        app.session.error = Some(
+            "Execution uncertain; same-boot leader absence may require verified reboot".into(),
+        );
+        for width in [70, 120] {
+            let mut ui = Ui::default();
+            let mut terminal = Terminal::new(TestBackend::new(width, 30)).unwrap();
+            terminal.draw(|frame| ui.draw(frame, &app)).unwrap();
+            let text: String = terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect();
+            assert!(
+                text.contains("u reconcile"),
+                "recovery must remain available at {width} columns: {text}"
+            );
+            assert!(text.contains("Interrupted"));
         }
     }
 

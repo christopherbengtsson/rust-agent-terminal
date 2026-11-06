@@ -6,6 +6,7 @@ mod lifecycle;
 mod native_input;
 mod native_status;
 mod persistence;
+mod recovery;
 mod session;
 mod terminal;
 mod ui;
@@ -32,6 +33,15 @@ use crate::{
 fn main() -> Result<(), Box<dyn Error>> {
     let mut arguments = env::args_os().skip(1);
     let first = arguments.next();
+    if first.as_deref() == Some(std::ffi::OsStr::new("--launch-gate")) {
+        let socket = PathBuf::from(arguments.next().ok_or("Missing gate socket")?);
+        let nonce = arguments.next().ok_or("Missing gate nonce")?;
+        return Ok(recovery::gate(
+            &socket,
+            nonce.to_str().ok_or("Invalid nonce")?,
+            arguments.collect(),
+        )?);
+    }
     if first.as_deref() == Some(std::ffi::OsStr::new("--supervisor")) {
         return session::supervisor(&PathBuf::from(
             arguments.next().ok_or("Missing state directory")?,
@@ -64,7 +74,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let repository = match first {
         Some(argument) if argument == "--help" || argument == "-h" => {
             println!(
-                "Usage: agent-terminal [repository-path]\n\nLists Git worktrees in a keyboard-driven dashboard. Defaults to the current directory.\n\nj/k or arrows: select · r: refresh · q/Esc/Ctrl-C: quit\na adopt · c launch Claude Code · x launch Codex CLI · l launch scripted PTY · Enter attach · Ctrl-] dashboard\ns stop session · d detach preserving execution · q quit and stop managed activity\nNative Claude/Codex launch is experimental; compatibility proof remains open. Authentication prompts stay in the native CLI; run claude auth login or codex login in your usual terminal if needed."
+                "Usage: agent-terminal [repository-path]\n\nLists Git worktrees in a keyboard-driven dashboard. Defaults to the current directory.\n\nj/k or arrows: select · r: refresh · q/Esc/Ctrl-C: quit\na adopt · c launch Claude Code · x launch Codex CLI · l launch scripted PTY · Enter attach · Ctrl-] dashboard\ns stop session · u reconcile interrupted execution · d detach preserving execution · q quit and stop managed activity\nNative Claude/Codex launch is experimental; compatibility proof remains open. Authentication prompts stay in the native CLI; run claude auth login or codex login in your usual terminal if needed."
             );
             return Ok(());
         }
