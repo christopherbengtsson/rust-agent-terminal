@@ -133,8 +133,6 @@ fn execute(
         child = Some(created);
         stdout = child.as_mut().unwrap().stdout.take();
         stderr = child.as_mut().unwrap().stderr.take();
-        scope = Some(crate::child_scope::Scope::new(pid).map_err(|e| e.to_string())?);
-        record.execution.identify(pid).map_err(|e| e.to_string())?;
         let pipes_ready = nonblocking(stdout.as_ref().ok_or("Setup stdout missing")?.as_raw_fd())
             .and_then(|()| {
                 nonblocking(
@@ -150,6 +148,8 @@ fn execute(
             stderr = None;
             return Err(format!("Setup pipe initialization failed: {error}"));
         }
+        scope = Some(crate::child_scope::Scope::new(pid).map_err(|e| e.to_string())?);
+        record.execution.identify(pid).map_err(|e| e.to_string())?;
         let deadline = Instant::now() + Duration::from_secs(5);
         let mut gate = loop {
             if cancel.load(Ordering::Acquire) {
