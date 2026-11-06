@@ -405,3 +405,13 @@ physical reboot/power loss, graphical terminal apps, deliberately unobserved
 process escape, universal fault-time native usability, lossless emitted output,
 the combined release workload and complete C1–C9/R1–R11 remain unproved or later
 scope as explicitly identified above. No GitHub review/PR publication occurred.
+
+## Post-review native addendum
+
+[Two actual-native ordinary-q probes](18-post-review-native-quit.md) passed on
+review-correction runtime 65ad6bb after the final event/typed-identity/failure
+corrections. They pin their own exact binary, native IDs, typed/wire identity
+consistency, foreground child/groups, durable history and terminal restoration.
+The [review-correction record](18-review-fixes.md) owns the subsequent final
+all-target receipt. Earlier matrix/resource/source records above remain
+historical and are not reassigned to this new runtime.
