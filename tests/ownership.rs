@@ -3787,3 +3787,40 @@ fn paced_capture_saturation_stop_confirms_without_storage_repair() {
     controller.request(serde_json::json!("RetryStorage"));
     controller.request(serde_json::json!("Shutdown"));
 }
+
+#[test]
+fn failed_append_does_not_invent_data_bearing_durable_commits() {
+    let fixture = Fixture::new();
+    let _cleanup = MeasurementCleanup(fixture.state());
+    let mut dashboard = fixture.open();
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted");
+    dashboard.send(b"l");
+    dashboard.wait("fixture>");
+    std::thread::sleep(Duration::from_millis(400));
+    dashboard.kill();
+    let mut controller = Controller::connect(&fixture);
+    let before = controller.request(serde_json::json!("Screen"));
+    std::fs::write(fixture.state().join("proof-storage-write"), "error").unwrap();
+    controller.request(serde_json::json!({"Input":b"ack17 blocked\r".to_vec()}));
+    std::thread::sleep(Duration::from_millis(800));
+    let failed = controller.request(serde_json::json!("Screen"));
+    assert_eq!(failed["durable_bytes"], before["durable_bytes"]);
+    assert_eq!(
+        failed["durable_flush_count"], before["durable_flush_count"],
+        "failed append cannot create a data-bearing durable commit"
+    );
+    std::fs::remove_file(fixture.state().join("proof-storage-write")).unwrap();
+    controller.request(serde_json::json!("RetryStorage"));
+    let until = Instant::now() + Duration::from_secs(3);
+    loop {
+        let state = controller.request(serde_json::json!("Screen"));
+        if state["durable_bytes"].as_u64().unwrap() > before["durable_bytes"].as_u64().unwrap() {
+            break;
+        }
+        assert!(Instant::now() < until);
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    controller.request(serde_json::json!("Shutdown"));
+}
