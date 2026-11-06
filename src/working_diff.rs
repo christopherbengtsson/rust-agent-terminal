@@ -331,6 +331,8 @@ fn committed_files(
             "--no-ext-diff",
             "--no-textconv",
             "--name-status",
+            "--no-color",
+            "--ignore-submodules=none",
             "-z",
             "--find-renames",
             ancestor,
