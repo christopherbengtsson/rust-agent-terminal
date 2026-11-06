@@ -540,8 +540,8 @@ fn unsafe_state_directory_is_explained_without_changing_discovery() {
 }
 
 #[test]
-fn stop_and_quit_terminate_quiet_foreground_tool_in_separate_process_group() {
-    for quit in [false, true] {
+fn stop_quit_and_native_exit_terminate_quiet_foreground_tool_in_separate_process_group() {
+    for action in ["stop", "quit", "exit"] {
         let fixture = Fixture::new();
         let mut sentinel = Command::new("sleep").arg("10").spawn().unwrap();
         let mut dashboard = fixture.open();
@@ -553,15 +553,19 @@ fn stop_and_quit_terminate_quiet_foreground_tool_in_separate_process_group() {
         dashboard.send(b"tool-child\r");
         let heartbeat = fixture.repository.join("tool-child.heartbeat");
         let deadline = Instant::now() + Duration::from_secs(3);
-        while std::fs::metadata(&heartbeat).map(|m| m.len()).unwrap_or(0) < 20 {
+        while std::fs::metadata(&heartbeat).map(|m| m.len()).unwrap_or(0) < 60 {
             assert!(Instant::now() < deadline, "tool child must start");
             std::thread::sleep(Duration::from_millis(20));
         }
         let pid = std::fs::read_to_string(fixture.repository.join("tool-child.pid")).unwrap();
-        dashboard.send(&[0x1d]);
-        dashboard.wait("Focus: dashboard");
-        dashboard.send(if quit { b"q" } else { b"s" });
-        if quit {
+        if action == "exit" {
+            dashboard.send(b"exit\r");
+        } else {
+            dashboard.send(&[0x1d]);
+            dashboard.wait("Focus: dashboard");
+            dashboard.send(if action == "quit" { b"q" } else { b"s" });
+        }
+        if action == "quit" {
             let deadline = Instant::now() + Duration::from_secs(3);
             while dashboard.child.try_wait().unwrap().is_none() {
                 assert!(
@@ -574,7 +578,11 @@ fn stop_and_quit_terminate_quiet_foreground_tool_in_separate_process_group() {
                 std::thread::sleep(Duration::from_millis(10));
             }
         } else {
-            dashboard.wait("Process: Stopped");
+            dashboard.wait(if action == "exit" {
+                "Process: Exited"
+            } else {
+                "Process: Stopped"
+            });
         }
         let stopped = std::fs::read(&heartbeat).unwrap();
         std::thread::sleep(Duration::from_millis(150));
@@ -600,7 +608,7 @@ fn stop_and_quit_terminate_quiet_foreground_tool_in_separate_process_group() {
         );
         sentinel.kill().unwrap();
         sentinel.wait().unwrap();
-        if !quit {
+        if action != "quit" {
             dashboard.send(b"q");
         }
     }
@@ -3005,10 +3013,10 @@ fn storage_saturation_keeps_navigation_retry_stop_and_exact_retained_bytes() {
         .map(|entry| entry["bytes"].as_u64().unwrap())
         .sum();
     assert!(
-        bytes.len() - prefix.len() <= emitted_bytes as usize,
-        "capture must not exceed completed emission writes"
+        bytes.len() - prefix.len() <= emitted_bytes as usize + 128,
+        "capture can exceed post-write ledger receipts by at most one in-flight 128-byte write"
     );
-    let evidence = serde_json::json!({"revision":String::from_utf8_lossy(&Command::new("git").args(["rev-parse","HEAD"]).output().unwrap().stdout).trim(),"source_dirty":!Command::new("git").args(["diff","HEAD","--quiet","--","src","tests"]).status().unwrap().success(),"profile":"debug","fault":"stalled real write, then synthetic persistent ENOSPC before write; no full user disk","capture_slots":64,"block_max":4096,"worker_and_producer_blocks":2,"outer_harness_slots":8,"emitted_records":emitted.len(),"emitted_payload_bytes":emitted_bytes,"emitted_not_captured":emitted_bytes-(bytes.len()-prefix.len()) as u64,"producer_completed_write_max_us":emitted.iter().map(|entry| entry["write_us"].as_u64().unwrap()).max(),"dashboard_rss_rows":String::from_utf8_lossy(&dashboard_rss.stdout),"owner_pid":owner,"child_pid":child,"memory":memory,"navigation_us":navigation_us,"retry_us":retry_us,"stop_us":stop_us,"saturated":saturated,"stopped":stopped,"persistent":persistent,"repaired":final_state,"retained_bytes":bytes.len(),"cap":270336,"workload":"4MiB flood; stalled write; ENOSPC; stop; repair"});
+    let evidence = serde_json::json!({"revision":String::from_utf8_lossy(&Command::new("git").args(["rev-parse","HEAD"]).output().unwrap().stdout).trim(),"source_dirty":!Command::new("git").args(["diff","HEAD","--quiet","--","src","tests"]).status().unwrap().success(),"profile":"debug","fault":"stalled real write, then synthetic persistent ENOSPC before write; no full user disk","capture_slots":64,"block_max":4096,"worker_and_producer_blocks":2,"outer_harness_slots":8,"emitted_records":emitted.len(),"emitted_payload_bytes":emitted_bytes,"emitted_not_captured":emitted_bytes as i64-(bytes.len()-prefix.len()) as i64,"inflight_write_cap":128,"producer_completed_write_max_us":emitted.iter().map(|entry| entry["write_us"].as_u64().unwrap()).max(),"dashboard_rss_rows":String::from_utf8_lossy(&dashboard_rss.stdout),"owner_pid":owner,"child_pid":child,"memory":memory,"navigation_us":navigation_us,"retry_us":retry_us,"stop_us":stop_us,"saturated":saturated,"stopped":stopped,"persistent":persistent,"repaired":final_state,"retained_bytes":bytes.len(),"cap":270336,"workload":"4MiB flood; stalled write; ENOSPC; stop; repair"});
     eprintln!("storage14 evidence: {evidence}");
     if let Some(path) = std::env::var_os("RAT_STORAGE_EVIDENCE") {
         let path = PathBuf::from(path);

@@ -48,7 +48,7 @@ impl Scope {
                 let Some(state) = weak.upgrade() else { break };
                 Self(state.clone(), pid).refresh();
                 drop(state);
-                thread::sleep(Duration::from_millis(20));
+                thread::sleep(Duration::from_millis(100));
             }
         });
         Ok(scope)
@@ -94,9 +94,8 @@ impl Scope {
                     true,
                     |frozen, identity| -> io::Result<bool> {
                         Ok(frozen
-                            && inspect(identity.pid)?.is_none_or(|process| {
-                                process.identity != *identity || process.zombie || process.stopped
-                            }))
+                            && verified(*identity)?
+                                .is_none_or(|process| process.zombie || process.stopped))
                     },
                 )?;
                 if !frozen {
@@ -129,8 +128,7 @@ impl Scope {
         // Each target is reidentified immediately before signalling. No group
         // signal can sweep in an unrelated process or a reused group leader.
         for identity in state.owned.values() {
-            if let Some(actual) = inspect(identity.pid)?
-                && actual.identity == *identity
+            if let Some(actual) = verified(*identity)?
                 && !actual.zombie
             {
                 running = true;
@@ -148,9 +146,20 @@ impl Scope {
         Ok(running)
     }
 }
+fn verified(identity: Identity) -> io::Result<Option<Process>> {
+    let actual = inspect(identity.pid)?;
+    if let Some(process) = &actual
+        && process.identity.start == identity.start
+        && process.identity.uid != identity.uid
+    {
+        return Err(io::Error::other(
+            "Owned process changed UID; execution remains uncertain",
+        ));
+    }
+    Ok(actual.filter(|process| process.identity == identity))
+}
 fn send_verified(identity: Identity, signal: i32) -> io::Result<()> {
-    if let Some(actual) = inspect(identity.pid)?
-        && actual.identity == identity
+    if let Some(actual) = verified(identity)?
         && !actual.zombie
     {
         // SAFETY: only a live-owner descendant with matching UID/start identity.
@@ -168,9 +177,7 @@ fn refresh(state: &mut State) -> io::Result<()> {
     let processes = inventory()?;
     let mut live = HashMap::new();
     for identity in state.owned.values() {
-        if let Some(process) = inspect(identity.pid)?
-            && process.identity == *identity
-        {
+        if verified(*identity)?.is_some() {
             live.insert(identity.pid, *identity);
         }
     }
@@ -189,6 +196,7 @@ fn refresh(state: &mut State) -> io::Result<()> {
                 && let Some(process) = inspect(*pid)?
                 && process.identity.uid == parent.uid
                 && process.parent == parent.pid
+                && verified(*parent)?.is_some()
             {
                 if state.owned.len() >= MAX_OWNED {
                     return Err(io::Error::other("Owned process limit exceeded"));
