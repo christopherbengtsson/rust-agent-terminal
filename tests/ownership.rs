@@ -202,36 +202,186 @@ impl Fixture {
         Dashboard::open(&self.repository, &self.state())
     }
 }
+fn fixture_peer_pid(stream: &std::os::unix::net::UnixStream) -> Option<i32> {
+    use std::os::fd::AsRawFd;
+    #[cfg(target_os = "macos")]
+    {
+        let mut pid: libc::pid_t = 0;
+        let mut length = std::mem::size_of_val(&pid) as libc::socklen_t;
+        // SAFETY: valid socket fd and correctly sized output storage.
+        let result = unsafe {
+            libc::getsockopt(
+                stream.as_raw_fd(),
+                0,
+                libc::LOCAL_PEERPID,
+                (&mut pid as *mut libc::pid_t).cast(),
+                &mut length,
+            )
+        };
+        (result == 0 && pid > 1).then_some(pid)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let mut credentials: libc::ucred = unsafe { std::mem::zeroed() };
+        let mut length = std::mem::size_of_val(&credentials) as libc::socklen_t;
+        let result = unsafe {
+            libc::getsockopt(
+                stream.as_raw_fd(),
+                libc::SOL_SOCKET,
+                libc::SO_PEERCRED,
+                (&mut credentials as *mut libc::ucred).cast(),
+                &mut length,
+            )
+        };
+        (result == 0 && credentials.pid > 1).then_some(credentials.pid)
+    }
+}
+fn fixture_frame(
+    reader: &mut std::io::BufReader<std::os::unix::net::UnixStream>,
+) -> Option<serde_json::Value> {
+    use std::io::BufRead;
+    let mut bytes = Vec::new();
+    reader
+        .take(4 * 1024 * 1024 + 1)
+        .read_until(b'\n', &mut bytes)
+        .ok()?;
+    if bytes.len() > 4 * 1024 * 1024 || bytes.last() != Some(&b'\n') {
+        return None;
+    }
+    serde_json::from_slice(&bytes).ok()
+}
 impl Drop for Fixture {
     fn drop(&mut self) {
-        // Only the isolated test endpoint can be stopped by this cleanup.
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(self.state(), std::fs::Permissions::from_mode(0o700));
-        use std::os::unix::net::UnixStream;
-        for _ in 0..20 {
-            if let Ok(mut stream) = UnixStream::connect(self.state().join("supervisor.sock")) {
-                let _ = stream.set_read_timeout(Some(Duration::from_millis(100)));
-                let _ = stream.write_all(b"\"Shutdown\"\n");
-                let mut bytes = [0; 4096];
-                let _ = stream.read(&mut bytes);
-                let _ = stream.read(&mut bytes);
+        use std::os::unix::{fs::PermissionsExt, net::UnixStream};
+        let state = self.state();
+        // Repair only this fixture's real private directory; never follow the
+        // deliberately invalid symlink used by the unsafe-directory test.
+        if !std::fs::symlink_metadata(&state).is_ok_and(|m| m.file_type().is_dir()) {
+            return;
+        }
+        let _ = std::fs::set_permissions(&state, std::fs::Permissions::from_mode(0o700));
+        if let Ok(entries) = std::fs::read_dir(&state) {
+            for entry in entries.flatten() {
+                if entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("proof-storage-")
+                {
+                    let _ = std::fs::remove_file(entry.path());
+                }
             }
-            if !self.state().join("supervisor.sock").exists() {
-                break;
+        }
+        let socket = state.join("supervisor.sock");
+        let deadline = Instant::now() + Duration::from_secs(4);
+        let mut owner = None;
+        let mut child = None;
+        while Instant::now() < deadline && socket.exists() {
+            if let Ok(mut stream) = UnixStream::connect(&socket) {
+                let peer = fixture_peer_pid(&stream);
+                if owner.is_some() && owner != peer {
+                    break;
+                }
+                owner = peer;
+                let _ = stream.set_read_timeout(Some(Duration::from_millis(250)));
+                let _ = stream.set_write_timeout(Some(Duration::from_millis(250)));
+                if let Ok(copy) = stream.try_clone() {
+                    let mut reader = std::io::BufReader::new(copy);
+                    if let Some(greeting) = fixture_frame(&mut reader) {
+                        if greeting["control_denied"] == true {
+                            std::thread::sleep(Duration::from_millis(10));
+                            continue;
+                        }
+                        child = greeting["execution"]["pid"]
+                            .as_i64()
+                            .map(|pid| pid as i32)
+                            .or(child);
+                        if stream.write_all(b"\"Shutdown\"\n").is_ok() {
+                            while Instant::now() < deadline {
+                                let Some(response) = fixture_frame(&mut reader) else {
+                                    break;
+                                };
+                                if response["stopped"] == true {
+                                    break;
+                                }
+                                if stream.write_all(b"\"Screen\"\n").is_err() {
+                                    break;
+                                }
+                                std::thread::sleep(Duration::from_millis(10));
+                            }
+                        }
+                    }
+                }
             }
             std::thread::sleep(Duration::from_millis(20));
         }
-        if self.state().join("supervisor.sock").exists() {
-            let output = Command::new("ps")
-                .args(["-Ao", "pid,command"])
-                .output()
-                .unwrap();
-            for line in String::from_utf8_lossy(&output.stdout).lines() {
-                if line.contains("--supervisor") && line.contains(self.state().to_str().unwrap()) {
-                    let _ = Command::new("kill")
-                        .args(["-KILL", line.split_whitespace().next().unwrap()])
-                        .status();
+        if !socket.exists() {
+            // The final ACK/endpoint removal precedes actual process exit by a
+            // few instructions. Verify the authenticated peer finishes too.
+            if let Some(owner) = owner {
+                let deadline = Instant::now() + Duration::from_secs(1);
+                loop {
+                    let running = Command::new("/bin/ps")
+                        .args(["-p", &owner.to_string(), "-o", "stat="])
+                        .output()
+                        .is_ok_and(|output| {
+                            String::from_utf8_lossy(&output.stdout).lines().any(|line| {
+                                !line.trim().is_empty() && !line.trim().starts_with('Z')
+                            })
+                        });
+                    if !running {
+                        return;
+                    }
+                    if Instant::now() >= deadline {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
                 }
+            } else {
+                return;
+            }
+        }
+        // Recovery scenarios deliberately retain uncertain historical execution.
+        // Fallback targets only the socket's authenticated peer and a directly
+        // observed child still parented by it; never scan/kill by a text match.
+        if let Some(owner) = owner {
+            if let Some(child) = child
+                && let Ok(output) = Command::new("/bin/ps")
+                    .args(["-p", &child.to_string(), "-o", "ppid="])
+                    .output()
+                && String::from_utf8_lossy(&output.stdout)
+                    .trim()
+                    .parse::<i32>()
+                    .ok()
+                    == Some(owner)
+            {
+                // SAFETY: the observed fixture child belongs to this exact peer.
+                unsafe {
+                    libc::kill(-child, libc::SIGKILL);
+                }
+            }
+            // SAFETY: this PID was authenticated by this fixture's Unix socket.
+            unsafe {
+                libc::kill(owner, libc::SIGKILL);
+            }
+            let deadline = Instant::now() + Duration::from_secs(2);
+            loop {
+                let live = Command::new("/bin/ps")
+                    .args(["-p", &owner.to_string(), "-o", "stat="])
+                    .output()
+                    .is_ok_and(|output| {
+                        String::from_utf8_lossy(&output.stdout)
+                            .lines()
+                            .any(|line| !line.trim().is_empty() && !line.trim().starts_with('Z'))
+                    });
+                if !live {
+                    let _ = std::fs::remove_file(&socket);
+                    break;
+                }
+                if Instant::now() >= deadline {
+                    eprintln!("fixture cleanup unconfirmed for exact peer {owner}");
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(20));
             }
         }
     }
