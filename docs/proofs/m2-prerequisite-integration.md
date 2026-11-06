@@ -142,3 +142,56 @@ rerun, full all-target pass or new native CLI compatibility is claimed here.
 Post-merge `133d87b` locked build, formatting check, warnings-denied all-target
 Clippy and `git diff --check` passed. PTY validation remained serial; the slot was
 released to ticket 05's dashboard proof before final combined validation.
+
+## Combined tickets 03 and 05 gate
+
+Ticket 03 merged without conflicts at `455c4c0`; the finite-output correction
+merged at `f63efd7`. Ticket 05, including both integrations, merged without
+conflicts at `eb10a75` (`8422776` feature tip). The concrete private session owner,
+registry identities and sole persistence writer were retained. The final union
+was validated serially on native macOS with all other PTY/native work stopped:
+
+```sh
+cargo build --locked
+cargo fmt --all -- --check
+cargo clippy --locked --all-targets -- -D warnings
+cargo test --locked --all-targets
+```
+
+Build, formatting and warnings-denied all-target Clippy passed. Unit checks:
+34 passed, one intentional subprocess probe ignored. Ownership completed in
+452.16 seconds: 67 passed, one failed, two opt-in measurements ignored. The
+healthy-output finite-boundary regression, sustained capture/history workload,
+registry aliases/restart/migration/write failures, keyboard normal/small PTYs,
+legacy live-owner refusals, launch crash windows, partial-spawn matrix,
+provisional result controls and storage/cleanup cases passed.
+
+The sole failure was
+`stopped_history_survives_restart_and_missing_checkout_without_launching`.
+At `tests/ownership.rs:91`, the dashboard's eight-second wait did not observe
+`Checkout unavailable: cannot continue in place` after explicit `v` on a
+restored exited session whose checkout had been moved away. The captured screen
+retained `Process: Exited` and committed history (195 durable bytes), but showed
+Git exit 128 for discovery of the missing checkout. This records the observed
+failure, not a diagnosis that discovery timing alone caused it. The expected
+resume refusal, subsequent readable-history assertions and final focus assertion
+were not established in that scenario. No product code or assertion was changed.
+The combined all-target gate therefore remains failing and needs diagnosis.
+
+Because Cargo stopped after the ownership failure, the remaining targets were
+then run together in one serial command:
+
+```sh
+cargo test --locked --test scripted_session --test session_screen
+```
+
+The scripted-session target passed (one case, 30.14 seconds), followed by the
+screen/resize/style/reconnect target (one case, 9.98 seconds). There was no PTY
+suite overlap. These passes also establish the merged finite-output screen
+correction, but do not turn the failed all-target gate into a pass or extend
+native Claude Code/Codex compatibility claims.
+
+The initial verification handoff incorrectly assumed the running exec session
+was parent-pollable; the tool handle was agent-local. Its originating agent later
+retrieved the complete result above. All verification processes owned by this
+command have finished; no test was terminated for handoff.
