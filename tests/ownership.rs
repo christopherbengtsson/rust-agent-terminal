@@ -560,6 +560,20 @@ fn native_exit_retains_context_and_explicit_stop_cleans_refusing_descendant() {
         .chars()
         .take(36)
         .collect::<String>();
+    dashboard.kill();
+    let mut readiness = Controller::connect(&fixture);
+    cleanup_wait15(&mut readiness, |state| {
+        state["metadata_pending"] == false && state["launch_result"].is_object()
+    });
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while cleanup_page15(&mut readiness)["cleanup"]["entries"][0]["eligible"] != true {
+        assert!(
+            Instant::now() < deadline,
+            "native exit must seal its final capture before a fresh launch intent"
+        );
+    }
+    drop(readiness);
+    dashboard = fixture.reopen_after_release("Process: Exited");
     dashboard.send(b"l");
     dashboard.wait("Focus: session");
     dashboard.wait(&format!("task={task}"));
@@ -3614,6 +3628,14 @@ fn paced_session_measurement17() {
             drop(control);
             control = Controller::connect(&fixture);
             assert_eq!(control.greeting["identity"], identity);
+            assert!(
+                control.greeting["error"]
+                    .as_str()
+                    .unwrap_or("")
+                    .contains("Slow dashboard"),
+                "actual transport must saturate: {}",
+                control.greeting
+            );
             collect(&control.greeting, &mut last_commit);
         } else if run == 5 {
             let started = Instant::now();
@@ -3688,6 +3710,14 @@ fn paced_session_measurement17() {
             assert!(Instant::now() < deadline);
             std::thread::sleep(Duration::from_millis(25));
         };
+        assert!(state["capture_high_water"].as_u64().unwrap() <= 270336);
+        assert!(state["subscriber_frame_high_water"].as_u64().unwrap() <= 4194304);
+        if run == 5 {
+            assert!(
+                state["capture_backpressure_count"].as_u64().unwrap() > 0,
+                "slow storage must actually saturate finite capture"
+            );
+        }
         log(serde_json::json!({"kind":"phase","mode":mode,"state":state}));
     }
     // ENOSPC fills the finite queue. Receipt can stay live while visible output
@@ -3786,6 +3816,7 @@ fn paced_session_measurement17() {
         assert!(Instant::now() < deadline, "{state}");
         std::thread::sleep(Duration::from_millis(25));
     };
+    assert!(final_state["capture_high_water"].as_u64().unwrap() <= 1318912);
     log(
         serde_json::json!({"kind":"retry","injected_ns":before,"observed_ns":measurement_clock(),"state":final_state}),
     );
@@ -3897,9 +3928,36 @@ fn paced_session_measurement17() {
         serde_json::json!({"kind":"crash","counter_request_ns":counter_request_ns,"counter_received_ns":counter_received_ns,"kill_injected_ns":kill_injected_ns,"owner":crash_owner,"child":crash_child,"acknowledged":acknowledged,"restored":restored.greeting,"replacement":refused}),
     );
     assert_no_owned_coding(&fixture);
-    measurement_shutdown(&mut restored);
+    let refused_shutdown = restored.request(serde_json::json!("Shutdown"));
+    assert_eq!(
+        refused_shutdown["stopped"], false,
+        "uncertain execution cannot promise a confirmed shutdown"
+    );
+    log(serde_json::json!({"kind":"crash-shutdown-refused","state":refused_shutdown}));
+    // Harness cleanup of its authenticated restored owner is separate from a
+    // product Stop/reconciliation proof. No coding process was restarted.
+    let restored_owner =
+        fixture_peer_pid(&restored.stream).expect("authenticated isolated restored owner");
     drop(restored);
-    measurement_wait_endpoint_exit(&fixture);
+    // SAFETY: PID authenticated by this private fixture socket, no native child.
+    unsafe {
+        libc::kill(restored_owner, libc::SIGKILL);
+    }
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        let ps = Command::new("ps")
+            .args(["-p", &restored_owner.to_string(), "-o", "stat="])
+            .output()
+            .unwrap();
+        if !String::from_utf8_lossy(&ps.stdout)
+            .lines()
+            .any(|line| !line.trim().is_empty() && !line.trim().starts_with('Z'))
+        {
+            break;
+        }
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    }
     let after = evidence.join("crash-after-restore");
     std::fs::create_dir(&after).unwrap();
     for entry in std::fs::read_dir(fixture.state()).unwrap() {

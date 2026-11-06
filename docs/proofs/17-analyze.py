@@ -68,6 +68,7 @@ for run_id, run in runs.items():
         report['rss_KiB'][f'run{run_id}/pid{pid}'] = {'command': samples[0][2], 'samples':len(samples), 'sampled_peak':max(s[1] for s in samples),'steady':distribution([s[1] for s in steady]),'first_middle_last_median':[statistics.median([s[1] for s in w]) if w else None for w in windows]}
 commits = [e['commit'] for e in events if e['kind']=='commit']
 assert [c['sequence'] for c in commits] == list(range(1,len(commits)+1)), 'missing commit observations'
+assert all(b['prefix']>a['prefix'] for a,b in zip(commits,commits[1:])), 'unchanged/regressing data-bearing prefix'
 report['commits'] = {'count':len(commits),'interval_us': distribution([b['completed_micros']-a['completed_micros'] for a,b in zip(commits,commits[1:])]),'oldest_accepted_us':distribution([c['oldest_accepted_micros'] for c in commits]),'sync_commit_us':distribution([c['sync_commit_micros'] for c in commits])}
 # Classify intervals only when both endpoints fall within a healthy producer run.
 # Worker-relative origin differs from the common kernel clock: use per-run prefix
@@ -112,9 +113,12 @@ for session in report['raw_continuity']:
     for run, ranges in session['record_prefix_ranges'].items():
         intervals=[]; ages=[]; sync=[]
         for a,b in zip(commits,commits[1:]):
-            if ranges[0]<=a['prefix']<=b['prefix']<=ranges[1]:
+            if ranges[0]<a['prefix']<b['prefix']<=ranges[1]:
                 intervals.append(b['completed_micros']-a['completed_micros']);ages.append(b['oldest_accepted_micros']);sync.append(b['sync_commit_micros'])
         report['commits'][f'run{run}']={'interval_us':distribution(intervals),'oldest_accepted_us':distribution(ages),'sync_commit_us':distribution(sync)}
+        selected=[c for c in commits if ranges[0]<c['prefix']<=ranges[1]]
+        if len(selected)>1:
+            report['commits'][f'run{run}']['persisted_Bps_between_observed_commits']=(selected[-1]['prefix']-selected[0]['prefix'])*1e6/(selected[-1]['completed_micros']-selected[0]['completed_micros'])
     for run, count in session['complete_records'].items():
         if run in runs:
             assert count==runs[run]['records'],f'completed run {run}: emitted/captured record mismatch'
@@ -153,5 +157,19 @@ if fault_start and fault_stop:
 report['disk_samples']=[e for e in events if e['kind']=='disk']
 report['sampler_us']=distribution([e['sampler_us'] for e in events if e['kind']=='rss'])
 report['phases']=[e for e in events if e['kind'] in ('phase','retry','stop','finished')]
+gates={}
+for key, expected in [('navigation/dashboard-focused',events[0]['navigation_samples']),('attach/attached',events[0]['attach_samples'])]:
+    d=report['latency_us'][key]
+    target=100000 if key.startswith('navigation') else 1000000
+    gates[key]={'pass':d['entirely_active']['n']==expected and d['entirely_active'].get('max',target+1)<target,'expected_samples':expected,'active_samples':d['entirely_active']['n'],'target_us':target}
+for run in range(1,5):
+    d=report['commits'].get(f'run{run}',{})
+    gates[f'healthy-storage/run{run}']={'pass':d.get('interval_us',{}).get('n',0)>0 and d['interval_us']['max']<=1000000 and d['oldest_accepted_us']['max']<=1000000,'target_us':1000000}
+for mode in ['slow-storage','full-storage']:
+    d=report['latency_us'].get('navigation/'+mode,{}).get('all',{})
+    gates['navigation/'+mode]={'pass':d.get('n',0)>0 and d.get('max',100001)<100000,'target_us':100000}
+finished=next((e for e in events if e['kind']=='finished'),None)
+gates['harness-final']={'pass':finished is not None and not finished['failures'],'failures':finished['failures'] if finished else ['no final receipt']}
+report['gates']=gates
 (root/'analysis.json').write_text(json.dumps(report,indent=2)+'\n')
 print(json.dumps({key:report[key] for key in ('latency_us','commits','sampler_us','raw_continuity')},indent=2))
