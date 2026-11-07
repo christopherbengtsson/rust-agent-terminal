@@ -20,7 +20,12 @@ fn git(
     let mut cmd = Command::new("git");
     cmd.arg("-C")
         .arg(&r.checkout.root)
-        .args(["-c", "core.fsync=committed", "-c", "core.fsyncMethod=fsync"])
+        .args([
+            "-c",
+            "core.fsync=committed,reference",
+            "-c",
+            "core.fsyncMethod=fsync",
+        ])
         .args(args);
     if let Some(index) = index {
         cmd.env("GIT_INDEX_FILE", index);
