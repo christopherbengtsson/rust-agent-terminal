@@ -10,7 +10,7 @@ Blocked by: 12, 15, 18
 - [x] Record native versions and actual prompt/approval/Ctrl-C/resize/attach/quit/reconnect behavior for Claude and Codex on final relevant source. Retain original-ID history and unavailable-recovery cases.
 - [x] Measure input-to-visible navigation against 100 ms and usable attach against under one second, plus fair per-session durability/queue/memory/disk behavior during searches/diffs and storage faults. Separate fixture/native evidence.
 - [ ] Exercise detach, normal quit, dashboard loss, supervisor crash, sleep/wake and real reboot recovery without duplicates/automatic coding restart. Arrange physical reboot explicitly with the user and retain unverified cases as open gates.
-- [ ] Run stable locked build, formatting, warnings-denied all-target Clippy and all-target tests. Compare normal/small terminal captures to the vision, align working instructions and report limitations. Do not claim later GitHub/reviewer or notification release gates.
+- [x] Run stable locked build, formatting, warnings-denied all-target Clippy and all-target tests. Compare normal/small terminal captures to the vision, align working instructions and report limitations. Do not claim later GitHub/reviewer or notification release gates.
 
 ## Comments
 
@@ -44,3 +44,18 @@ implementation or new validation evidence is claimed by this ticket.
   User restart authorization is a later explicit step. C6, this ticket and the
   milestone remain unclaimed. No later GitHub/reviewer/notification release gate
   is claimed.
+
+
+2026-11-07 final integration and physical follow-up:
+
+- Independent standards/spec review findings were fixed and independently
+  verified. Final source `59fed09` passed stable locked build/format/Clippy and
+  the frozen all-target suite: 278 passed, eight intentional ignores, zero
+  failures, unchanged source/executables. Exact evidence is in the
+  [qualification record](../../../docs/proofs/m2-19-qualification.md).
+- [Actual user-performed sleep/wake](../../../docs/proofs/m2-19-sleep-wake.md)
+  passed with macOS power events, the same two prepared native/process identities
+  and unchanged code/ref/history witnesses. The immediate checkpoint is refreshed.
+- Physical reboot is still unverified and requires separate explicit user
+  arrangement. The combined lifecycle checkbox, C6, this ticket and the spec
+  remain open; no reboot result is claimed.

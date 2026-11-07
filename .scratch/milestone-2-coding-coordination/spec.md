@@ -353,3 +353,15 @@ gates, with an explicitly unexecuted [preparation plan](../../docs/proofs/m2-19-
 No physical transition is inferred from injected boot fixtures. Ticket 19 remains
 Resolved: no, C6 and milestone completion are unclaimed, and no later release
 gates are claimed.
+
+
+## Physical qualification follow-up — 2026-11-07
+
+The final reviewed integration gate at `59fed09` passed 278 tests with eight
+intentional ignores and unchanged source/executables. The subsequent
+[actual user-performed sleep/wake](../../docs/proofs/m2-19-sleep-wake.md) passed
+with matching native/process identities, code/ref witnesses and committed
+history prefixes. An immediate pre-reboot checkpoint was refreshed. This
+supersedes the earlier sleep/wake-open status; physical reboot remains an open
+required gate awaiting explicit user arrangement. Ticket 19, this spec and C6
+remain unresolved/unclaimed.

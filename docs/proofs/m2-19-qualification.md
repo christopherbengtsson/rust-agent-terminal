@@ -36,9 +36,10 @@ No physical reboot is authorized or performed by this record. The spec requires
 explicit user permission before reboot. A durable handoff must identify retained
 state, source/binaries, session/native IDs and the exact post-boot checks before
 that action is requested. Injected boot fixtures do not satisfy this gate.
-Actual sleep/wake remains unverified until its real machine transition is
-recorded. Neither case can be claimed from prior feature proofs. C6 and milestone
-completion remain unclaimed while a required case is unverified.
+The later actual sleep/wake follow-up below is now verified with OS power
+evidence and unchanged prepared identities/state. Physical reboot remains
+unverified; neither prior feature proofs nor injected boots satisfy it. C6 and
+milestone completion remain unclaimed while that required case is open.
 
 This ticket does not qualify GitHub review automation, publishing, task PR
 continuation, notifications or the combined release workload.
@@ -286,3 +287,12 @@ milestone acceptance remain open** pending actual sleep/wake and explicitly
 user-authorized physical reboot. The new mixed-state preparation is a separate
 phase after this gate, with fresh source/executable/state pins; neither the cold
 closeout nor a same-boot negative verifier is a physical-transition pass.
+
+## Actual sleep/wake follow-up
+
+The user-performed [actual sleep/wake check](m2-19-sleep-wake.md) passed on
+2026-11-07 with OS power events and both prepared conversation/process identities
+unchanged. Code, refs, membership, selected context and committed history prefixes
+verified; an immediate pre-reboot checkpoint was refreshed. This supersedes the
+earlier sleep/wake-open status only. **Physical reboot remains unverified, so
+C6, ticket 19 and milestone acceptance remain open.**
