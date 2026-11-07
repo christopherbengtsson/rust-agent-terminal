@@ -471,23 +471,8 @@ impl Sessions {
     }
     fn observation(&mut self) -> Observation {
         let mut summaries = Vec::new();
-        let mut creation_launches = Vec::new();
         for (target, owner) in &mut self.entries {
             let state = owner.observation();
-            if !state.launch_request.is_empty() {
-                creation_launches.push(crate::creation::LaunchReceipt {
-                    request: state.launch_request.clone(),
-                    session: state.session_identity.as_ref().map(|id| id.session.clone()),
-                    lifecycle: state.lifecycle,
-                    result: if state.metadata_pending {
-                        None
-                    } else {
-                        owner.recorded_launch(&state.launch_request)
-                    },
-                    pending: state.metadata_pending,
-                    error: state.error.clone(),
-                });
-            }
             summaries.push(crate::events::SessionSummary {
                 status: state.status.clone(),
                 reserved: owner.reserved()
@@ -510,9 +495,77 @@ impl Sessions {
         state.sessions_protocol = 1;
         state.control_target = self.entries[self.selected].0.clone();
         state.sessions = summaries;
-        state.creation.launches = creation_launches;
         state.metadata_pending |= self.selection_pending.is_some();
         state
+    }
+    fn creation_receipts(
+        &mut self,
+        records: &[crate::creation::Record],
+        previous: &[crate::creation::LaunchReceipt],
+    ) -> Vec<crate::creation::LaunchReceipt> {
+        records
+            .iter()
+            .filter_map(|record| {
+                let request = &record.intent.request;
+                let result = self
+                    .entries
+                    .iter()
+                    .filter(|(_, owner)| owner.task() == request)
+                    .find_map(|(_, owner)| owner.recorded_launch(request));
+                // A later conversation has its own request and lifecycle. Refresh
+                // this receipt only from the original request's typed native owner.
+                let original = self
+                    .entries
+                    .iter_mut()
+                    .filter(|(_, owner)| owner.task() == request)
+                    .find_map(|(_, owner)| {
+                        let state = owner.observation();
+                        (state.launch_request == *request
+                            && state
+                                .session_identity
+                                .as_ref()
+                                .is_none_or(|id| id.request == *request))
+                        .then_some(state)
+                    });
+                if let Some(state) = original {
+                    let pending = state.metadata_pending
+                        || self.entries.iter().any(|(_, owner)| {
+                            owner.task() == request && owner.pending_launch_request(request)
+                        });
+                    return Some(crate::creation::LaunchReceipt {
+                        request: request.clone(),
+                        session: state.session_identity.map(|id| id.session),
+                        lifecycle: state.lifecycle,
+                        result: if pending { None } else { result.clone() },
+                        pending,
+                        error: result.and_then(|r| r.error),
+                    });
+                }
+                if let Some(mut retained) = previous
+                    .iter()
+                    .find(|receipt| receipt.request == *request)
+                    .cloned()
+                {
+                    if let Some(result) = result {
+                        retained.error = result.error.clone();
+                        retained.result = Some(result);
+                        retained.pending = false;
+                    }
+                    return Some(retained);
+                }
+                result.map(|result| crate::creation::LaunchReceipt {
+                    request: request.clone(),
+                    session: None,
+                    lifecycle: Lifecycle::Interrupted,
+                    pending: false,
+                    error: Some(
+                        "Original launch result retained; original runtime state unavailable"
+                            .into(),
+                    ),
+                    result: Some(result),
+                })
+            })
+            .collect()
     }
     fn all_stopped(&mut self) -> bool {
         self.selection_pending.is_none()
@@ -1159,18 +1212,9 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
         state.creation_protocol = 1;
         state.setup_protocol = 1;
         state.setup = setup.view.clone();
-        let launches = std::mem::take(&mut state.creation.launches);
+        creation.view.launches =
+            session.creation_receipts(&creation.view.records, &creation.view.launches);
         state.creation = creation.view.clone();
-        state.creation.launches = launches
-            .into_iter()
-            .filter(|r| {
-                creation
-                    .view
-                    .records
-                    .iter()
-                    .any(|record| record.intent.request == r.request)
-            })
-            .collect();
         state.registry_pending = registering || registry_operation.is_some();
         state.registry = registry.clone();
         state.error = state
@@ -1623,18 +1667,9 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
         state.creation_protocol = 1;
         state.setup_protocol = 1;
         state.setup = setup.view.clone();
-        let launches = std::mem::take(&mut state.creation.launches);
+        creation.view.launches =
+            session.creation_receipts(&creation.view.records, &creation.view.launches);
         state.creation = creation.view.clone();
-        state.creation.launches = launches
-            .into_iter()
-            .filter(|r| {
-                creation
-                    .view
-                    .records
-                    .iter()
-                    .any(|record| record.intent.request == r.request)
-            })
-            .collect();
         state.registry_pending = registering || registry_operation.is_some();
         state.registry = registry.clone();
         state.error = state
