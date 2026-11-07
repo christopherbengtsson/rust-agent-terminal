@@ -882,7 +882,7 @@ fn draw_browser(frame: &mut Frame, area: Rect, browser: &crate::browser::Browser
             } else if response.rows.is_empty() {
                 "No results. Index catches up to committed output; Ctrl-R refreshes."
             } else {
-                "Partial index of committed text · exact words (all, case-insensitive). Ctrl-R refreshes."
+                "Enter reads · v resumes selected original tool/native ID · Ctrl-R refreshes · Stop must settle occupied checkout"
             }
         },
     )
@@ -1322,6 +1322,50 @@ mod tests {
                 .collect::<String>();
             assert!(text.contains("Running · approval needed"), "{text}");
             assert!(text.contains("Running · unknown"), "{text}");
+        }
+    }
+
+    #[test]
+    fn selected_native_resume_identity_and_action_render_at_both_sizes() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let mut app = App::new("/proof".into());
+        app.session.browse_protocol = 1;
+        app.input(KeyEvent::new(KeyCode::Char('B'), KeyModifiers::NONE));
+        let request = app.browser.as_ref().unwrap().request.clone();
+        app.observe_session(crate::events::Observation {
+            browse_protocol: 1,
+            resume_protocol: 1,
+            browse: Some(crate::persistence::search::Response {
+                request,
+                rows: vec![crate::persistence::search::Row {
+                    key: "selected".into(),
+                    workspace: "workspace".into(),
+                    session: Some("segment".into()),
+                    label:
+                        "Claude Code · segment selected · native original-id · workspace retained"
+                            .into(),
+                    snippet: String::new(),
+                    passage: None,
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        for (cols, rows) in [(160, 40), (60, 18)] {
+            let mut terminal = Terminal::new(TestBackend::new(cols, rows)).unwrap();
+            terminal
+                .draw(|frame| Ui::default().draw(frame, &app))
+                .unwrap();
+            let text = terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect::<String>();
+            assert!(text.contains("Claude Code"), "{text}");
+            assert!(text.contains("original-id"), "{text}");
+            assert!(text.contains("v resumes selected"), "{text}");
         }
     }
 

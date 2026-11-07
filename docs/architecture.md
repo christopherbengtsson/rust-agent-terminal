@@ -873,9 +873,40 @@ native resume without a follow-up prompt. Startup and reconciliation never
 invoke it. Uncertain execution and one-active-session restrictions apply before
 native recovery. Unavailable recovery explains the reason; new conversation
 choices remain explicit. Readable historical segments stay independent of native
-records and checkout existence. This is only a most-recent-conversation proof
-path, not full resume/search/archive management. See the [native and separate
-reboot-style fixture evidence](proofs/16-native-recovery.md).
+records and checkout existence. The original latest-conversation evidence remains
+in [ticket 16](proofs/16-native-recovery.md). Milestone 2 adds explicit historical
+selection as described below.
+
+`ResumeSelected` freezes a launch request, workspace UUID and source managed
+segment UUID. These differ from the transient control-target UUID, original
+native conversation UUID and newly allocated managed segment UUID. The sole
+persistence worker validates workspace membership (including retained task
+aliases), row/decoded segment consistency, original supported tool and native
+UUID. It returns only an immutable resume descriptor; it never installs a
+historical Observation in a live owner. Schema 9 binds request UUIDs to canonical
+workspace/source choices independently of transcript rows. Changed-source reuse
+and durably cancelled choices are refused after restart.
+
+A resolving owner reserves its canonical checkout and reports the frozen request
+for reconnect queries. Stop disarms lookup; a late descriptor cannot launch.
+Cancellation retains a reservation until the sole writer acknowledges it. After
+lookup, admission rechecks setup readiness, setup/canonical/uncertain owners and
+capture settlement before durable Prepare. Prepare already identifies the chosen
+tool/native conversation in the fresh managed segment. Prior monitors are retired
+at the generation change, preventing a late previous-tool receipt from replacing
+that identity. The existing Prepare/create/authorize/result gate and global
+request cache then apply unchanged.
+
+Conversation rows show workspace, original tool, segment and native IDs. Their
+explicit `v` action routes to that workspace; an occupied workspace selects its
+reserved owner and offers attachment. Reading/paging/search passage opening,
+raw/readable toggles and restoration cannot change the source of pending resume.
+The latest action resolves its frozen saved segment through the same worker.
+Unavailable metadata or checkout explains the limitation and leaves new
+conversation choices explicit. Native record/version rejection remains native
+terminal output in the attempted new segment; process liveness never establishes
+successful recovery. No Git mutation, prompt transfer or startup resume occurs.
+See [selected native recovery evidence](proofs/m2-12-selected-native-resume.md).
 
 
 ### Slow and failing history storage (ticket 14)
