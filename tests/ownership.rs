@@ -8972,6 +8972,7 @@ fn configured_setup_empty_owner_stop_follows_original_handoff_but_never_later_co
         .clone();
     f.control
         .request(serde_json::json!({"Session":{"target":target,"session":null,"command":"Stop"}}));
+    f.control.request(serde_json::json!({"Session":{"target":target,"session":later_id,"command":{"QueryLaunch":request}}}));
     let state = f.control.request(serde_json::json!("Screen"));
     let owner = state["sessions"]
         .as_array()
@@ -8983,6 +8984,21 @@ fn configured_setup_empty_owner_stop_follows_original_handoff_but_never_later_co
     assert_eq!(
         owner["lifecycle"], "Running",
         "stale setup Stop cannot signal later conversation"
+    );
+    let receipt = state["creation"]["launches"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["request"] == request)
+        .unwrap();
+    assert_eq!(receipt["result"]["request"], request);
+    assert_eq!(
+        receipt["session"], original,
+        "original native binding must remain stable after later conversation"
+    );
+    assert_eq!(
+        receipt["lifecycle"], "Stopped",
+        "later Running cannot replace original stopped process"
     );
     f.finish();
 }
