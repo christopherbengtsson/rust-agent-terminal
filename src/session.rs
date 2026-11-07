@@ -336,6 +336,7 @@ impl Sessions {
         storage: &crate::persistence::Worker,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let mut restored = restored;
+        restored.state.creation.launches.clear();
         let others = std::mem::take(&mut restored.sessions);
         let selected_id = restored
             .state
@@ -541,6 +542,9 @@ impl Sessions {
         records: &[crate::creation::Record],
         previous: &[crate::creation::LaunchReceipt],
     ) -> Vec<crate::creation::LaunchReceipt> {
+        if records.is_empty() {
+            return previous.to_vec();
+        }
         records
             .iter()
             .filter_map(|record| {
@@ -974,6 +978,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
         }
     };
     let mut creation = crate::creation::Coordinator::new(&storage);
+    creation.view.launches = restored.state.creation.launches.clone();
     let mut setup = crate::setup::Coordinator::new(&storage);
     let mut registry = restored.state.registry.clone();
     let mut registry_error = None;

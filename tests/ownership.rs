@@ -9000,6 +9000,64 @@ fn configured_setup_empty_owner_stop_follows_original_handoff_but_never_later_co
         receipt["lifecycle"], "Stopped",
         "later Running cannot replace original stopped process"
     );
+    f.control.request(
+        serde_json::json!({"Session":{"target":target,"session":later_id,"command":"Stop"}}),
+    );
+    setup_wait(&mut f.control, &|s| {
+        s["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["target"] == target && s["lifecycle"] == "Stopped" && s["reserved"] == false)
+    });
+    f.restart("setup-boot-one");
+    let restored = setup_wait(&mut f.control, &|s| {
+        s["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|s| s["reserved"] == false)
+            && s["creation"]["launches"].as_array().is_some_and(|rs| {
+                rs.iter().any(|r| {
+                    r["request"] == request
+                        && r["result"]["request"] == request
+                        && r["pending"] == false
+                })
+            })
+    });
+    let receipt = restored["creation"]["launches"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["request"] == request)
+        .unwrap();
+    assert_eq!(receipt["session"], original);
+    assert_eq!(
+        receipt["lifecycle"], "Stopped",
+        "typed historical final state survives restart without borrowing later lifecycle"
+    );
+    assert!(
+        !restored["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["session"] == original),
+        "historical receipt must not allocate an old runtime owner"
+    );
+    let selected = restored["control_target"].clone();
+    let observation = f.control.request(serde_json::json!("Screen"));
+    assert_eq!(
+        observation["control_target"], selected,
+        "receipt projection never changes selection"
+    );
+    assert!(
+        observation["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|s| s["reserved"] == false),
+        "read-only receipts create no execution/capture reservation"
+    );
     f.finish();
 }
 

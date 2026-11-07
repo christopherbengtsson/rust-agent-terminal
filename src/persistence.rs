@@ -365,6 +365,10 @@ pub enum Completion {
     HistoryTarget(String, uuid::Uuid, std::result::Result<HistoryPage, String>),
     Error(&'static str, String),
 }
+struct SessionRestore {
+    sessions: Vec<RestoredSession>,
+    creation_launches: Vec<crate::creation::LaunchReceipt>,
+}
 pub struct RestoredSession {
     pub state: Observation,
     pub checkout: Option<PathBuf>,
@@ -1123,7 +1127,10 @@ impl Store {
         if launches.len() > 1024 {
             return Err("Retained launch outcomes exceed recovery capacity; cannot safely truncate request identities".into());
         }
-        let sessions = self.restore_sessions(&mut launches)?;
+        let SessionRestore {
+            sessions,
+            creation_launches,
+        } = self.restore_sessions(&mut launches)?;
         let row: Option<(String, Option<Vec<u8>>, String)> = self
             .db
             .query_row("SELECT state,checkout,task FROM app WHERE id=1", [], |r| {
@@ -1134,6 +1141,10 @@ impl Store {
             return Ok(Restored {
                 sessions,
                 state: Observation {
+                    creation: crate::creation::View {
+                        launches: creation_launches,
+                        ..Default::default()
+                    },
                     registry: crate::registry::snapshot(&self.db, None)?,
                     ..Observation::default()
                 },
@@ -1144,6 +1155,7 @@ impl Store {
         };
         let mut state: Observation = decode_record(&json)?;
         state.registry = crate::registry::snapshot(&self.db, Some(&task))?;
+        state.creation.launches = creation_launches;
         state = self.recover_state(state, &mut launches)?;
         Ok(Restored {
             sessions,
@@ -1229,7 +1241,16 @@ impl Store {
     fn restore_sessions(
         &mut self,
         launches: &mut Vec<crate::session::LaunchResult>,
-    ) -> Result<Vec<RestoredSession>> {
+    ) -> Result<SessionRestore> {
+        let requests = self
+            .db
+            .prepare("SELECT id FROM workspace_creations LIMIT 257")?
+            .query_map([], |r| r.get::<_, String>(0))?
+            .collect::<std::result::Result<std::collections::BTreeSet<_>, _>>()?;
+        if requests.len() > 256 {
+            return Err("Creation receipt recovery exceeds capacity".into());
+        }
+        let mut creation_launches = std::collections::BTreeMap::new();
         // Existing launch outcomes cap the history population at 1024. Never
         // silently truncate occupancy evidence if a newer/legacy DB exceeds it.
         let rows = self.db.prepare("SELECT s.id,s.state,w.path,w.task,s.identity FROM sessions s LEFT JOIN workspace_sessions m ON m.session=s.id LEFT JOIN workspaces w ON w.id=m.workspace ORDER BY s.rowid DESC LIMIT 1025")?
@@ -1264,6 +1285,30 @@ impl Store {
                     Lifecycle::Running | Lifecycle::Stopping | Lifecycle::StopFailed
                 )
                 || state.lifecycle == Lifecycle::Interrupted && !state.reconciled;
+            // Retain typed final presentation before omitting an old stopped
+            // row from execution ownership. This creates no runtime/reservation.
+            if requests.contains(&identity.request) {
+                let receipt = crate::creation::LaunchReceipt {
+                    request: identity.request.clone(),
+                    session: Some(identity.session.clone()),
+                    lifecycle: if unresolved {
+                        Lifecycle::Interrupted
+                    } else {
+                        state.lifecycle
+                    },
+                    result: None,
+                    pending: false,
+                    error: None,
+                };
+                if creation_launches
+                    .insert(identity.request.clone(), receipt)
+                    .is_some()
+                {
+                    return Err(
+                        "Creation launch request has conflicting retained session bindings".into(),
+                    );
+                }
+            }
             if !is_latest && !unresolved {
                 continue;
             }
@@ -1282,7 +1327,14 @@ impl Store {
                 task,
             });
         }
-        Ok(sessions)
+        for (request, receipt) in &mut creation_launches {
+            receipt.result = launches.iter().find(|r| &r.request == request).cloned();
+            receipt.error = receipt.result.as_ref().and_then(|r| r.error.clone());
+        }
+        Ok(SessionRestore {
+            sessions,
+            creation_launches: creation_launches.into_values().collect(),
+        })
     }
     fn select_workspace(&mut self, task: &str) -> Result<crate::registry::Registry> {
         let registry = crate::registry::snapshot(&self.db, Some(task))?;
