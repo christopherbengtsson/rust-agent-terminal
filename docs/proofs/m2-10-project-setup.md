@@ -185,3 +185,19 @@ terminal restoration PTY test. All owned setup/scripted fixture processes were
 reaped; the final process check found no remaining ticket 10 test/supervisor child.
 No physical reboot, escaped-descendant fault injection, rare internal worker-loss
 injection, or current actual Claude/Codex setup path is claimed here.
+
+## Integration merge check
+
+Merge `7b0df086da73d07d06525ba56fbf5e3ccd0cba4f` retains exact ticket 10 tip
+`a1395eb` and ticket 11 integration `e715dc1`. Locked build, formatting,
+all-target warnings-denied Clippy and `git diff --check` passed on the merged
+source. Filtered bin checks passed: 31 App, 17 UI (including concise footer/core
+actions and viewport geometry), and 6 creation-worker tests. No setup Controller,
+native, streaming, terminal PTY or broad bin/all-target aggregate was rerun while
+ticket 12 held that proof lane; ticket 19 retains the final aggregate obligation.
+
+Both ticket 10 worktrees were clean. The lead tip is an integration ancestor;
+`git cherry` confirms all four helper-side commits are patch-equivalent to
+integration commits. No process held either worktree as its cwd, and no ticket 10
+setup/test/supervisor command remained in the process check before removal.
+Branches remain retained.
