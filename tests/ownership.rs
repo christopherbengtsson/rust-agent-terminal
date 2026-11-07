@@ -2138,6 +2138,17 @@ os.execv(sys.argv[0]+'.child',[sys.argv[0]+'.child'])
     dashboard.wait("Process: Exited");
     dashboard.send(b"h");
     dashboard.send(b"n");
+    let original_segment = old_identity
+        .as_str()
+        .unwrap()
+        .split("session=")
+        .nth(1)
+        .unwrap()
+        .split_whitespace()
+        .next()
+        .unwrap();
+    dashboard.wait(original_segment);
+    dashboard.send(b"\r");
     dashboard.wait("received: original-readable-context-16");
     dashboard.kill();
     let mut control = Controller::connect(&fixture);
@@ -2209,7 +2220,7 @@ fn unavailable_native_recovery_retains_history_until_explicit_new_conversation()
     dashboard.send(b"exit\r");
     dashboard.wait("Process: Exited");
     dashboard.send(b"v");
-    dashboard.wait("Native resume unavailable: no supported saved conversation identity");
+    dashboard.wait("Native resume unavailable: original tool is unsupported or missing");
     dashboard.send(b"h");
     dashboard.wait("received: independent-history-16");
     dashboard.send(b"h");
@@ -5548,8 +5559,8 @@ fn native_process_outcomes_survive_cleanup_reload_and_explicit_resume() {
         assert_eq!(control.greeting["native_conversation"], native);
         assert_eq!(control.greeting["process_exit"], finished["process_exit"]);
         assert_no_owned_coding(&fixture);
-        let resumed =
-            control.request(serde_json::json!({"Resume":format!("explicit-after-{command}")}));
+        control.request(serde_json::json!({"Resume":format!("explicit-after-{command}")}));
+        let resumed = cleanup_wait15(&mut control, |state| state["identity"] != identity);
         assert_ne!(resumed["identity"], identity);
         assert_eq!(resumed["native_conversation"], native);
         cleanup_wait15(&mut control, |state| state["lifecycle"] == "Running");
@@ -9059,6 +9070,296 @@ fn configured_setup_empty_owner_stop_follows_original_handoff_but_never_later_co
         "read-only receipts create no execution/capture reservation"
     );
     f.finish();
+}
+
+#[test]
+fn selected_resume_uses_original_segment_tool_and_native_identity() {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = Fixture::new();
+    let tools = fixture.temp.path().join("selected-tools");
+    std::fs::create_dir(&tools).unwrap();
+    let python = Command::new("which").arg("python3").output().unwrap();
+    let python = String::from_utf8(python.stdout).unwrap();
+    let script = r#"import sys,os,json,re,shlex,subprocess,uuid
+args=sys.argv[1:]
+tool=os.path.basename(sys.argv[0])
+resumed=('resume' in args or '--resume' in args)
+if resumed: native=args[args.index('resume' if tool=='codex' else '--resume')+1]
+elif tool=='claude': native=args[args.index('--session-id')+1]
+else: native=str(uuid.uuid4())
+with open(sys.argv[0]+'.argv','a') as f: f.write(json.dumps({'args':args,'native':native,'cwd':os.getcwd()})+'\n')
+if tool=='codex':
+ for arg in args:
+  if arg.startswith('hooks.SessionStart='):
+   helper=json.loads(re.search(r'command=("(?:[^"\\]|\\.)*")',arg).group(1))
+   subprocess.run(shlex.split(helper),input=json.dumps({'hook_event_name':'SessionStart','session_id':native}).encode(),check=True)
+print('selected-native-ready',flush=True)
+for line in sys.stdin:
+ if line.strip()=='exit': break
+ print('context '+line.strip(),flush=True)
+"#;
+    for tool in ["claude", "codex"] {
+        let file = tools.join(tool);
+        std::fs::write(&file, format!("#!{}\n{script}", python.trim())).unwrap();
+        std::fs::set_permissions(file, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let path = std::env::join_paths(
+        std::iter::once(tools.clone())
+            .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+    )
+    .unwrap();
+    let mut dashboard =
+        Dashboard::open_with_path(&fixture.repository, &fixture.state(), Some(&path));
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted");
+    dashboard.kill();
+    let mut control = Controller::connect(&fixture);
+    std::fs::write(fixture.repository.join("tracked"), "initial").unwrap();
+    assert!(
+        Command::new("git")
+            .arg("-C")
+            .arg(&fixture.repository)
+            .args(["add", "tracked"])
+            .status()
+            .unwrap()
+            .success()
+    );
+    assert!(
+        Command::new("git")
+            .arg("-C")
+            .arg(&fixture.repository)
+            .args([
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=fixture@example.invalid",
+                "commit",
+                "-m",
+                "initial"
+            ])
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    std::fs::write(fixture.repository.join("tracked"), "staged").unwrap();
+    assert!(
+        Command::new("git")
+            .arg("-C")
+            .arg(&fixture.repository)
+            .args(["add", "tracked"])
+            .status()
+            .unwrap()
+            .success()
+    );
+    std::fs::write(fixture.repository.join("tracked"), "unstaged").unwrap();
+    std::fs::write(fixture.repository.join("untracked"), "unsaved").unwrap();
+    let git = |args: &[&str]| {
+        Command::new("git")
+            .arg("-C")
+            .arg(&fixture.repository)
+            .args(args)
+            .output()
+            .unwrap()
+            .stdout
+    };
+    let head = git(&["rev-parse", "HEAD"]);
+    let dirty = git(&["status", "--porcelain=v1"]);
+    let staged = git(&["diff", "--cached"]);
+    let working = git(&["diff"]);
+    let mut originals = Vec::new();
+    for (n, tool) in ["LaunchClaude", "LaunchCodex", "LaunchClaude"]
+        .into_iter()
+        .enumerate()
+    {
+        control.request(serde_json::json!({tool: format!("selected-original-{n}")}));
+        let running = cleanup_wait15(&mut control, |s| {
+            s["lifecycle"] == "Running"
+                && s["native_conversation"].is_string()
+                && s["screen"]
+                    .as_str()
+                    .unwrap_or("")
+                    .contains("selected-native-ready")
+        });
+        originals.push((
+            running["session_identity"]["session"]
+                .as_str()
+                .unwrap()
+                .to_owned(),
+            running["native_conversation"].clone(),
+            running["agent"].clone(),
+        ));
+        control.request(serde_json::json!({"Input":b"exit\r"}));
+        cleanup_wait15(&mut control, |s| {
+            s["lifecycle"] == "Exited" && s["metadata_pending"] == false
+        });
+        let deadline = Instant::now() + Duration::from_secs(8);
+        while cleanup_page15(&mut control)["cleanup"]["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["eligible"] != true)
+        {
+            assert!(Instant::now() < deadline);
+        }
+    }
+    let state = control.request(serde_json::json!("Screen"));
+    let workspace = state["registry"]["workspaces"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    control.request(serde_json::json!({"HistorySession":{"session":originals[1].0,"offset":0}}));
+    let original_history = cleanup_wait15(&mut control, |state| {
+        state["history"]["session"] == originals[1].0
+    })["history"]["text"]
+        .clone();
+    control.request(serde_json::json!({"ResumeSelected":{"request":"wrong-workspace","workspace":workspace,"session":uuid::Uuid::new_v4().to_string()}}));
+    let missing = cleanup_wait15(&mut control, |s| {
+        s["error"].as_str().unwrap_or("").contains("unavailable")
+    });
+    assert_eq!(missing["session_identity"], state["session_identity"]);
+    let pause = fixture.state().join("proof-storage-resume");
+    std::fs::write(&pause, "stall").unwrap();
+    control.request(serde_json::json!({"ResumeSelected":{"request":"cancelled-choice","workspace":workspace,"session":originals[0].0}}));
+    drop(control);
+    let mut control = Controller::connect(&fixture);
+    assert_eq!(control.greeting["launch_request"], "cancelled-choice");
+    assert_eq!(control.greeting["metadata_pending"], true);
+    control.request_now(serde_json::json!({"QueryLaunch":"cancelled-choice"}));
+    let stopped = control.request(serde_json::json!("Stop"));
+    assert_eq!(stopped["session_identity"], state["session_identity"]);
+    std::fs::remove_file(pause).unwrap();
+    cleanup_wait15(&mut control, |s| s["metadata_pending"] == false);
+    control.request(serde_json::json!({"ResumeSelected":{"request":"cancelled-choice","workspace":workspace,"session":originals[0].0}}));
+    let cancelled = cleanup_wait15(&mut control, |s| {
+        s["error"].as_str().unwrap_or("").contains("cancelled")
+    });
+    assert_eq!(cancelled["session_identity"], state["session_identity"]);
+    for (n, index) in [1usize, 0, 2, 1].into_iter().enumerate() {
+        let (source, native, agent) = &originals[index];
+        let request = format!("selected-resume-{n}");
+        let prepare_pause = fixture.state().join("proof-storage-prepare");
+        if n == 0 {
+            std::fs::write(&prepare_pause, "stall").unwrap();
+        }
+        control.request(serde_json::json!({"ResumeSelected":{"request":request,"workspace":workspace,"session":source}}));
+        if n == 0 {
+            let prepared = cleanup_wait15(&mut control, |s| {
+                s["session_identity"]["session"]
+                    .as_str()
+                    .is_some_and(|id| id != state["session_identity"]["session"].as_str().unwrap())
+            });
+            assert_eq!(&prepared["native_conversation"], native);
+            assert_eq!(&prepared["agent"], agent);
+            assert_eq!(prepared["metadata_pending"], true);
+            let replay=control.request(serde_json::json!({"ResumeSelected":{"request":request,"workspace":workspace,"session":originals[0].0}}));
+            assert_eq!(replay["session_identity"], prepared["session_identity"]);
+            assert_eq!(
+                replay["native_conversation"],
+                prepared["native_conversation"]
+            );
+            std::fs::remove_file(prepare_pause).unwrap();
+        }
+        let running = cleanup_wait15(&mut control, |s| {
+            s["lifecycle"] == "Running" && s["metadata_pending"] == false
+        });
+        assert_eq!(&running["native_conversation"], native);
+        assert_eq!(&running["agent"], agent);
+        assert_ne!(
+            running["session_identity"]["session"].as_str().unwrap(),
+            source
+        );
+        assert_eq!(
+            running["session_identity"]["task"],
+            state["session_identity"]["task"]
+        );
+        let occupied=control.request(serde_json::json!({"ResumeSelected":{"request":format!("occupied-{n}"),"workspace":workspace,"session":originals[2].0}}));
+        assert_eq!(occupied["session_identity"], running["session_identity"]);
+        assert!(occupied["error"].as_str().unwrap().contains("attach"));
+        // A changed source with the same request returns the recorded execution.
+        let replay=control.request(serde_json::json!({"ResumeSelected":{"request":request,"workspace":workspace,"session":originals[2].0}}));
+        assert_eq!(replay["session_identity"], running["session_identity"]);
+        control.request(serde_json::json!({"Input":b"exit\r"}));
+        cleanup_wait15(&mut control, |s| {
+            s["lifecycle"] == "Exited" && s["metadata_pending"] == false
+        });
+        let deadline = Instant::now() + Duration::from_secs(8);
+        while cleanup_page15(&mut control)["cleanup"]["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["eligible"] != true)
+        {
+            assert!(Instant::now() < deadline);
+        }
+    }
+    for tool in ["claude", "codex"] {
+        let log = std::fs::read_to_string(tools.join(format!("{tool}.argv"))).unwrap();
+        let records = log
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(records.len(), if tool == "claude" { 4 } else { 3 });
+        for record in records {
+            assert_eq!(record["cwd"], fixture.repository.to_str().unwrap());
+            let args = record["args"].as_array().unwrap();
+            if args.iter().any(|v| v == "resume" || v == "--resume") {
+                assert!(!args.iter().any(|v| v == "--session-id" || v == "--"));
+            }
+        }
+    }
+    control.request(serde_json::json!({"HistorySession":{"session":originals[1].0,"offset":0}}));
+    let retained = cleanup_wait15(&mut control, |s| s["history"]["session"] == originals[1].0);
+    assert_eq!(retained["history"]["text"], original_history);
+    assert_eq!(git(&["rev-parse", "HEAD"]), head);
+    assert_eq!(git(&["status", "--porcelain=v1"]), dirty);
+    assert_eq!(git(&["diff", "--cached"]), staged);
+    assert_eq!(git(&["diff"]), working);
+    assert_eq!(
+        std::fs::read(fixture.repository.join("untracked")).unwrap(),
+        b"unsaved"
+    );
+    let unavailable = fixture.temp.path().join("temporarily unavailable checkout");
+    std::fs::rename(&fixture.repository, &unavailable).unwrap();
+    control.request(serde_json::json!({"ResumeSelected":{"request":"checkout-unavailable","workspace":workspace,"session":originals[0].0}}));
+    let missing_checkout = cleanup_wait15(&mut control, |s| {
+        s["error"]
+            .as_str()
+            .unwrap_or("")
+            .contains("Checkout unavailable")
+            && s["metadata_pending"] == false
+    });
+    assert!(missing_checkout["execution"].is_null());
+    control.request(serde_json::json!({"HistorySession":{"session":originals[1].0,"offset":0}}));
+    let readable = cleanup_wait15(&mut control, |s| s["history"]["session"] == originals[1].0);
+    assert_eq!(readable["history"]["text"], original_history);
+    std::fs::rename(unavailable, &fixture.repository).unwrap();
+    // Missing native records and unsupported resume versions are native failures,
+    // retained in the attempted new segment; neither starts another conversation.
+    std::fs::write(tools.join("claude"),format!("#!{}\nimport sys\nprint('native conversation unavailable / unsupported resume version',flush=True)\nsys.exit(7)\n",python.trim())).unwrap();
+    control.request(serde_json::json!({"ResumeSelected":{"request":"native-record-unavailable","workspace":workspace,"session":originals[0].0}}));
+    let failed = cleanup_wait15(&mut control, |s| {
+        s["lifecycle"] == "Failed" && s["metadata_pending"] == false
+    });
+    assert_eq!(failed["native_conversation"], originals[0].1);
+    assert_eq!(failed["process_exit"]["code"], 7);
+    assert!(
+        failed["screen"]
+            .as_str()
+            .unwrap()
+            .contains("native conversation unavailable")
+    );
+    assert_ne!(failed["session_identity"]["session"], originals[0].0);
+    for _ in 0..5 {
+        assert_eq!(
+            control.request(serde_json::json!("Screen"))["session_identity"],
+            failed["session_identity"]
+        );
+    }
+    assert_no_owned_coding(&fixture);
+    control.request(serde_json::json!("Shutdown"));
+    cleanup_wait15(&mut control, |s| s["stopped"] == true);
 }
 
 #[test]

@@ -365,6 +365,7 @@ impl App {
             self.launch_request = observation.launch_request.clone();
         }
         if observation.lifecycle == crate::session::Lifecycle::Running
+            && observation.error.is_none()
             && observation.identity.is_some()
             && (observation.identity != self.session.identity
                 || self.session.lifecycle != crate::session::Lifecycle::Running)
@@ -657,7 +658,18 @@ impl App {
                 self.browser = None;
                 return Some(Effect::Session(Request::Browse(query)));
             }
+            if key.code == KeyCode::Char('v') && self.session.resume_protocol != 1 {
+                self.error = Some("Selected resume requires a compatible supervisor; stop activity with its matching dashboard before upgrading".into());
+                return None;
+            }
             let effect = self.browser.as_mut().unwrap().key(key);
+            if let Some(Effect::Session(Request::ResumeSelected { request, .. })) = &effect {
+                self.launch_request = request.clone();
+                self.selected_target.clear();
+                self.selecting_checkout = true;
+                self.browser = None;
+                self.history_open = false;
+            }
             if let Some(Effect::Session(Request::HistorySession { session, offset })) = &effect {
                 self.history_session = Some(session.clone());
                 self.history_offset = *offset;
@@ -1674,6 +1686,50 @@ mod tests {
             };
             assert_eq!(actual, text);
         }
+    }
+    #[test]
+    fn explicit_resume_freezes_browser_workspace_and_segment() {
+        let mut app = App::new("/project".into());
+        app.session.browse_protocol = 1;
+        app.session.resume_protocol = 1;
+        app.input(KeyEvent::new(KeyCode::Char('B'), KeyModifiers::NONE));
+        let request = app.browser.as_ref().unwrap().request.clone();
+        app.observe_session(Observation {
+            browse_protocol: 1,
+            resume_protocol: 1,
+            browse: Some(crate::persistence::search::Response {
+                request,
+                rows: vec![crate::persistence::search::Row {
+                    key: "older".into(),
+                    workspace: "original-workspace".into(),
+                    session: Some("original-segment".into()),
+                    label: "Claude older".into(),
+                    snippet: String::new(),
+                    passage: None,
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        assert!(
+            matches!(app.input(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE)),
+            Some(Effect::Session(Request::ResumeSelected { workspace, session, .. }))
+            if workspace == "original-workspace" && session == "original-segment")
+        );
+        assert!(!app.attached);
+        app.observe_session(Observation {
+            resume_protocol: 1,
+            control_target: "occupied-owner".into(),
+            identity: Some("running conversation".into()),
+            lifecycle: crate::session::Lifecycle::Running,
+            error: Some("Worktree occupied; attach or explicitly Stop".into()),
+            ..Default::default()
+        });
+        assert_eq!(app.selected_target, "occupied-owner");
+        assert!(
+            !app.attached,
+            "occupied resume offers attachment instead of taking native focus"
+        );
     }
     #[test]
     fn retained_session_selection_survives_reordering_and_never_opens_deleted_neighbour() {

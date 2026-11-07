@@ -283,6 +283,11 @@ impl Snapshot {
         snapshot
     }
 }
+#[derive(Clone)]
+pub struct ResumeIdentity {
+    pub agent: crate::events::NativeAgent,
+    pub native: String,
+}
 pub enum Command {
     SetupLoad,
     SetupSave(uuid::Uuid, Box<crate::setup::Record>),
@@ -296,6 +301,17 @@ pub enum Command {
     Rename(uuid::Uuid, String, String),
     ComparisonBase(uuid::Uuid, String, crate::working_diff::Base),
     Register(uuid::Uuid, crate::git::CheckoutIdentity),
+    CancelResume {
+        target: String,
+        request: String,
+    },
+    ResumeIdentity {
+        target: String,
+        request: String,
+        workspace: String,
+        session: String,
+        task: String,
+    },
     Prepare(Snapshot),
     Authorize(Snapshot),
     Save(Snapshot),
@@ -319,6 +335,8 @@ pub enum Command {
 }
 #[derive(Clone)]
 pub enum Completion {
+    ResumeIdentity(String, String, std::result::Result<ResumeIdentity, String>),
+    ResumeCancelled(String, String, std::result::Result<(), String>),
     Setups(std::result::Result<Vec<crate::setup::Record>, String>),
     SetupSaved(uuid::Uuid, std::result::Result<(), String>),
     Browse(search::Response),
@@ -477,13 +495,18 @@ impl Worker {
                             continue;
                         }
                     }
-                    let kind = match &command { Command::Browse(..) => "browse", Command::ObservedBranches(..) => "registry", Command::SetupLoad | Command::SetupSave(..) | Command::ConfigureSetup(..) | Command::ComparisonBase(..) | Command::CreationLoad | Command::CreationSave(..) => "registry", Command::SelectWorkspace(..) => "selection", Command::Capture(..) => unreachable!(), Command::Rename(..) | Command::Register(..) => "registry", Command::Save(..) | Command::Prepare(..) | Command::Authorize(..) => "metadata", Command::History(..) | Command::HistorySession(..) | Command::HistoryTarget { .. } => "history", Command::Cleanup(..) | Command::Delete(..) | Command::Seal(..) => "cleanup", Command::Retry => "retry", Command::Flush(..) => "flush" };
+                    let kind = match &command { Command::CancelResume { .. } | Command::ResumeIdentity { .. } => "resume", Command::Browse(..) => "browse", Command::ObservedBranches(..) => "registry", Command::SetupLoad | Command::SetupSave(..) | Command::ConfigureSetup(..) | Command::ComparisonBase(..) | Command::CreationLoad | Command::CreationSave(..) => "registry", Command::SelectWorkspace(..) => "selection", Command::Capture(..) => unreachable!(), Command::Rename(..) | Command::Register(..) => "registry", Command::Save(..) | Command::Prepare(..) | Command::Authorize(..) => "metadata", Command::History(..) | Command::HistorySession(..) | Command::HistoryTarget { .. } => "history", Command::Cleanup(..) | Command::Delete(..) | Command::Seal(..) => "cleanup", Command::Retry => "retry", Command::Flush(..) => "flush" };
                     status.lock().unwrap().operation = Some((kind, Instant::now()));
                     let operation = match &command { Command::Prepare(snapshot) | Command::Authorize(snapshot) | Command::Save(snapshot) => Some(snapshot.operation.clone()), Command::Flush(operation) | Command::Seal(operation) => Some(operation.clone()), _ => None };
                     let result = match command {
                         Command::SetupLoad => Ok(Completion::Setups(store.setups().map_err(|e|e.to_string()))),
                         Command::SetupSave(id, record) => Ok(Completion::SetupSaved(id, store.save_setup(&record).map_err(|e|e.to_string()))),
                         Command::ConfigureSetup(id, project, command) => Ok(Completion::Registered(id, store.configure_setup(&project, &command).map_err(|e|e.to_string()))),
+                        Command::CancelResume { target, request } => {
+                            let result=store.db.execute("INSERT INTO resume_selections(request,workspace,session,cancelled) VALUES(?1,'','',1) ON CONFLICT(request) DO UPDATE SET cancelled=1",[&request]).map(|_|()).map_err(|error|error.to_string());
+                            Ok(Completion::ResumeCancelled(target,request,result))
+                        }
+                        Command::ResumeIdentity { target, request, workspace, session, task } => { let result = store.resume_identity(&request, &workspace, &session, &task).map_err(|e| e.to_string()); Ok(Completion::ResumeIdentity(target, request, result)) },
                         Command::Browse(query) => Ok(Completion::Browse(store.start_browse(query))),
                         Command::ObservedBranches(facts) => (|| {
                             if facts.len()>32 {return Err("Branch fact batch exceeds 32".into());}
@@ -727,7 +750,7 @@ impl Store {
             "PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL; PRAGMA fullfsync=ON;",
         )?;
         let version: u32 = db.pragma_query_value(None, "user_version", |r| r.get(0))?;
-        if version > 8 {
+        if version > 9 {
             return Err("History schema is newer than this executable".into());
         }
         if version == 0 {
@@ -816,6 +839,11 @@ impl Store {
         if version < 8 {
             let tx = db.transaction()?;
             tx.execute_batch("CREATE TABLE IF NOT EXISTS project_setup(project TEXT PRIMARY KEY, command TEXT NOT NULL); CREATE TABLE IF NOT EXISTS workspace_setup(attempt TEXT PRIMARY KEY, record TEXT NOT NULL); CREATE TABLE IF NOT EXISTS workspace_setup_policies(request TEXT PRIMARY KEY, command TEXT); PRAGMA user_version=8;")?;
+            tx.commit()?;
+        }
+        if version < 9 {
+            let tx = db.transaction()?;
+            tx.execute_batch("CREATE TABLE resume_selections(request TEXT PRIMARY KEY, workspace TEXT NOT NULL, session TEXT NOT NULL, cancelled INTEGER NOT NULL DEFAULT 0); PRAGMA user_version=9;")?;
             tx.commit()?;
         }
         db.execute_batch("CREATE TABLE IF NOT EXISTS workspace_setup_policies(request TEXT PRIMARY KEY, command TEXT);")?;
@@ -1875,6 +1903,69 @@ impl Store {
             .ok_or("No retained session at this position")?;
         self.history_record((id, identity, durable, json), offset)
     }
+    fn resume_identity(
+        &mut self,
+        request: &str,
+        workspace: &str,
+        session: &str,
+        task: &str,
+    ) -> Result<ResumeIdentity> {
+        let workspace: String = self.db.query_row("SELECT id FROM workspaces WHERE id=?1 UNION SELECT workspace FROM workspace_tasks WHERE task=?1 LIMIT 1",[workspace],|row|row.get(0)).optional()?.ok_or("Selected workspace is unavailable; readable history retained")?;
+        let known: Option<(String, String, bool)> = self
+            .db
+            .query_row(
+                "SELECT workspace,session,cancelled FROM resume_selections WHERE request=?1",
+                [request],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()?;
+        if let Some((old_workspace, old_session, cancelled)) = known {
+            if cancelled || old_workspace != workspace || old_session != session {
+                return Err("Resume request already belongs to a different or cancelled selection; explicitly select the conversation again with a new request".into());
+            }
+        } else {
+            let count: u32 =
+                self.db
+                    .query_row("SELECT count(*) FROM resume_selections", [], |row| {
+                        row.get(0)
+                    })?;
+            if count >= 1024 {
+                return Err(
+                    "Selected resume request capacity reached; retained choices are preserved"
+                        .into(),
+                );
+            }
+            self.db.execute(
+                "INSERT INTO resume_selections(request,workspace,session) VALUES(?1,?2,?3)",
+                params![request, workspace, session],
+            )?;
+        }
+        self.fault("resume")?;
+        let row: Option<(String, String)> = self.db.query_row(
+            "SELECT s.state,s.identity FROM sessions s JOIN workspace_sessions m ON m.session=s.id JOIN workspace_tasks t ON t.workspace=m.workspace WHERE s.id=?1 AND (m.workspace=?2 OR m.workspace=(SELECT workspace FROM workspace_tasks WHERE task=?2)) AND t.task=?3",
+            params![session,workspace,task], |row| Ok((row.get(0)?,row.get(1)?))).optional()?;
+        let (json,label) = row.ok_or("Selected conversation is unavailable or belongs to another workspace; retained history is unchanged. Explicitly choose a new conversation with c/x")?;
+        let mut state: Observation = serde_json::from_str(&json)?;
+        if state.session_identity.is_none() && state.identity.is_none() {
+            state.identity = Some(label);
+        }
+        let state = decode_record(&serde_json::to_string(&state)?)?;
+        if state
+            .session_identity
+            .as_ref()
+            .map(|id| id.session.as_str())
+            != Some(session)
+        {
+            return Err("Selected segment identity disagrees with saved record".into());
+        }
+        let agent = match state.agent.as_deref() {
+            Some("Claude Code") => crate::events::NativeAgent::Claude,
+            Some("Codex CLI") => crate::events::NativeAgent::Codex,
+            _ => return Err("Native resume unavailable: original tool is unsupported or missing; readable history retained. Explicitly choose c/x for a new conversation".into()),
+        };
+        let native = state.native_conversation.filter(|id| uuid::Uuid::parse_str(id).is_ok()).ok_or("Native resume unavailable: original native conversation UUID is missing; readable history retained. Explicitly choose c/x for a new conversation")?;
+        Ok(ResumeIdentity { agent, native })
+    }
     fn history_session(&self, id: &str, offset: u64) -> Result<HistoryPage> {
         let record = self.db.query_row("SELECT id,identity,durable,state FROM sessions WHERE id=?1 AND history_state='retained'", [id], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?))).optional()?.ok_or("No retained session at the selected identity")?;
         self.history_record(record, offset)
@@ -1993,6 +2084,168 @@ mod concurrent_tests {
                 _ => {}
             }
         }
+    }
+    #[test]
+    fn selected_resume_choices_survive_restart_and_transcript_deletion() {
+        let directory = tempfile::tempdir().unwrap();
+        let (worker, _) = Worker::start(directory.path()).unwrap();
+        let task = uuid::Uuid::new_v4().to_string();
+        let session = uuid::Uuid::new_v4().to_string();
+        let native = "11111111-2222-4333-8444-555555555555";
+        let state = Observation {
+            session_identity: Some(crate::events::SessionIdentity {
+                task: task.clone(),
+                session: session.clone(),
+                request: "original".into(),
+            }),
+            agent: Some("Claude Code".into()),
+            native_conversation: Some(native.into()),
+            lifecycle: Lifecycle::Exited,
+            ..Default::default()
+        };
+        worker
+            .commands
+            .send(Command::Save(Snapshot::new(&state, None, &task)))
+            .unwrap();
+        let workspace = loop {
+            if let Completion::Registry(registry) =
+                worker.events.recv_timeout(Duration::from_secs(3)).unwrap()
+            {
+                break registry
+                    .workspaces
+                    .iter()
+                    .find(|w| w.task == task)
+                    .unwrap()
+                    .id
+                    .clone();
+            }
+        };
+        let resolve = |worker: &Worker, request: &str, selected: &str| {
+            worker
+                .commands
+                .send(Command::ResumeIdentity {
+                    target: "owner".into(),
+                    request: request.into(),
+                    workspace: workspace.clone(),
+                    session: selected.into(),
+                    task: task.clone(),
+                })
+                .unwrap();
+            loop {
+                if let Completion::ResumeIdentity(target, id, result) =
+                    worker.events.recv_timeout(Duration::from_secs(3)).unwrap()
+                {
+                    assert_eq!(target, "owner");
+                    assert_eq!(id, request);
+                    break result;
+                }
+            }
+        };
+        assert_eq!(
+            resolve(&worker, "selected-request", &session)
+                .unwrap()
+                .native,
+            native
+        );
+        for (agent, native_id, message) in [
+            ("Claude Code", None, "native conversation UUID is missing"),
+            (
+                "unsupported tool",
+                Some(native.to_owned()),
+                "tool is unsupported or missing",
+            ),
+        ] {
+            let mut unavailable = state.clone();
+            let unavailable_session = uuid::Uuid::new_v4().to_string();
+            unavailable.session_identity.as_mut().unwrap().session = unavailable_session.clone();
+            unavailable.agent = Some(agent.into());
+            unavailable.native_conversation = native_id;
+            let snapshot = Snapshot::new(&unavailable, None, &task);
+            let operation = snapshot.operation.clone();
+            worker.commands.send(Command::Save(snapshot)).unwrap();
+            loop {
+                if let Completion::Committed(done) =
+                    worker.events.recv_timeout(Duration::from_secs(3)).unwrap()
+                    && done == operation
+                {
+                    break;
+                }
+            }
+            assert!(
+                resolve(
+                    &worker,
+                    &uuid::Uuid::new_v4().to_string(),
+                    &unavailable_session
+                )
+                .err()
+                .unwrap()
+                .contains(message)
+            );
+        }
+        worker
+            .commands
+            .send(Command::Seal(Operation::new(&state, Purpose::Seal)))
+            .unwrap();
+        loop {
+            if let Completion::Committed(operation) =
+                worker.events.recv_timeout(Duration::from_secs(3)).unwrap()
+                && operation.purpose == Purpose::Seal
+            {
+                break;
+            }
+        }
+        worker
+            .commands
+            .send(Command::Delete(session.clone()))
+            .unwrap();
+        loop {
+            if let Completion::Deleted(id) =
+                worker.events.recv_timeout(Duration::from_secs(3)).unwrap()
+            {
+                assert_eq!(id, session);
+                break;
+            }
+        }
+        assert_eq!(
+            resolve(&worker, "after-delete", &session).unwrap().native,
+            native
+        );
+        worker
+            .commands
+            .send(Command::CancelResume {
+                target: "owner".into(),
+                request: "selected-request".into(),
+            })
+            .unwrap();
+        loop {
+            if let Completion::ResumeCancelled(_, id, result) =
+                worker.events.recv_timeout(Duration::from_secs(3)).unwrap()
+            {
+                assert_eq!(id, "selected-request");
+                result.unwrap();
+                break;
+            }
+        }
+        drop(worker);
+        let (worker, _) = Worker::start(directory.path()).unwrap();
+        assert!(
+            resolve(&worker, "selected-request", &session)
+                .err()
+                .unwrap()
+                .contains("cancelled")
+        );
+        assert!(
+            resolve(&worker, "after-delete", &uuid::Uuid::new_v4().to_string())
+                .err()
+                .unwrap()
+                .contains("different")
+        );
+        let descriptor = resolve(&worker, "new-explicit-request", &session).unwrap();
+        assert_eq!(descriptor.native, native);
+        assert!(matches!(
+            descriptor.agent,
+            crate::events::NativeAgent::Claude
+        ));
     }
     fn projected(worker: &Worker, session: &str, offset: u64) -> HistoryPage {
         let request = uuid::Uuid::new_v4();

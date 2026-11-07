@@ -124,6 +124,11 @@ pub enum Request {
         name: String,
     },
     Resume(String),
+    ResumeSelected {
+        request: String,
+        workspace: String,
+        session: String,
+    },
     QueryLaunch(String),
     Reconcile,
     History {
@@ -178,6 +183,8 @@ pub struct Observation {
     pub setup: crate::setup::View,
     #[serde(default)]
     pub browse_protocol: u32,
+    #[serde(default)]
+    pub resume_protocol: u32,
     #[serde(default)]
     pub history_revision: u64,
     #[serde(default)]

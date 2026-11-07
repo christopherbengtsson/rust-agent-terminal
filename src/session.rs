@@ -103,6 +103,7 @@ fn transport(
             || greeting.sessions_protocol != 1
             || greeting.prompt_naming_protocol != 1
             || greeting.creation_protocol != 1
+            || greeting.resume_protocol != 1
             || greeting.setup_protocol != 1
         {
             events.send(greeting)?;
@@ -143,6 +144,7 @@ fn transport(
         || greeting.sessions_protocol != 1
         || greeting.prompt_naming_protocol != 1
         || greeting.creation_protocol != 1
+        || greeting.resume_protocol != 1
         || greeting.setup_protocol != 1
     {
         greeting.control_denied = true;
@@ -305,6 +307,7 @@ impl Delivery {
 // Runtime selection belongs to the supervisor. Each concrete owner retains its
 // private launch, cleanup and capture phases while another owner is selected.
 struct Sessions {
+    resume_completions: Vec<crate::persistence::Completion>,
     setup_reservations: Vec<crate::git::CheckoutIdentity>,
     setup_ready: bool,
     history_revision: u64,
@@ -399,6 +402,7 @@ impl Sessions {
             None
         };
         Ok(Self {
+            resume_completions: Vec::new(),
             setup_reservations: Vec::new(),
             setup_ready: false,
             history_revision: 0,
@@ -416,6 +420,10 @@ impl Sessions {
         event: crate::persistence::Completion,
         storage: &crate::persistence::Worker,
     ) {
+        if matches!(event, crate::persistence::Completion::ResumeIdentity(..)) {
+            self.resume_completions.push(event);
+            return;
+        }
         if let crate::persistence::Completion::Browse(response) = &event {
             if self.browse_request.as_ref() == Some(&response.request) {
                 self.browse = Some(response.clone());
@@ -457,6 +465,7 @@ impl Sessions {
                 | crate::persistence::Completion::Deleted(_)
                 | crate::persistence::Completion::HistoryHidden(_)
                 | crate::persistence::Completion::HistoryTarget(..)
+                | crate::persistence::Completion::ResumeCancelled(..)
         ) {
             for (_, owner) in &mut self.entries {
                 owner.complete(event.clone(), storage);
@@ -466,6 +475,34 @@ impl Sessions {
         }
     }
     fn advance(&mut self, storage: &crate::persistence::Worker, adopting: bool) {
+        // Setup's current reservations are refreshed before advance. Resolve
+        // only here, then reuse global admission before durable Prepare.
+        for event in std::mem::take(&mut self.resume_completions) {
+            let crate::persistence::Completion::ResumeIdentity(target, request, result) = event
+            else {
+                unreachable!()
+            };
+            if let Some(index) = self.entries.iter().position(|(id, _)| id == &target)
+                && let Some(command) = self.entries[index]
+                    .1
+                    .resolve_resume(&target, request, result)
+            {
+                let session = self.entries[index]
+                    .1
+                    .observation()
+                    .session_identity
+                    .map(|id| id.session);
+                self.handle(
+                    Request::Session {
+                        target,
+                        session,
+                        command: Box::new(command),
+                    },
+                    storage,
+                    adopting,
+                );
+            }
+        }
         for (_, owner) in &mut self.entries {
             owner.advance(storage, adopting);
         }
@@ -492,6 +529,7 @@ impl Sessions {
         let mut state = self.entries[self.selected].1.observation();
         state.history_revision = self.history_revision;
         state.browse_protocol = 1;
+        state.resume_protocol = 1;
         state.browse = self.browse.clone();
         state.sessions_protocol = 1;
         state.control_target = self.entries[self.selected].0.clone();
@@ -706,7 +744,7 @@ impl Sessions {
             }
             return;
         }
-        let (index, request) = match request {
+        let (index, mut request) = match request {
             Request::Session {
                 target,
                 session,
@@ -789,6 +827,7 @@ impl Sessions {
             | Request::LaunchClaude(id)
             | Request::LaunchCodex(id)
             | Request::Resume(id)
+            | Request::ResumeSelected { request: id, .. }
             | Request::QueryLaunch(id)
             | Request::LaunchNative { request: id, .. } => Some(id),
             _ => None,
@@ -814,6 +853,21 @@ impl Sessions {
                 .handle_recorded(request, result, storage, adopting);
             return;
         }
+        if let Request::Resume(id) = &request
+            && !self.entries[index].1.resolved_resume(id)
+            && !self.entries[index].1.reserved()
+        {
+            let source = self.entries[index].1.observation().session_identity;
+            let Some(source) = source else {
+                self.entries[index].1.report_error("Native resume unavailable: no retained managed conversation identity; h reads history, c/x explicitly starts a new conversation".into());
+                return;
+            };
+            request = Request::ResumeSelected {
+                request: id.clone(),
+                workspace: self.entries[index].1.task().to_owned(),
+                session: source.session,
+            };
+        }
         if matches!(
             request,
             Request::LaunchNative { .. }
@@ -821,6 +875,7 @@ impl Sessions {
                 | Request::LaunchClaude(_)
                 | Request::LaunchCodex(_)
                 | Request::Resume(_)
+                | Request::ResumeSelected { .. }
         ) {
             if !self.setup_ready {
                 self.entries[index].1.report_error(
@@ -1215,6 +1270,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
         state.registry_protocol = 1;
         state.prompt_naming_protocol = 1;
         state.creation_protocol = 1;
+        state.resume_protocol = 1;
         state.setup_protocol = 1;
         state.setup = setup.view.clone();
         creation.view.launches =
@@ -1256,6 +1312,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                             sessions_protocol: 1,
                             prompt_naming_protocol: 1,
                             creation_protocol: 1,
+                            resume_protocol: 1,
                             setup_protocol: 1,
                             control_denied: true,
                             error: Some("Another dashboard controls this supervisor; close it before reconnecting".into()),
@@ -1658,6 +1715,39 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                 quitting |= matches!(request, Request::Shutdown);
                 session.handle(request, &storage, adoption.is_some());
             }
+            request @ Request::ResumeSelected { .. } => {
+                let Request::ResumeSelected { workspace, .. } = &request else {
+                    unreachable!()
+                };
+                if let Some(workspace) = registry.workspaces.iter().find(|w| &w.id == workspace) {
+                    let matching = |owner: &agent_session::AgentSession| {
+                        owner.task() == workspace.task
+                            || workspace
+                                .legacy_tasks
+                                .iter()
+                                .any(|task| task == owner.task())
+                    };
+                    let occupied = session
+                        .entries
+                        .iter()
+                        .position(|(_, owner)| matching(owner) && owner.reserved());
+                    if let Some(index) = occupied.or_else(|| {
+                        session
+                            .entries
+                            .iter()
+                            .position(|(_, owner)| matching(owner))
+                    }) {
+                        session.selected = index;
+                        session.handle(request, &storage, adoption.is_some());
+                    } else {
+                        session.report_error("Workspace has no runtime owner; adopt its retained checkout before explicit resume".into());
+                    }
+                } else {
+                    session.report_error(
+                        "Selected workspace unavailable; retained history is unchanged".into(),
+                    );
+                }
+            }
             request => session.handle(request, &storage, adoption.is_some()),
         }
         let mut state = session.observation();
@@ -1670,6 +1760,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
         state.registry_protocol = 1;
         state.prompt_naming_protocol = 1;
         state.creation_protocol = 1;
+        state.resume_protocol = 1;
         state.setup_protocol = 1;
         state.setup = setup.view.clone();
         creation.view.launches =

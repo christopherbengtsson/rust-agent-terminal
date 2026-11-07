@@ -68,6 +68,9 @@ pub(super) struct AgentSession {
 }
 #[derive(Default)]
 struct Launch {
+    resolving: Option<String>,
+    cancelling: Option<(String, bool)>,
+    selected: Option<(String, crate::persistence::ResumeIdentity)>,
     pending_launch: Option<Request>,
     prepared_ready: bool,
     creating: Option<CreatingExecution>,
@@ -186,6 +189,25 @@ impl AgentSession {
         let directory = directory.as_path();
         use crate::persistence::Completion;
         match event {
+            Completion::ResumeIdentity(..) => {
+                unreachable!("resolved resume rechecks supervisor admission")
+            }
+            Completion::ResumeCancelled(target, request, result) => {
+                if target != self.state.control_target
+                    || self.launch.cancelling.as_ref().map(|(id, _)| id) != Some(&request)
+                {
+                    return;
+                }
+                match result {
+                    Ok(()) => self.launch.cancelling = None,
+                    Err(error) => {
+                        self.launch.cancelling = Some((request, false));
+                        self.state.error = Some(format!(
+                            "Resume cancellation not durable: {error}; Stop remains pending"
+                        ));
+                    }
+                }
+            }
             crate::persistence::Completion::Browse(_) => {}
             crate::persistence::Completion::HistoryHidden(id) => {
                 if self
@@ -525,7 +547,9 @@ impl AgentSession {
             self.state.accepted_to_durable_millis = progress.accepted_to_durable_millis;
         }
 
-        self.state.metadata_pending = self.writes.metadata_pending()
+        self.state.metadata_pending = self.launch.resolving.is_some()
+            || self.launch.cancelling.is_some()
+            || self.writes.metadata_pending()
             || self.metadata_failed
             || self.launch.pending_launch.is_some()
             || self.launch.creating.is_some()
@@ -582,7 +606,19 @@ impl AgentSession {
         {
             self.history.seal_pending = true;
         }
+        if let Some((request, false)) = &self.launch.cancelling
+            && storage
+                .commands
+                .try_send(crate::persistence::Command::CancelResume {
+                    target: self.state.control_target.clone(),
+                    request: request.clone(),
+                })
+                .is_ok()
+        {
+            self.launch.cancelling.as_mut().unwrap().1 = true;
+        }
         self.state.stopped = self.shutdown
+            && self.launch.cancelling.is_none()
             && self.history.final_flush
             && self.writes.is_empty()
             && !self.metadata_failed
@@ -745,6 +781,89 @@ impl AgentSession {
         storage: &crate::persistence::Worker,
         adoption_pending: bool,
     ) {
+        if let Request::ResumeSelected {
+            request,
+            workspace,
+            session,
+        } = &request
+        {
+            // A cached reply cannot replace any unresolved launch outcome,
+            // including a provisional result not yet durably acknowledged.
+            if self.launch.resolving.is_some()
+                || self.launch.cancelling.is_some()
+                || self.launch.pending_launch.is_some()
+                || self.launch.creating.is_some()
+                || self.launch.gate_receipt.is_some()
+                || self.launch.outcome_reply
+            {
+                return;
+            }
+            if let Some(recorded) = recorded_result.or_else(|| self.launches.get(request).cloned())
+            {
+                self.state.launch_result = Some(recorded.clone());
+                self.state.error = recorded.error;
+                return;
+            }
+            if self.launch.resolving.is_some() {
+                return;
+            }
+            if self.reserved()
+                || self.metadata_failed
+                || adoption_pending
+                || self.writes.metadata_pending()
+            {
+                self.state.error = Some("Worktree occupied or prior capture/setup is unsettled; attach to its running session, or explicitly Stop and wait for settled capture before resuming another conversation".into());
+                return;
+            }
+            if request.is_empty()
+                || request.len() > 128
+                || workspace.is_empty()
+                || workspace.len() > 128
+                || session.len() > 36
+                || uuid::Uuid::parse_str(session).is_err()
+            {
+                self.state.error = Some("Invalid resume request, workspace or managed segment identity; readable history retained".into());
+                return;
+            }
+            match storage
+                .commands
+                .try_send(crate::persistence::Command::ResumeIdentity {
+                    target: self.state.control_target.clone(),
+                    request: request.clone(),
+                    workspace: workspace.clone(),
+                    session: session.clone(),
+                    task: self.task_identity.clone(),
+                }) {
+                Ok(()) => {
+                    self.launch.resolving = Some(request.clone());
+                    self.state.error = None;
+                }
+                Err(error) => {
+                    self.state.error =
+                        Some(format!("Resume lookup busy: {error}; explicitly retry"))
+                }
+            }
+            return;
+        }
+        if self.launch.resolving.is_some() && matches!(request, Request::QueryLaunch(_)) {
+            return;
+        }
+        if self.launch.resolving.is_some()
+            && matches!(
+                request,
+                Request::Launch(_)
+                    | Request::LaunchClaude(_)
+                    | Request::LaunchCodex(_)
+                    | Request::LaunchNative { .. }
+                    | Request::Resume(_)
+                    | Request::Adopt(_)
+                    | Request::Reconcile
+            )
+        {
+            self.state.error =
+                Some("Selected resume is resolving; Stop cancels it before another action".into());
+            return;
+        }
         let directory = self.directory.clone();
         let directory = directory.as_path();
         let progress = storage.progress_for(
@@ -772,13 +891,32 @@ impl AgentSession {
             Request::LaunchNative { agent, prompt, .. } => Some((*agent, prompt.clone())),
             _ => None,
         };
+        let selected = match &request {
+            Request::Resume(id) => self
+                .launch
+                .selected
+                .as_ref()
+                .filter(|(request, _)| request == id)
+                .map(|(_, identity)| identity.clone()),
+            _ => None,
+        };
         let resume = matches!(&request, Request::Resume(_));
         let claude = (matches!(&request, Request::LaunchClaude(_))
             || matches!(initial, Some((crate::events::NativeAgent::Claude, _))))
-            || (resume && self.state.agent.as_deref() == Some("Claude Code"));
+            || (resume
+                && selected
+                    .as_ref()
+                    .map_or(self.state.agent.as_deref() == Some("Claude Code"), |id| {
+                        matches!(id.agent, crate::events::NativeAgent::Claude)
+                    }));
         let codex = (matches!(&request, Request::LaunchCodex(_))
             || matches!(initial, Some((crate::events::NativeAgent::Codex, _))))
-            || (resume && self.state.agent.as_deref() == Some("Codex CLI"));
+            || (resume
+                && selected
+                    .as_ref()
+                    .map_or(self.state.agent.as_deref() == Some("Codex CLI"), |id| {
+                        matches!(id.agent, crate::events::NativeAgent::Codex)
+                    }));
         let launch_request = match &request {
             Request::LaunchNative { request: id, .. }
             | Request::Launch(id)
@@ -864,7 +1002,7 @@ impl AgentSession {
                 return Err("Launch reconciliation pending; wait for durable outcome".into());
             }
             match request {
-                Request::Browse(_) | Request::EditorSource{..} | Request::InspectWorking{..} | Request::PreviewCreation{..} | Request::ConfigureSetup {..} | Request::RecoverSetup {..} | Request::CreateWorkspace(_) | Request::RecoverCreation{..} | Request::CancelCreation{..} | Request::RenameWorkspace { .. } | Request::Session { .. } | Request::SelectSession(_) | Request::Discover { .. } | Request::Adopt(_) | Request::Register(_) => unreachable!("workspace requests are supervisor-owned"),
+                Request::ResumeSelected {..} | Request::Browse(_) | Request::EditorSource{..} | Request::InspectWorking{..} | Request::PreviewCreation{..} | Request::ConfigureSetup {..} | Request::RecoverSetup {..} | Request::CreateWorkspace(_) | Request::RecoverCreation{..} | Request::CancelCreation{..} | Request::RenameWorkspace { .. } | Request::Session { .. } | Request::SelectSession(_) | Request::Discover { .. } | Request::Adopt(_) | Request::Register(_) => unreachable!("workspace requests are supervisor-owned"),
                 Request::Reconcile => {
                     if self.execution.child.is_some() || self.execution.stopping.is_some() { return Err("Session owned by current supervisor; stop it normally".into()); }
                     if let Some(evidence) = &self.state.execution { evidence.reconcile()?; }
@@ -890,7 +1028,7 @@ impl AgentSession {
                     }
                     let path = self.checkout.as_ref().ok_or("Adopt a checkout before launch")?;
                     if !path.is_dir() { return Err("Checkout unavailable: cannot continue in place; h opens retained history. Restore the checkout before explicitly resuming.".into()); }
-                    if resume && (!claude && !codex || self.state.native_conversation.as_deref().and_then(|id| uuid::Uuid::parse_str(id).ok()).is_none()) {
+                    if resume && (!claude && !codex || selected.as_ref().map(|id|id.native.as_str()).or(self.state.native_conversation.as_deref()).and_then(|id| uuid::Uuid::parse_str(id).ok()).is_none()) {
                         return Err("Native resume unavailable: no supported saved conversation identity. h opens retained history; c Claude / x Codex explicitly starts a new conversation.".into());
                     }
                     if initial.as_ref().and_then(|(_, prompt)| prompt.as_ref()).is_some_and(|prompt| prompt.len() > 4084 || prompt.contains('\0')) { return Err("First prompt exceeds 4084-byte limit or contains NUL".into()); }
@@ -918,6 +1056,13 @@ impl AgentSession {
                         let identity = crate::events::SessionIdentity { task: self.task_identity.clone(), session, request: request.clone() };
                         self.state.identity = Some(identity.label());
                         self.state.session_identity = Some(identity);
+                        // A prior segment's late status receipt cannot rewrite the new identity.
+                        self.execution.monitor = None;
+                        self.execution.codex_monitor = None;
+                        if let Some(selected) = &selected {
+                            self.state.agent = Some(match selected.agent { crate::events::NativeAgent::Claude => "Claude Code", crate::events::NativeAgent::Codex => "Codex CLI" }.into());
+                            self.state.native_conversation = Some(selected.native.clone());
+                        }
                         self.state.process_exit = None;
                         self.state.launch_result = None;
                         self.state.lifecycle = Lifecycle::Interrupted;
@@ -1272,6 +1417,10 @@ impl AgentSession {
                     self.history.final_flush = false;
                 }
                 Request::Stop | Request::Shutdown => {
+                    if let Some(request) = self.launch.resolving.take() {
+                        self.launch.cancelling = Some((request,false));
+                    }
+                    self.launch.selected = None;
                     if self.state.storage_wait_millis >= 250 || self.state.producer_wait_millis > 0 || self.state.storage_error.is_some() { self.state.capture_loss_possible = true; }
                     if (self.launch.pending_launch.is_some() || self.launch.gate_receipt.is_some()) && self.launch.creating.is_none() {
                         let result = LaunchResult { request: self.state.launch_request.clone(), identity: self.state.identity.clone(), error: Some("Launch cancelled by Stop; metadata may still be pending".into()) };
@@ -1435,13 +1584,50 @@ impl AgentSession {
         {
             screen.snapshot(&mut self.state);
         }
-        self.state.metadata_pending = self.writes.metadata_pending()
+        self.state.metadata_pending = self.launch.resolving.is_some()
+            || self.launch.cancelling.is_some()
+            || self.writes.metadata_pending()
             || self.metadata_failed
             || self.launch.pending_launch.is_some()
             || self.launch.creating.is_some()
             || self.launch.gate_receipt.is_some()
             || self.launch.outcome_reply;
-        self.state.clone()
+        let mut observation = self.state.clone();
+        if let Some(request) = &self.launch.resolving {
+            // Transport recovery follows the frozen new request while saved
+            // historical metadata still belongs to the previous segment.
+            observation.launch_request = request.clone();
+            observation.launch_result = None;
+        }
+        observation
+    }
+    pub(super) fn resolved_resume(&self, request: &str) -> bool {
+        self.launch
+            .selected
+            .as_ref()
+            .is_some_and(|(id, _)| id == request)
+    }
+    pub(super) fn resolve_resume(
+        &mut self,
+        target: &str,
+        request: String,
+        result: Result<crate::persistence::ResumeIdentity, String>,
+    ) -> Option<Request> {
+        if target != self.state.control_target || self.launch.resolving.as_deref() != Some(&request)
+        {
+            return None;
+        }
+        self.launch.resolving = None;
+        match result {
+            Ok(identity) => {
+                self.launch.selected = Some((request.clone(), identity));
+                Some(Request::Resume(request))
+            }
+            Err(error) => {
+                self.state.error = Some(error);
+                None
+            }
+        }
     }
     pub(super) fn report_error(&mut self, error: String) {
         self.state.error = Some(error);
@@ -1458,12 +1644,18 @@ impl AgentSession {
         self.launches.get(request).cloned()
     }
     pub(super) fn pending_launch_request(&self, request: &str) -> bool {
-        self.state.launch_request == request
-            && (self.launch.pending_launch.is_some()
-                || self.launch.creating.is_some()
-                || self.launch.created.is_some()
-                || self.launch.gate_receipt.is_some()
-                || self.launch.outcome_reply)
+        self.launch.resolving.as_deref() == Some(request)
+            || self
+                .launch
+                .cancelling
+                .as_ref()
+                .is_some_and(|(id, _)| id == request)
+            || (self.state.launch_request == request
+                && (self.launch.pending_launch.is_some()
+                    || self.launch.creating.is_some()
+                    || self.launch.created.is_some()
+                    || self.launch.gate_receipt.is_some()
+                    || self.launch.outcome_reply))
     }
     pub(super) fn adopt(
         &mut self,
@@ -1491,7 +1683,9 @@ impl AgentSession {
         self.save_metadata(storage);
     }
     pub(super) fn reserved(&self) -> bool {
-        self.state.execution.is_some()
+        self.launch.resolving.is_some()
+            || self.launch.cancelling.is_some()
+            || self.state.execution.is_some()
             || !self.history.eof
             || self.history.capture_done.is_some()
             || self.history.flush_pending
