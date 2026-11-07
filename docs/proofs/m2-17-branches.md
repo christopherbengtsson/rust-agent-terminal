@@ -146,3 +146,25 @@ is claimed. Existing ticket 16 capture/Stop and prior native evidence retain the
 recorded scope. Abrupt loss during Git may leave locks; uncertain locks are never
 automatically removed. Transcript deletion does not remove archive or restoration
 refs. Those refs are retained independently and are not automatically expired.
+
+## Integration merge checks
+
+Ticket 17 was merged with `--no-ff` at
+`c92123e7fbdefd2ec71e05af4a4bba3709724158`, retaining completed source
+`9b439c32d701ae05e83eacd98dcbcc641b13e3b6` as its second parent. The merge
+tree exactly matches that completed source; resolved ticket 16 and integration
+`3edf1c0` are ancestors. Both checkouts were clean before the merge.
+
+On the integration checkout, locked build, formatting, all-target warnings-denied
+Clippy and `git diff --check` passed. The binary suite passed 140 tests with the
+same three explicit corpus/probe ignores in 9.30 seconds. Focused real-Git branch
+cleanup passed all 16 tests in 1.60 seconds; restoration passed all 9 in 1.46
+seconds. The exact Controller expected-tip guard scenario passed in 3.85 seconds,
+again reporting APFS EILSEQ and exercising the spaces/Unicode fallback rather
+than claiming non-UTF8 runtime qualification.
+
+The existing 11-scenario Controller/outer-PTY evidence above applies to this
+identical merge tree; that complete group was not rerun during integration.
+No aggregate all-target runtime or ticket 19 qualification is added here.
+The clean, fully merged ticket 17 development worktree was removed after these
+checks; its `task/m2-17` branch is retained.
