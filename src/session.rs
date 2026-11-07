@@ -314,6 +314,7 @@ struct Sessions {
     resume_completions: Vec<crate::persistence::Completion>,
     setup_reservations: Vec<crate::git::CheckoutIdentity>,
     archive_reservations: Vec<crate::git::CheckoutIdentity>,
+    settled_checkout_refusals: Vec<(crate::git::CheckoutIdentity, &'static str)>,
     setup_ready: bool,
     archive_ready: bool,
     history_revision: u64,
@@ -411,6 +412,7 @@ impl Sessions {
             resume_completions: Vec::new(),
             setup_reservations: Vec::new(),
             archive_reservations: Vec::new(),
+            settled_checkout_refusals: Vec::new(),
             setup_ready: false,
             archive_ready: false,
             history_revision: 0,
@@ -891,24 +893,24 @@ impl Sessions {
                 | Request::Resume(_)
                 | Request::ResumeSelected { .. }
         ) {
-            if self.entries[index]
-                .1
-                .observation()
-                .checkout_identity
-                .is_some_and(|target| {
-                    self.archive_reservations
-                        .iter()
-                        .any(|r| r.common_dir == target.common_dir && r.git_dir == target.git_dir)
-                })
-            {
-                self.entries[index].1.report_error("Workspace archive owns this checkout or folder removal is pending; settle its receipt before Start".into());
-                return;
-            }
             if !self.setup_ready || !self.archive_ready {
                 self.entries[index].1.report_error(
                     "Setup/archive recovery is loading; retry after committed receipts arrive"
                         .into(),
                 );
+                return;
+            }
+            if let Some(target) = self.entries[index].1.observation().checkout_identity
+                && self
+                    .archive_reservations
+                    .iter()
+                    .any(|r| r.common_dir == target.common_dir && r.git_dir == target.git_dir)
+            {
+                let reason = self.settled_checkout_refusals.iter().find(|(known, _)| known.common_dir == target.common_dir && known.git_dir == target.git_dir).map_or(
+                    "Workspace archive owns this checkout or folder removal is pending; settle its receipt before Start",
+                    |(_, reason)| *reason,
+                );
+                self.entries[index].1.report_error(reason.into());
                 return;
             }
             if self.entries[index]
@@ -1255,11 +1257,26 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                 w.checkout
                     .as_ref()
                     .filter(|c| {
-                        registry.archived.contains(&w.id) || archive.blocks(c) || removal.blocks(c)
+                        registry.archived.contains(&w.id)
+                            || archive.blocks(c)
+                            || removal.blocks(c)
+                            || removal.view.records.iter().any(|r| {
+                                r.workspace == w.id && r.phase == crate::removal::Phase::Removed
+                            })
                     })
                     .cloned()
             })
             .collect();
+        session.settled_checkout_refusals = registry.workspaces.iter().filter_map(|w| {
+            let checkout = w.checkout.as_ref()?;
+            if archive.blocks(checkout) || removal.blocks(checkout) { return None; }
+            let reason = if removal.view.records.iter().any(|r| r.workspace == w.id && r.phase == crate::removal::Phase::Removed) {
+                "Workspace folder removed; in-place native resume and Start are unavailable. Restore saved code from its recovery reference into an available checkout and explicitly adopt it before coding; h reads retained history."
+            } else if registry.archived.contains(&w.id) {
+                "Workspace archived; Return/unarchive before Start or native resume. If the checkout is missing, restore saved code from its recovery reference into an available checkout and adopt it first; h reads retained history."
+            } else { return None; };
+            Some((checkout.clone(), reason))
+        }).collect();
         creation.advance(&storage);
         if let Some(mut handoff) = creation.launch.take() {
             if let Some(checkout) = handoff.record.checkout.clone()
@@ -1394,7 +1411,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
         let mut state = session.observation();
         state.subscriber_frame_high_water = subscriber_frame_high_water;
         state.diff_protocol = 2;
-        state.editor_protocol = 1;
+        state.editor_protocol = 2;
         state.editor_source = source_result.clone();
         state.working_diff = diff_result.clone();
         state.git_jobs_protocol = 1;
@@ -1445,7 +1462,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     if controller.is_some() {
                         let refusal = Observation {
                             diff_protocol: 2,
-                            editor_protocol: 1,
+                            editor_protocol: 2,
                             git_jobs_protocol: 1,
                             registry_protocol: 1,
                             sessions_protocol: 1,
@@ -2029,7 +2046,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
         let mut state = session.observation();
         state.subscriber_frame_high_water = subscriber_frame_high_water;
         state.diff_protocol = 2;
-        state.editor_protocol = 1;
+        state.editor_protocol = 2;
         state.editor_source = source_result.clone();
         state.working_diff = diff_result.clone();
         state.git_jobs_protocol = 1;

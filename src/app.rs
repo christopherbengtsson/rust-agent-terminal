@@ -1100,7 +1100,7 @@ impl App {
                         return None;
                     }
                     KeyCode::Char('e') if !view.loading => {
-                        if self.session.editor_protocol != 1 {
+                        if self.session.editor_protocol != 2 {
                             self.editor_message = Some("Editor comparison requires an upgraded supervisor; detach and upgrade after stopping managed activity".into());
                             return None;
                         }
@@ -1120,8 +1120,15 @@ impl App {
                             self.editor_message = Some("Opening LIVE source shared with the active agent; saving changes this workspace".into());
                             let workspace = view.workspace.clone();
                             let path = path.clone();
-                            let line =
-                                crate::editor::source_line(&snapshot.content, view.scroll as usize);
+                            let line = snapshot.source_start.map_or_else(
+                                || {
+                                    crate::editor::source_line(
+                                        &snapshot.content,
+                                        view.scroll as usize,
+                                    )
+                                },
+                                |start| (view.scroll as usize).saturating_sub(start) + 1,
+                            );
                             return self.source_editor(workspace, Some(path), line);
                         }
                         self.editor_message =
@@ -1702,7 +1709,7 @@ impl App {
         path: Option<Vec<u8>>,
         line: usize,
     ) -> Option<Effect> {
-        if self.session.editor_protocol != 1
+        if self.session.editor_protocol != 2
             || self.session.control_denied
             || self.session.connection_lost
         {
@@ -2963,7 +2970,7 @@ mod tests {
     fn creation_fields_consume_mixed_case_before_editor_and_other_modal_shortcuts() {
         for field in 0..4 {
             let mut app = App::new("repo".into());
-            app.session.editor_protocol = 1;
+            app.session.editor_protocol = 2;
             app.session
                 .registry
                 .projects
