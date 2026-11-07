@@ -357,6 +357,46 @@ Cancellation before branch mutation does not rearm on a late receipt. Once Git's
 branch result is awaiting its durable acknowledgement, cancellation is too late
 and the panel says so. Folder removal remains a separate later action.
 
+`M` opens a separate **Remove workspace folder** preview for the selected
+workspace, including an archived workspace shown through `w`, then `z`. It
+freezes the canonical folder, current HEAD, branch, recovery ref and actionable
+blockers. Unsaved tracked, untracked **and ignored files** block removal; move or
+save them first, then `n` requests a fresh preview. An active or uncertain coding
+session, setup, pending native-resume lookup, unfinished capture or archive
+mutation also blocks removal. Removal never implicitly stops that activity.
+
+When the preview is eligible, `y` explicitly confirms that exact folder/HEAD.
+If code has no confirmed remote backup, press Space to acknowledge **local only,
+not pushed**, then `y`. No remotes is reported as local-only. Without an upstream, live push-destination
+evidence must independently cover HEAD to report remote backup; otherwise the
+local-only acknowledgement applies. A configured but unavailable/missing remote
+or uncertain push evidence blocks removal. Live push-destination checks can require connectivity/authentication;
+changed evidence requires a fresh preview. The worker pins the exact current
+commit at the displayed `refs/rat/removal/<workspace>/<request>` ref, including
+never-archived/detached work, and saves durable intent before ordinary Git removal.
+Main checkouts, locked/prunable worktrees and unsafe identities are excluded.
+Git refusal is preserved; no force removal or recursive saved-path deletion is
+used. Special/sparse/submodule indexes, shallow/partial clones and external Git
+object stores are conservatively excluded when complete saved coverage is unknown.
+
+Saved commits, old archive refs, all retained branches, workspace/native identities
+and session history stay. For example, `git show '<removal-ref>:path/to/file'`
+reads saved code through the project’s remaining checkout after folder removal.
+Readable history/search remains usable without the removed checkout; in-place
+native resume is unavailable. This action neither archives the workspace nor
+deletes chats. `j`/`k` scroll the preview/receipt; Escape dismisses it, `d` detaches,
+and `q` cancels pending mutation and quits after owned work settles. A mutation
+already completed by Git cannot be rolled back by cancellation.
+
+On a lost result or supervisor restart, reopen `M` and press `g` for **read-only
+reconciliation** of the same request. Startup and reconciliation never replay
+folder deletion. A safe retained folder requires a fresh `n` preview and explicit
+confirmation; a replacement path or uncertain identity remains blocked for
+inspection. Storage errors stop further mutation; `r` in the removal panel retries storage,
+then `g` reconciles the receipt. Recovery refs have no
+automatic expiration. Checks protect observed state; external tools can still
+write after the final check, so avoid editing a workspace while removing it.
+
 Archived metadata and confirmed missing/inaccessible folders are labelled without
 requiring the checkout for reading. `K` opens Stop, save and archive for the
 selected workspace; `w`, then `z`, includes archived workspaces and `K` opens

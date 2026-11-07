@@ -123,7 +123,75 @@ impl Ui {
             session,
         );
         let viewport = Self::session_viewport(frame.area());
-        if let Some(workspace) = &app.archive_open {
+        if let Some((workspace, request)) = &app.removal_open {
+            let name = app
+                .session
+                .registry
+                .workspaces
+                .iter()
+                .find(|w| &w.id == workspace)
+                .map_or("Workspace", |w| w.name.as_str());
+            let mut text = format!("Remove workspace folder · {}\n", visible(name));
+            if let Some(r) = app
+                .session
+                .removal
+                .records
+                .iter()
+                .find(|r| &r.workspace == workspace && &r.request == request)
+            {
+                text.push_str(&format!(
+                    "{:?}: {}\nFolder {}\nHEAD {}\nBranch {}\nRecovery ref {}\n",
+                    r.phase,
+                    visible(&r.message),
+                    visible(&r.snapshot.checkout.root.display().to_string()),
+                    r.snapshot.head,
+                    r.snapshot.branch.as_deref().unwrap_or("detached HEAD"),
+                    r.snapshot.reference
+                ));
+                text.push_str("Saved code, branches, archive refs and chats stay. In-place resume needs a checkout.\n");
+                if !r.snapshot.warning.is_empty() {
+                    text.push_str(&format!("{}\n", visible(&r.snapshot.warning)));
+                }
+                if r.phase == crate::removal::Phase::Preview {
+                    if r.snapshot.local_only {
+                        text.push_str(&format!(
+                            "[{}] Space: I acknowledge code is saved only locally, NOT pushed\n",
+                            if app.removal_local_ack { "x" } else { " " }
+                        ));
+                    }
+                    for blocker in &r.snapshot.blockers {
+                        text.push_str(&format!("BLOCKED: {}\n", visible(blocker)));
+                    }
+                    if r.snapshot.blockers.is_empty() {
+                        text.push_str("y: Confirm removal of this exact HEAD/folder; repeat safety checks before Git removal\n");
+                    } else {
+                        text.push_str(
+                            "Resolve blockers, then n: new preview. No folder will be removed.\n",
+                        );
+                    }
+                } else {
+                    text.push_str("g: Read-only reconciliation; never replays deletion\n");
+                }
+            } else {
+                text.push_str("Loading removal preview; folder retained.\n");
+            }
+            if !app.session.removal.ready {
+                text.push_str("Loading removal recovery receipts; wait before a new preview.\n");
+            }
+            if app.session.removal.pending {
+                text.push_str("Worker/receipt pending; wait for durable result.\n");
+            }
+            if let Some(error) = &app.session.removal.error {
+                text.push_str(&format!("{}\n", visible(error)));
+            }
+            text.push_str(&format!("Request {request}\nn new preview · r retry storage · Esc dismiss · j/k scroll · q quit/stop · d detach"));
+            frame.render_widget(
+                Paragraph::new(text)
+                    .wrap(Wrap { trim: false })
+                    .scroll((app.removal_scroll, 0)),
+                viewport,
+            );
+        } else if let Some(workspace) = &app.archive_open {
             let archived = app.session.registry.archived.contains(workspace);
             let name = app
                 .session
@@ -846,6 +914,8 @@ impl Ui {
             && (frame.area().width < 80 || frame.area().height < 22)
         {
             "w Working/Whole · e inspect ALL · o LIVE · j/k file\nb base · r refresh · f/Esc back · s stop · q quit"
+        } else if app.removal_open.is_some() {
+            "y remove · Space local ack · g reconcile · n preview\nr retry · j/k scroll · Esc dismiss · q quit · d detach"
         } else if app.archive_open.is_some() {
             "Enter confirm/retry · z cancel · Esc dismiss\nj/k scroll · q quit/stop · d detach"
         } else if app.first_prompt.is_some() || app.rename_workspace.is_some() {
@@ -891,7 +961,7 @@ A add · N create · w/Esc back · d detach · q quit"
                 &compact_help
             } else {
                 compact_help = format!(
-                    "q quit s stop h history S text / find B chats {}\nK archive N create w spaces f diff E LIVE d detach",
+                    "q quit s stop h history S text / find B chats {}\nM remove K archive N create w spaces f diff E LIVE d detach",
                     if app.session.lifecycle == crate::session::Lifecycle::Running {
                         "Enter attach"
                     } else {

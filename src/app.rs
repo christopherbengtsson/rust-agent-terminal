@@ -44,6 +44,9 @@ pub struct EditorContext {
 }
 
 pub struct App {
+    pub removal_open: Option<(String, String)>,
+    pub removal_scroll: u16,
+    pub removal_local_ack: bool,
     pub archive_open: Option<String>,
     pub archive_scroll: u16,
     pub archive_request: Option<String>,
@@ -95,6 +98,9 @@ pub struct App {
 impl App {
     pub fn new(repository: PathBuf) -> Self {
         Self {
+            removal_open: None,
+            removal_scroll: 0,
+            removal_local_ack: false,
             archive_open: None,
             archive_scroll: 0,
             archive_request: None,
@@ -465,6 +471,74 @@ impl App {
                 return None;
             }
             return Some(self.session_effect(Request::Key(key)));
+        }
+        if let Some((workspace, request)) = self.removal_open.clone() {
+            match key.code {
+                KeyCode::Esc => self.removal_open = None,
+                KeyCode::Char('j') | KeyCode::Down => {
+                    self.removal_scroll = self.removal_scroll.saturating_add(1)
+                }
+                KeyCode::Char('k') | KeyCode::Up => {
+                    self.removal_scroll = self.removal_scroll.saturating_sub(1)
+                }
+                KeyCode::Char(' ') if key.modifiers.is_empty() => {
+                    self.removal_local_ack = !self.removal_local_ack
+                }
+                KeyCode::Char('q') => {
+                    self.shutdown_pending = true;
+                    return Some(self.session_effect(Request::Shutdown));
+                }
+                KeyCode::Char('d') => {
+                    self.detached = true;
+                    return Some(Effect::Detach);
+                }
+                KeyCode::Char('n') if !self.session.removal.pending => {
+                    let request = uuid::Uuid::new_v4().to_string();
+                    self.removal_open = Some((workspace.clone(), request.clone()));
+                    self.removal_local_ack = false;
+                    self.removal_scroll = 0;
+                    return Some(Effect::Session(Request::PreviewRemoval {
+                        workspace,
+                        request,
+                    }));
+                }
+                KeyCode::Char('r') if key.modifiers.is_empty() => {
+                    return Some(Effect::Session(Request::RetryStorage));
+                }
+                KeyCode::Char('g') if !self.session.removal.pending => {
+                    return Some(Effect::Session(Request::ReconcileRemoval {
+                        workspace,
+                        request,
+                    }));
+                }
+                KeyCode::Char('y')
+                    if key.modifiers.is_empty()
+                        && !self.session.removal.pending
+                        && !self.session.connection_lost
+                        && !self.session.control_denied =>
+                {
+                    let r = self.session.removal.records.iter().find(|r| {
+                        r.workspace == workspace
+                            && r.request == request
+                            && r.phase == crate::removal::Phase::Preview
+                    })?;
+                    if !r.snapshot.blockers.is_empty()
+                        || r.snapshot.local_only && !self.removal_local_ack
+                    {
+                        return None;
+                    }
+                    self.removal_scroll = 0;
+                    return Some(Effect::Session(Request::ConfirmRemoval {
+                        workspace,
+                        request,
+                        head: r.snapshot.head.clone(),
+                        reference: r.snapshot.reference.clone(),
+                        local_ack: self.removal_local_ack,
+                    }));
+                }
+                _ => {}
+            }
+            return None;
         }
         if let Some(workspace) = self.archive_open.clone() {
             match key.code {
@@ -1155,6 +1229,35 @@ impl App {
                 return None;
             }
         }
+        if key.code == KeyCode::Char('M')
+            && !key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER)
+        {
+            if let Some(workspace) = self
+                .workspace_selected
+                .as_ref()
+                .or(self.session.registry.selected.as_ref())
+                .cloned()
+            {
+                let old = self.session.removal.records.iter().rev().find(|r| {
+                    r.workspace == workspace && r.phase != crate::removal::Phase::Preview
+                });
+                let request = old
+                    .map(|r| r.request.clone())
+                    .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+                self.removal_open = Some((workspace.clone(), request.clone()));
+                self.removal_scroll = 0;
+                self.removal_local_ack = false;
+                if old.is_none() {
+                    return Some(Effect::Session(Request::PreviewRemoval {
+                        workspace,
+                        request,
+                    }));
+                }
+            }
+            return None;
+        }
         if key.code == KeyCode::Char('K')
             && !key
                 .modifiers
@@ -1645,10 +1748,12 @@ impl App {
             "Workspace name: Enter saves · Ctrl-U clears · Esc cancels · no folder or conversation changes"
         } else if self.project_input.is_some() {
             "Add project: existing local path · Enter register without launch · Esc cancel"
+        } else if self.removal_open.is_some() {
+            "y remove exact preview · Space local ack · g reconcile · r retry storage · n preview · j/k scroll · Esc dismiss"
         } else if self.archive_open.is_some() {
             "Enter Stop/save/archive or Unarchive · z cancel archive · Esc dismiss · q quit · d detach"
         } else if self.workspaces_open {
-            "K archive/return · z show archived · q quit · h latest history · N create · U setup · w/Esc back · j/k select · [/] project · Enter open · a adopt · R rename · A add · E edit LIVE · f diff · d detach"
+            "M remove folder · K archive/return · z show archived · q quit · h latest history · N create · U setup · w/Esc back · j/k select · [/] project · Enter open · a adopt · R rename · A add · E edit LIVE · f diff · d detach"
         } else if self.attached {
             "Native input · Ctrl-C interrupt · Ctrl-] / Ctrl-5 dashboard (keeps session running)"
         } else if self.cleanup_open {
@@ -1658,7 +1763,7 @@ impl App {
         } else if self.session.lifecycle == crate::session::Lifecycle::Interrupted {
             "u reconcile · v resume · g cleanup · h history · d detach · q quit/stop · j/k select · r refresh"
         } else {
-            "q quit/stop s stop h history Enter attach x new Codex v resume K archive / find S text B chats N create O receipt U setup E LIVE f diff w workspaces d detach"
+            "q quit/stop s stop h history d detach Enter attach x new Codex v resume M remove K archive / find S text B chats N create U setup E LIVE f diff w spaces"
         }
     }
 
@@ -2890,5 +2995,72 @@ mod tests {
                 "submitted policy is immutable until a new snapshot"
             );
         }
+    }
+    #[test]
+    fn folder_removal_requires_preview_and_freezes_workspace_before_confirmation() {
+        let mut app = App::new("repo".into());
+        app.session.registry.selected = Some("original-workspace".into());
+        assert!(
+            matches!(app.input(KeyEvent::new(KeyCode::Char('M'),KeyModifiers::NONE)),
+            Some(Effect::Session(Request::PreviewRemoval { workspace, .. })) if workspace=="original-workspace")
+        );
+        app.session.registry.selected = Some("other-workspace".into());
+        assert!(
+            app.input(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+                .is_none(),
+            "Enter without the exact preview cannot remove a folder"
+        );
+    }
+    #[test]
+    fn folder_removal_confirmation_is_exact_and_requires_plain_key_and_local_ack() {
+        let mut app = App::new("repo".into());
+        let anchor = || crate::removal_git::Anchor {
+            device: 1,
+            inode: 2,
+        };
+        let snapshot = crate::removal_git::Snapshot {
+            checkout: crate::git::CheckoutIdentity {
+                root: "/workspace".into(),
+                git_dir: "/repo/.git/worktrees/workspace".into(),
+                common_dir: "/repo/.git".into(),
+            },
+            head: "exact-previewed-head".into(),
+            branch: None,
+            reference: "exact-previewed-ref".into(),
+            local_only: true,
+            warning: "local only".into(),
+            blockers: vec![],
+            root_anchor: anchor(),
+            git_anchor: anchor(),
+            common_anchor: anchor(),
+            dotgit_anchor: anchor(),
+            registration_anchor: anchor(),
+            remote_evidence: String::new(),
+        };
+        app.session.removal.records.push(crate::removal::Record {
+            workspace: "original".into(),
+            request: "preview".into(),
+            snapshot,
+            phase: crate::removal::Phase::Preview,
+            message: String::new(),
+        });
+        app.removal_open = Some(("original".into(), "preview".into()));
+        assert!(matches!(
+            app.input(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE)),
+            Some(Effect::Session(Request::RetryStorage))
+        ));
+        app.session.registry.selected = Some("replacement-selection".into());
+        assert!(
+            app.input(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE))
+                .is_none()
+        );
+        app.input(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
+        assert!(
+            app.input(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL))
+                .is_none()
+        );
+        assert!(
+            matches!(app.input(KeyEvent::new(KeyCode::Char('y'),KeyModifiers::NONE)),Some(Effect::Session(Request::ConfirmRemoval{workspace,request,head,reference,local_ack:true})) if workspace=="original" && request=="preview" && head=="exact-previewed-head" && reference=="exact-previewed-ref")
+        );
     }
 }

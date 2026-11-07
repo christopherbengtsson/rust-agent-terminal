@@ -189,6 +189,10 @@ impl AgentSession {
         let directory = directory.as_path();
         use crate::persistence::Completion;
         match event {
+            crate::persistence::Completion::Removals(_)
+            | crate::persistence::Completion::RemovalSaved(..) => {
+                unreachable!("folder removal receipts are supervisor-owned")
+            }
             crate::persistence::Completion::Archives(_)
             | crate::persistence::Completion::ArchiveSaved(..) => {}
             Completion::ResumeIdentity(..) => {
@@ -1005,7 +1009,7 @@ impl AgentSession {
             }
             match request {
                 Request::Archive{..}|Request::CancelArchive{..}|Request::Unarchive{..}=>{},
-                Request::ResumeSelected{..} | Request::Browse(_) | Request::EditorSource{..} | Request::InspectWorking{..} | Request::PreviewCreation{..} | Request::ConfigureSetup {..} | Request::RecoverSetup {..} | Request::CreateWorkspace(_) | Request::RecoverCreation{..} | Request::CancelCreation{..} | Request::RenameWorkspace { .. } | Request::Session { .. } | Request::SelectSession(_) | Request::Discover { .. } | Request::Adopt(_) | Request::Register(_) => unreachable!("workspace requests are supervisor-owned"),
+                Request::PreviewRemoval{..} | Request::ConfirmRemoval{..} | Request::ReconcileRemoval{..} | Request::ResumeSelected{..} | Request::Browse(_) | Request::EditorSource{..} | Request::InspectWorking{..} | Request::PreviewCreation{..} | Request::ConfigureSetup {..} | Request::RecoverSetup {..} | Request::CreateWorkspace(_) | Request::RecoverCreation{..} | Request::CancelCreation{..} | Request::RenameWorkspace { .. } | Request::Session { .. } | Request::SelectSession(_) | Request::Discover { .. } | Request::Adopt(_) | Request::Register(_) => unreachable!("workspace requests are supervisor-owned"),
                 Request::Reconcile => {
                     if self.execution.child.is_some() || self.execution.stopping.is_some() { return Err("Session owned by current supervisor; stop it normally".into()); }
                     if let Some(evidence) = &self.state.execution { evidence.reconcile()?; }

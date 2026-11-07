@@ -104,6 +104,7 @@ fn transport(
             || greeting.prompt_naming_protocol != 1
             || greeting.creation_protocol != 1
             || greeting.archive_protocol != 2
+            || greeting.removal_protocol != 1
             || greeting.resume_protocol != 1
             || greeting.setup_protocol != 1
         {
@@ -146,6 +147,7 @@ fn transport(
         || greeting.prompt_naming_protocol != 1
         || greeting.creation_protocol != 1
         || greeting.archive_protocol != 2
+        || greeting.removal_protocol != 1
         || greeting.resume_protocol != 1
         || greeting.setup_protocol != 1
     {
@@ -775,7 +777,10 @@ impl Sessions {
                 }
                 if matches!(
                     *command,
-                    Request::Archive { .. }
+                    Request::PreviewRemoval { .. }
+                        | Request::ConfirmRemoval { .. }
+                        | Request::ReconcileRemoval { .. }
+                        | Request::Archive { .. }
                         | Request::CancelArchive { .. }
                         | Request::Unarchive { .. }
                         | Request::Browse(_)
@@ -896,7 +901,7 @@ impl Sessions {
                         .any(|r| r.common_dir == target.common_dir && r.git_dir == target.git_dir)
                 })
             {
-                self.entries[index].1.report_error("Workspace archive owns this checkout; cancel/finish archive or unarchive before Start".into());
+                self.entries[index].1.report_error("Workspace archive owns this checkout or folder removal is pending; settle its receipt before Start".into());
                 return;
             }
             if !self.setup_ready || !self.archive_ready {
@@ -953,6 +958,44 @@ impl Sessions {
     }
 }
 
+fn removal_blockers(
+    workspace: &crate::registry::Workspace,
+    sessions: &mut Sessions,
+    setup: &crate::setup::Coordinator,
+    creation: &crate::creation::Coordinator,
+    archive: &crate::archive::Coordinator,
+    storage: &crate::persistence::Worker,
+) -> Vec<String> {
+    let mut blockers = Vec::new();
+    let Some(checkout) = workspace.checkout.as_ref() else {
+        return vec!["Canonical workspace identity unavailable".into()];
+    };
+    if !setup.ready() || !archive.ready() {
+        blockers.push("Setup/archive recovery is loading".into());
+    }
+    if setup.reserved(checkout) || creation.pending_checkout(checkout) {
+        blockers.push("Setup or creation/launch handoff remains pending or uncertain".into());
+    }
+    if archive.blocks(checkout) {
+        blockers.push("Incomplete archive/branch mutation; settle its exact receipt first".into());
+    }
+    if sessions.entries.iter_mut().any(|(_, owner)| {
+        let known = owner.observation().checkout_identity;
+        let relevant = known
+            .as_ref()
+            .is_some_and(|c| c.common_dir == checkout.common_dir && c.git_dir == checkout.git_dir)
+            || owner.task() == workspace.task
+            || workspace
+                .legacy_tasks
+                .iter()
+                .any(|task| task == owner.task());
+        relevant && !owner.archive_ready(storage)
+    }) {
+        blockers.push("Active/uncertain managed execution, launch lookup, metadata or final capture remains. Stop/reconcile and wait for durable history.".into());
+    }
+    blockers
+}
+
 pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let Some(_ownership) = elect_owner(directory)? else {
         return Ok(());
@@ -1004,6 +1047,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
     creation.view.launches = restored.state.creation.launches.clone();
     let mut setup = crate::setup::Coordinator::new(&storage);
     let mut archive = crate::archive::Coordinator::new(&storage);
+    let mut removal = crate::removal::Coordinator::new(&storage);
     let mut registry = restored.state.registry.clone();
     let mut registry_error = None;
     let mut registry_operation = None;
@@ -1148,6 +1192,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
         }
         while let Ok(event) = storage.events.try_recv() {
             setup.complete(&event, &storage);
+            removal.complete(&event);
             if let Some(snapshot) = archive.complete(&event) {
                 registry = snapshot;
             }
@@ -1155,7 +1200,9 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                 registry = snapshot;
             }
             match event {
-                crate::persistence::Completion::Archives(_)
+                crate::persistence::Completion::Removals(_)
+                | crate::persistence::Completion::RemovalSaved(..)
+                | crate::persistence::Completion::Archives(_)
                 | crate::persistence::Completion::ArchiveSaved(..)
                 | crate::persistence::Completion::Setups(_)
                 | crate::persistence::Completion::SetupSaved(..)
@@ -1207,7 +1254,9 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             .filter_map(|w| {
                 w.checkout
                     .as_ref()
-                    .filter(|c| registry.archived.contains(&w.id) || archive.blocks(c))
+                    .filter(|c| {
+                        registry.archived.contains(&w.id) || archive.blocks(c) || removal.blocks(c)
+                    })
                     .cloned()
             })
             .collect();
@@ -1269,7 +1318,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                 found
             });
         session.setup_ready = setup.ready();
-        session.archive_ready = archive.ready();
+        session.archive_ready = archive.ready() && removal.ready();
         if let Some(crate::creation::LaunchHandoff {
             record,
             authorized_start,
@@ -1335,6 +1384,13 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                 })
         });
         archive.advance(settled, &storage);
+        let removal_eligible = removal
+            .target()
+            .and_then(|c| registry.checkout(c))
+            .is_some_and(|w| {
+                removal_blockers(w, &mut session, &setup, &creation, &archive, &storage).is_empty()
+            });
+        removal.advance(removal_eligible, &storage);
         let mut state = session.observation();
         state.subscriber_frame_high_water = subscriber_frame_high_water;
         state.diff_protocol = 2;
@@ -1348,6 +1404,8 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
         state.resume_protocol = 1;
         state.setup_protocol = 1;
         state.archive_protocol = 2;
+        state.removal_protocol = 1;
+        state.removal = removal.view.clone();
         state.setup = setup.view.clone();
         state.archive = archive.view.clone();
         creation.view.launches =
@@ -1359,7 +1417,8 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             .error
             .or_else(|| registry_error.clone())
             .or_else(|| setup.view.error.clone())
-            .or_else(|| archive.view.error.clone());
+            .or_else(|| archive.view.error.clone())
+            .or_else(|| removal.view.error.clone());
         state.adoption_pending = adoption_pending;
         state.discovery = discovery_result.clone();
         state.stopped = session.all_stopped()
@@ -1371,6 +1430,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             && diff_save.is_none()
             && registry_operation.is_none()
             && !archive.busy()
+            && !removal.busy()
             && !creation.busy()
             && setup.stopped();
         if state.stopped && controller.is_none() {
@@ -1394,6 +1454,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                             resume_protocol: 1,
                             setup_protocol: 1,
                             archive_protocol:2,
+                            removal_protocol:1,
                             control_denied: true,
                             error: Some("Another dashboard controls this supervisor; close it before reconnecting".into()),
                             ..Observation::default()
@@ -1662,34 +1723,94 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
             }
+            Request::PreviewRemoval { workspace, request } => {
+                if let Some(known) = registry.workspaces.iter().find(|w| w.id == workspace) {
+                    let blockers = removal_blockers(
+                        known,
+                        &mut session,
+                        &setup,
+                        &creation,
+                        &archive,
+                        &storage,
+                    );
+                    removal.preview(known, &request, blockers);
+                } else {
+                    removal.view.error =
+                        Some("Workspace unavailable; refresh before removal".into());
+                }
+            }
+            Request::ConfirmRemoval {
+                workspace,
+                request,
+                head,
+                reference,
+                local_ack,
+            } => {
+                if let Some(known) = registry.workspaces.iter().find(|w| w.id == workspace) {
+                    let blockers = removal_blockers(
+                        known,
+                        &mut session,
+                        &setup,
+                        &creation,
+                        &archive,
+                        &storage,
+                    );
+                    removal.confirm(
+                        crate::removal::Confirmation {
+                            workspace,
+                            request,
+                            head,
+                            reference,
+                            local_ack,
+                        },
+                        blockers,
+                        &storage,
+                    );
+                    if let Some(checkout) = removal.target().cloned() {
+                        session.archive_reservations.push(checkout);
+                    }
+                } else {
+                    removal.view.error = Some("Workspace unavailable; removal refused".into());
+                }
+            }
+            Request::ReconcileRemoval { workspace, request } => {
+                removal.reconcile(&workspace, &request)
+            }
             Request::Archive {
                 workspace,
                 request,
                 branch_policy,
             } => {
                 if let Some(known) = registry.workspaces.iter().find(|w| w.id == workspace) {
-                    if let Some(policy) = branch_policy {
-                        let target = match policy {
-                            crate::archive::BranchPolicy::Keep => None,
-                            crate::archive::BranchPolicy::Delete(target) => Some(target),
-                        };
-                        archive.begin_policy(known, &request, Some(target), &storage);
+                    if !removal.ready()
+                        || known.checkout.as_ref().is_some_and(|c| removal.blocks(c))
+                    {
+                        archive.view.error=Some("Folder removal owns this checkout; reconcile its receipt before archive".into());
                     } else {
-                        archive.begin(known, &request, &storage);
-                    }
-                    if let Some(checkout) = archive.target().cloned() {
-                        // Freeze admission before Stop, including lookup completions.
-                        session.archive_reservations.push(checkout.clone());
-                        setup.cancel_checkout(&checkout);
-                        creation.cancel_checkout(&checkout);
-                        for (_, owner) in &mut session.entries {
-                            let state = owner.observation();
-                            if state.checkout_identity.as_ref().is_some_and(|c| {
-                                c.common_dir == checkout.common_dir && c.git_dir == checkout.git_dir
-                            }) || known.task == owner.task()
-                                || known.legacy_tasks.iter().any(|task| task == owner.task())
-                            {
-                                owner.handle(Request::Stop, &storage, false);
+                        if let Some(policy) = branch_policy {
+                            let target = match policy {
+                                crate::archive::BranchPolicy::Keep => None,
+                                crate::archive::BranchPolicy::Delete(target) => Some(target),
+                            };
+                            archive.begin_policy(known, &request, Some(target), &storage);
+                        } else {
+                            archive.begin(known, &request, &storage);
+                        }
+                        if let Some(checkout) = archive.target().cloned() {
+                            // Freeze admission before Stop, including lookup completions.
+                            session.archive_reservations.push(checkout.clone());
+                            setup.cancel_checkout(&checkout);
+                            creation.cancel_checkout(&checkout);
+                            for (_, owner) in &mut session.entries {
+                                let state = owner.observation();
+                                if state.checkout_identity.as_ref().is_some_and(|c| {
+                                    c.common_dir == checkout.common_dir
+                                        && c.git_dir == checkout.git_dir
+                                }) || known.task == owner.task()
+                                    || known.legacy_tasks.iter().any(|task| task == owner.task())
+                                {
+                                    owner.handle(Request::Stop, &storage, false);
+                                }
                             }
                         }
                     }
@@ -1702,7 +1823,19 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                 archive.cancel_request(&workspace, &request)
             }
             Request::Unarchive { workspace, request } => {
-                archive.restore(&workspace, &request, &storage);
+                if registry
+                    .workspaces
+                    .iter()
+                    .find(|w| w.id == workspace)
+                    .and_then(|w| w.checkout.as_ref())
+                    .is_some_and(|c| removal.blocks(c))
+                    || !removal.ready()
+                {
+                    archive.view.error =
+                        Some("Folder removal owns this checkout; reconcile before Return".into());
+                } else {
+                    archive.restore(&workspace, &request, &storage);
+                }
             }
             Request::ConfigureSetup { project, command } => {
                 let operation = uuid::Uuid::new_v4();
@@ -1740,9 +1873,8 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                             .iter()
                             .any(|r| r.common_dir == c.common_dir && r.git_dir == c.git_dir)
                     });
-                if blocked {
-                    setup.view.error =
-                        Some("Archive owns this checkout; setup admission is frozen".into());
+                if blocked || !removal.ready() || !archive.ready() {
+                    setup.view.error = Some("Archive/removal owns this checkout or recovery is loading; setup admission is frozen".into());
                 } else {
                     setup.recover(&attempt, retry, informed, &storage)
                 }
@@ -1825,12 +1957,14 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             Request::RetryStorage => {
+                removal.retry_storage(&storage);
                 setup.retry_storage(&storage);
                 creation.retry_storage(&storage);
                 session.handle(Request::RetryStorage, &storage, adoption.is_some());
             }
             Request::Stop | Request::Shutdown => {
                 archive.cancel();
+                removal.cancel();
                 setup.cancel(None);
                 creation.cancel();
                 if let Some(job) = &source_job {
@@ -1905,6 +2039,8 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
         state.resume_protocol = 1;
         state.setup_protocol = 1;
         state.archive_protocol = 2;
+        state.removal_protocol = 1;
+        state.removal = removal.view.clone();
         state.setup = setup.view.clone();
         state.archive = archive.view.clone();
         creation.view.launches =
@@ -1916,7 +2052,8 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             .error
             .or_else(|| registry_error.clone())
             .or_else(|| setup.view.error.clone())
-            .or_else(|| archive.view.error.clone());
+            .or_else(|| archive.view.error.clone())
+            .or_else(|| removal.view.error.clone());
         state.adoption_pending = adoption_pending;
         state.discovery = discovery_result.clone();
         state.stopped = session.all_stopped()
@@ -1928,6 +2065,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             && diff_save.is_none()
             && registry_operation.is_none()
             && !archive.busy()
+            && !removal.busy()
             && !creation.busy()
             && setup.stopped();
         if controller.is_some() {
