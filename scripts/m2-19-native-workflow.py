@@ -24,6 +24,7 @@ def main():
     parser.add_argument("--source", type=Path, default=DRIVER.parent.parent)
     parser.add_argument("--binary", type=Path)
     parser.add_argument("--workspace", default="amber-claude")
+    parser.add_argument("--parser", type=Path)
     args = parser.parse_args()
     args.binary = args.binary or args.source / "target/debug/agent-terminal"
     projects = json.loads((args.root / "projects.json").read_text())
@@ -35,7 +36,7 @@ def main():
     pin = args.root / "pin.json"
 
     def command(action, *extra):
-        return [sys.executable, str(DRIVER), action, "--root", str(args.root),
+        return [sys.executable, str(DRIVER), action, *(["--parser", str(args.parser)] if args.parser else []), "--root", str(args.root),
                 "--source", str(args.source), "--binary", str(args.binary),
                 "--pin", str(pin), *extra]
 

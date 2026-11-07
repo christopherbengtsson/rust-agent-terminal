@@ -167,7 +167,11 @@ def drive(args):
                 # This is explicitly a byte check, not a visible-cell assertion.
                 record["raw_subsequence_seen"] = True
             if "capture" in step:
-                (folder / (step["capture"] + ".raw")).write_bytes(raw)
+                capture = folder / (step["capture"] + ".raw")
+                capture.write_bytes(raw)
+                if args.parser:
+                    subprocess.run([str(args.parser), str(capture), str(rows), str(cols)], check=True)
+                    record["cell_capture"] = str(capture.with_suffix(".cells.json"))
             record["raw_after"] = len(raw)
             record["end_ms"] = (time.monotonic()-start)*1000
             steps.append(record)
@@ -208,6 +212,7 @@ def drive(args):
         after = boundary(args)
         result = {"before": before, "after": after, "boundary_stable": before == after,
                   "argv": argv, "plan": plan, "steps": steps, "failure": failure,
+                  "parser": {"path": str(args.parser), "sha256": sha(args.parser)} if args.parser else None,
                   "dashboard_pid": child.pid, "dashboard_exit": child.poll(),
                   "terminal_restored": restored, "observation": observation,
                   "processes": process_evidence(observation) if observation else []}
@@ -229,6 +234,7 @@ def main():
     parser.add_argument("--plan", type=Path)
     parser.add_argument("--pin", type=Path)
     parser.add_argument("--label")
+    parser.add_argument("--parser", type=Path, help="Prebuilt vt100 raw-to-cell parser; never compiled by this driver")
     args = parser.parse_args()
     args.binary = args.binary or args.source / "target/debug/agent-terminal"
     args.state = args.root / "state"
