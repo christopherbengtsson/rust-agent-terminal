@@ -56,6 +56,8 @@ terminals; normal navigation retains Reviews above the worktree sidebar.
 | `f` | Inspect the selected retained workspace’s Working diff; in the worktree list, adopt an unknown checkout first |
 | `w` | Open retained projects/workspaces; available in small terminals |
 | `A` | Enter an existing local repository path and register it without adopting or starting coding |
+| `U` | Edit optional project setup shell command; Enter saves, empty disables, Ctrl-U clears, Esc cancels |
+| `T` / `Y` / `I` in creation receipt | Retry setup / Continue without setup (launch effect shown) / informed reconciliation or retry after uncertainty |
 | `N` | Create an independent workspace for the selected registered project; Tab edits base/branch/folder/prompt/agent, Left/Right changes agent |
 | Enter / Ctrl-S in creation | Create without starting / Create and start the chosen native agent |
 | `O`, `[` / `]` in creation receipt | Open creation receipts / select the original operation by stable identity |
@@ -474,6 +476,32 @@ the created workspace, and a later explicit Start creates a new conversation.
 Creation receipts retain separate checkout and native-launch results. `O` opens
 receipts and `[`/`]` chooses an older operation. Late completion and background
 launch do not change your current workspace selection. Native folder-trust,
-hook-review and account prompts remain with the chosen CLI. Project setup
-commands are the separate ticket 10 slice. See the
+hook-review and account prompts remain with the chosen CLI. See the
 [creation evidence](docs/proofs/m2-09-workspace-creation.md).
+
+`U` configures an optional project setup command, executed explicitly through
+`/bin/sh -c` in each newly created workspace. Empty configuration runs no setup.
+The exact command is frozen for each creation/attempt; later edits affect future
+workspaces. Setup runs before the requested native launch, including when creating
+without starting coding. `O` shows separate setup and native outcomes, with a
+bounded combined stdout/stderr tail and discarded-byte count. Setup output is
+local setup progress, not native conversation history. Live progress can be lost
+until a phase receipt commits; the saved tail is not a complete transcript.
+
+After failure, `T` retries the frozen setup command and `Y` explicitly continues
+without setup. The receipt says whether that action will start the agent under
+still-armed Create and start permission, or keep coding stopped. Bare Start is
+refused until setup's failure choice is settled. `s`, `Z` and ordinary quit cancel
+owned setup and disarm its pending coding launch; unrelated sessions keep running.
+Restore never reruns setup or rearms launch. A lost result remains uncertain:
+`I` performs read-only survivor reconciliation before an informed retry choice
+that may repeat external effects. Saved PIDs are never used as signal authority;
+some released executions require verified reboot to exclude escaped survivors.
+A known terminal cleanup is recorded independently of command-outcome certainty.
+
+One setup executes at a time; other native sessions remain usable. The current
+bound retains 32 setup attempts per state directory and refuses additional
+configured setup at that limit. Commands are limited to 4096 bytes and the output
+tail to 8192 raw bytes; older output is explicitly discarded. A storage failure
+retains the owned outcome for `y` retry after repair, without rerunning the command.
+See [setup evidence and limits](docs/proofs/m2-10-project-setup.md).
