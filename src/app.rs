@@ -240,8 +240,19 @@ impl App {
     }
 
     fn launch_intent(&mut self, request: fn(String) -> Request) -> Effect {
+        let historical_request = matches!(
+            self.session.lifecycle,
+            crate::session::Lifecycle::Exited
+                | crate::session::Lifecycle::Stopped
+                | crate::session::Lifecycle::Failed
+        ) && self
+            .session
+            .session_identity
+            .as_ref()
+            .is_some_and(|identity| identity.request == self.launch_request);
         if self.session.launch_result.is_some()
             || self.session.lifecycle == crate::session::Lifecycle::Running
+            || historical_request
         {
             self.launch_request = uuid::Uuid::new_v4().to_string();
         }
@@ -2557,6 +2568,97 @@ mod tests {
             matches!(app.input(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE)),
             Some(Effect::Session(Request::Launch(id))) if id == app.launch_request)
         );
+    }
+
+    #[test]
+    fn explicit_launch_after_restored_terminal_segment_uses_a_new_request() {
+        for lifecycle in [
+            crate::events::Lifecycle::Exited,
+            crate::events::Lifecycle::Stopped,
+            crate::events::Lifecycle::Failed,
+        ] {
+            for metadata_pending in [false, true] {
+                for key in ['v', 'c', 'x', 'l'] {
+                    let mut app = App::new("repo".into());
+                    app.observe_session(Observation {
+                        lifecycle,
+                        metadata_pending,
+                        launch_request: "original-launch".into(),
+                        session_identity: Some(crate::events::SessionIdentity {
+                            task: "workspace".into(),
+                            session: "original-segment".into(),
+                            request: "original-launch".into(),
+                        }),
+                        ..Default::default()
+                    });
+                    assert!(app.session.launch_result.is_none());
+                    let request =
+                        match app.input(KeyEvent::new(KeyCode::Char(key), KeyModifiers::NONE)) {
+                            Some(Effect::Session(
+                                Request::Resume(id)
+                                | Request::LaunchClaude(id)
+                                | Request::LaunchCodex(id)
+                                | Request::Launch(id),
+                            )) => id,
+                            _ => panic!("explicit action did not dispatch"),
+                        };
+                    assert_ne!(
+                        request, "original-launch",
+                        "{lifecycle:?}, {metadata_pending}, {key}"
+                    );
+                    let repeated =
+                        match app.input(KeyEvent::new(KeyCode::Char(key), KeyModifiers::NONE)) {
+                            Some(Effect::Session(
+                                Request::Resume(id)
+                                | Request::LaunchClaude(id)
+                                | Request::LaunchCodex(id)
+                                | Request::Launch(id),
+                            )) => id,
+                            _ => panic!("explicit retry did not dispatch"),
+                        };
+                    assert_eq!(
+                        repeated, request,
+                        "unobserved retry preserves its own request"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn unsettled_launch_without_outcome_retains_request_for_retry() {
+        for lifecycle in [
+            crate::events::Lifecycle::Idle,
+            crate::events::Lifecycle::Interrupted,
+            crate::events::Lifecycle::Stopping,
+            crate::events::Lifecycle::StopFailed,
+        ] {
+            for key in ['v', 'c', 'x', 'l'] {
+                let mut app = App::new("repo".into());
+                app.observe_session(Observation {
+                    lifecycle,
+                    metadata_pending: true,
+                    launch_request: "unsettled-launch".into(),
+                    session_identity: Some(crate::events::SessionIdentity {
+                        task: "workspace".into(),
+                        session: "pending-segment".into(),
+                        request: "unsettled-launch".into(),
+                    }),
+                    ..Default::default()
+                });
+                let request = match app.input(KeyEvent::new(KeyCode::Char(key), KeyModifiers::NONE))
+                {
+                    Some(Effect::Session(
+                        Request::Resume(id)
+                        | Request::LaunchClaude(id)
+                        | Request::LaunchCodex(id)
+                        | Request::Launch(id),
+                    )) => id,
+                    _ => panic!("retry did not dispatch"),
+                };
+                assert_eq!(request, "unsettled-launch", "{lifecycle:?}, {key}");
+            }
+        }
     }
 
     #[test]
