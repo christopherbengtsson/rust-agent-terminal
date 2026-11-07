@@ -8792,6 +8792,9 @@ fn keyboard_retained_search_opens_exact_passage_in_normal_and_small_ptys() {
         dashboard.send(b"keyboardneedle11\r");
         dashboard.wait("exact words");
         dashboard.wait("keyboardneedle11");
+        // Query text and the persistent matching-rule hint can render before
+        // asynchronous results; wait for the actual retained matching row.
+        dashboard.wait("fixture> received: keyboardneedle11");
         dashboard.send(b"\r");
         let screen = dashboard.wait("Committed passage v1");
         assert!(screen.contains("keyboardneedle11"), "{screen}");
