@@ -251,6 +251,9 @@ def main():
     assert resolved_commit == args.source_commit, "source requires a full immutable commit object ID"
     args.binary = (args.binary or args.root / "bin/agent-terminal").resolve(strict=True)
     assert os.path.commonpath([str(args.root), str(args.binary)]) == str(args.root)
+    native_pin = json.loads((args.root / "pin.json").read_text())
+    assert native_pin["source"] == args.source_commit, "source disagrees with the native run pin"
+    assert native_pin["binary_sha256"] == sha(args.binary), "binary disagrees with the native run pin"
     if args.action == "capture":
         assert not args.start_supervisor, "capture never starts processes"
         data = current(args)
