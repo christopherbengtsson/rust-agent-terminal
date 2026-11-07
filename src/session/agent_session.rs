@@ -1381,7 +1381,9 @@ impl AgentSession {
                     self.history.final_flush = false;
                 }
                 Request::Stop | Request::Shutdown => {
-                    self.launch.resolving = None;
+                    if let Some(request) = self.launch.resolving.take() {
+                        storage.commands.try_send(crate::persistence::Command::CancelResume(request)).map_err(|error|format!("Resume cancellation not saved: {error}; retry Stop"))?;
+                    }
                     self.launch.selected = None;
                     if self.state.storage_wait_millis >= 250 || self.state.producer_wait_millis > 0 || self.state.storage_error.is_some() { self.state.capture_loss_possible = true; }
                     if (self.launch.pending_launch.is_some() || self.launch.gate_receipt.is_some()) && self.launch.creating.is_none() {

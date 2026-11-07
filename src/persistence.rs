@@ -301,6 +301,7 @@ pub enum Command {
     Rename(uuid::Uuid, String, String),
     ComparisonBase(uuid::Uuid, String, crate::working_diff::Base),
     Register(uuid::Uuid, crate::git::CheckoutIdentity),
+    CancelResume(String),
     ResumeIdentity {
         target: String,
         request: String,
@@ -486,14 +487,17 @@ impl Worker {
                             continue;
                         }
                     }
-                    let kind = match &command { Command::ResumeIdentity { .. } => "resume", Command::Browse(..) => "browse", Command::ObservedBranches(..) => "registry", Command::SetupLoad | Command::SetupSave(..) | Command::ConfigureSetup(..) | Command::ComparisonBase(..) | Command::CreationLoad | Command::CreationSave(..) => "registry", Command::SelectWorkspace(..) => "selection", Command::Capture(..) => unreachable!(), Command::Rename(..) | Command::Register(..) => "registry", Command::Save(..) | Command::Prepare(..) | Command::Authorize(..) => "metadata", Command::History(..) | Command::HistorySession(..) | Command::HistoryTarget { .. } => "history", Command::Cleanup(..) | Command::Delete(..) | Command::Seal(..) => "cleanup", Command::Retry => "retry", Command::Flush(..) => "flush" };
+                    let kind = match &command { Command::CancelResume(..) | Command::ResumeIdentity { .. } => "resume", Command::Browse(..) => "browse", Command::ObservedBranches(..) => "registry", Command::SetupLoad | Command::SetupSave(..) | Command::ConfigureSetup(..) | Command::ComparisonBase(..) | Command::CreationLoad | Command::CreationSave(..) => "registry", Command::SelectWorkspace(..) => "selection", Command::Capture(..) => unreachable!(), Command::Rename(..) | Command::Register(..) => "registry", Command::Save(..) | Command::Prepare(..) | Command::Authorize(..) => "metadata", Command::History(..) | Command::HistorySession(..) | Command::HistoryTarget { .. } => "history", Command::Cleanup(..) | Command::Delete(..) | Command::Seal(..) => "cleanup", Command::Retry => "retry", Command::Flush(..) => "flush" };
                     status.lock().unwrap().operation = Some((kind, Instant::now()));
                     let operation = match &command { Command::Prepare(snapshot) | Command::Authorize(snapshot) | Command::Save(snapshot) => Some(snapshot.operation.clone()), Command::Flush(operation) | Command::Seal(operation) => Some(operation.clone()), _ => None };
                     let result = match command {
                         Command::SetupLoad => Ok(Completion::Setups(store.setups().map_err(|e|e.to_string()))),
                         Command::SetupSave(id, record) => Ok(Completion::SetupSaved(id, store.save_setup(&record).map_err(|e|e.to_string()))),
                         Command::ConfigureSetup(id, project, command) => Ok(Completion::Registered(id, store.configure_setup(&project, &command).map_err(|e|e.to_string()))),
-                        Command::ResumeIdentity { target, request, workspace, session, task } => Ok(Completion::ResumeIdentity(target, request, store.resume_identity(&workspace, &session, &task).map_err(|e| e.to_string()))),
+                        Command::CancelResume(request) => {
+                            store.db.execute("UPDATE resume_selections SET cancelled=1 WHERE request=?1",[request]).map(|_|Completion::Sealed).map_err(Into::into)
+                        }
+                        Command::ResumeIdentity { target, request, workspace, session, task } => { let result = store.resume_identity(&request, &workspace, &session, &task).map_err(|e| e.to_string()); Ok(Completion::ResumeIdentity(target, request, result)) },
                         Command::Browse(query) => Ok(Completion::Browse(store.start_browse(query))),
                         Command::ObservedBranches(facts) => (|| {
                             if facts.len()>32 {return Err("Branch fact batch exceeds 32".into());}
@@ -737,7 +741,7 @@ impl Store {
             "PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL; PRAGMA fullfsync=ON;",
         )?;
         let version: u32 = db.pragma_query_value(None, "user_version", |r| r.get(0))?;
-        if version > 8 {
+        if version > 9 {
             return Err("History schema is newer than this executable".into());
         }
         if version == 0 {
@@ -826,6 +830,11 @@ impl Store {
         if version < 8 {
             let tx = db.transaction()?;
             tx.execute_batch("CREATE TABLE IF NOT EXISTS project_setup(project TEXT PRIMARY KEY, command TEXT NOT NULL); CREATE TABLE IF NOT EXISTS workspace_setup(attempt TEXT PRIMARY KEY, record TEXT NOT NULL); PRAGMA user_version=8;")?;
+            tx.commit()?;
+        }
+        if version < 9 {
+            let tx = db.transaction()?;
+            tx.execute_batch("CREATE TABLE resume_selections(request TEXT PRIMARY KEY, workspace TEXT NOT NULL, session TEXT NOT NULL, cancelled INTEGER NOT NULL DEFAULT 0); PRAGMA user_version=9;")?;
             tx.commit()?;
         }
         let mut store = Self {
@@ -1814,11 +1823,41 @@ impl Store {
         self.history_record((id, identity, durable, json), offset)
     }
     fn resume_identity(
-        &self,
+        &mut self,
+        request: &str,
         workspace: &str,
         session: &str,
         task: &str,
     ) -> Result<ResumeIdentity> {
+        let known: Option<(String, String, bool)> = self
+            .db
+            .query_row(
+                "SELECT workspace,session,cancelled FROM resume_selections WHERE request=?1",
+                [request],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()?;
+        if let Some((old_workspace, old_session, cancelled)) = known {
+            if cancelled || old_workspace != workspace || old_session != session {
+                return Err("Resume request already belongs to a different or cancelled selection; explicitly select the conversation again with a new request".into());
+            }
+        } else {
+            let count: u32 =
+                self.db
+                    .query_row("SELECT count(*) FROM resume_selections", [], |row| {
+                        row.get(0)
+                    })?;
+            if count >= 1024 {
+                return Err(
+                    "Selected resume request capacity reached; retained choices are preserved"
+                        .into(),
+                );
+            }
+            self.db.execute(
+                "INSERT INTO resume_selections(request,workspace,session) VALUES(?1,?2,?3)",
+                params![request, workspace, session],
+            )?;
+        }
         let row: Option<(String, String)> = self.db.query_row(
             "SELECT s.state,s.identity FROM sessions s JOIN workspace_sessions m ON m.session=s.id JOIN workspace_tasks t ON t.workspace=m.workspace WHERE s.id=?1 AND m.workspace=?2 AND t.task=?3",
             params![session,workspace,task], |row| Ok((row.get(0)?,row.get(1)?))).optional()?;
