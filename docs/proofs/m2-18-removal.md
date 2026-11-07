@@ -53,7 +53,9 @@ This matters because actual ordinary Git removal can delete ignored contents;
 Git's own refusal does not replace that check. Observed races retain the folder
 and its files; ordinary Git refusal remains authoritative.
 
-Known absent upstream/no remotes is local-only saving requiring acknowledgement.
+No configured remotes is known local-only saving requiring acknowledgement.
+With no upstream but usable push destinations, live evidence must independently
+cover HEAD to report remote backup; otherwise the local-only acknowledgement applies.
 A configured missing/unreachable remote, missing upstream or uncertain live push
 check blocks removal; acknowledgement cannot override those blockers. Live push
 advertisements are bounded/fingerprinted, with interactive prompts disabled.

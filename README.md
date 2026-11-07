@@ -367,9 +367,10 @@ mutation also blocks removal. Removal never implicitly stops that activity.
 
 When the preview is eligible, `y` explicitly confirms that exact folder/HEAD.
 If code has no confirmed remote backup, press Space to acknowledge **local only,
-not pushed**, then `y`. No configured remote/upstream is reported as local-only;
-a configured but unavailable/missing remote or uncertain push evidence blocks
-removal. Live push-destination checks can require connectivity/authentication;
+not pushed**, then `y`. No remotes is reported as local-only. Without an upstream, live push-destination
+evidence must independently cover HEAD to report remote backup; otherwise the
+local-only acknowledgement applies. A configured but unavailable/missing remote
+or uncertain push evidence blocks removal. Live push-destination checks can require connectivity/authentication;
 changed evidence requires a fresh preview. The worker pins the exact current
 commit at the displayed `refs/rat/removal/<workspace>/<request>` ref, including
 never-archived/detached work, and saves durable intent before ordinary Git removal.

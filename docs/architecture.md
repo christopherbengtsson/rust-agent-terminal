@@ -1510,8 +1510,9 @@ Push evidence uses bounded live `ls-remote` checks of configured push destinatio
 with prompts disabled, at most eight destinations and a 12-second inspection
 budget (each subprocess retains its two-second deadline and 256 KiB pipe bound).
 Missing/inaccessible configured upstream/destinations are uncertainty and block;
-no configured upstream/remote can instead establish local-only saving with an
-explicit acknowledgement. A local tracking branch is not remote backup. Preview
+known absence of remotes establishes local-only saving with an explicit
+acknowledgement. Without an upstream, live destination evidence must independently
+cover HEAD to report remote backup; otherwise acknowledgement remains required. A local tracking branch is not remote backup. Preview
 records a fingerprint of configuration/advertised refs; changed evidence requires
 a new preview. No fetch, push, credential copy or remote ref mutation occurs.
 
