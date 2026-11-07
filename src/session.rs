@@ -307,6 +307,7 @@ impl Delivery {
 // Runtime selection belongs to the supervisor. Each concrete owner retains its
 // private launch, cleanup and capture phases while another owner is selected.
 struct Sessions {
+    resume_completions: Vec<crate::persistence::Completion>,
     setup_reservations: Vec<crate::git::CheckoutIdentity>,
     setup_ready: bool,
     history_revision: u64,
@@ -400,6 +401,7 @@ impl Sessions {
             None
         };
         Ok(Self {
+            resume_completions: Vec::new(),
             setup_reservations: Vec::new(),
             setup_ready: false,
             history_revision: 0,
@@ -417,6 +419,10 @@ impl Sessions {
         event: crate::persistence::Completion,
         storage: &crate::persistence::Worker,
     ) {
+        if matches!(event, crate::persistence::Completion::ResumeIdentity(..)) {
+            self.resume_completions.push(event);
+            return;
+        }
         if let crate::persistence::Completion::Browse(response) = &event {
             if self.browse_request.as_ref() == Some(&response.request) {
                 self.browse = Some(response.clone());
@@ -458,7 +464,7 @@ impl Sessions {
                 | crate::persistence::Completion::Deleted(_)
                 | crate::persistence::Completion::HistoryHidden(_)
                 | crate::persistence::Completion::HistoryTarget(..)
-                | crate::persistence::Completion::ResumeIdentity(..)
+                | crate::persistence::Completion::ResumeCancelled(..)
         ) {
             for (_, owner) in &mut self.entries {
                 owner.complete(event.clone(), storage);
@@ -468,6 +474,35 @@ impl Sessions {
         }
     }
     fn advance(&mut self, storage: &crate::persistence::Worker, adopting: bool) {
+        // Setup's current reservations are refreshed before advance. Resolve
+        // only here, then reuse global admission before durable Prepare.
+        for event in std::mem::take(&mut self.resume_completions) {
+            let crate::persistence::Completion::ResumeIdentity(target, request, result) = event
+            else {
+                unreachable!()
+            };
+            if let Some(index) = self.entries.iter().position(|(id, _)| id == &target) {
+                if let Some(command) = self.entries[index]
+                    .1
+                    .resolve_resume(&target, request, result)
+                {
+                    let session = self.entries[index]
+                        .1
+                        .observation()
+                        .session_identity
+                        .map(|id| id.session);
+                    self.handle(
+                        Request::Session {
+                            target,
+                            session,
+                            command: Box::new(command),
+                        },
+                        storage,
+                        adopting,
+                    );
+                }
+            }
+        }
         for (_, owner) in &mut self.entries {
             owner.advance(storage, adopting);
         }
@@ -653,7 +688,7 @@ impl Sessions {
             }
             return;
         }
-        let (index, request) = match request {
+        let (index, mut request) = match request {
             Request::Session {
                 target,
                 session,
@@ -761,6 +796,20 @@ impl Sessions {
                 .1
                 .handle_recorded(request, result, storage, adopting);
             return;
+        }
+        if let Request::Resume(id) = &request {
+            if !self.entries[index].1.resolved_resume(id) {
+                let source = self.entries[index].1.observation().session_identity;
+                let Some(source) = source else {
+                    self.entries[index].1.report_error("Native resume unavailable: no retained managed conversation identity; h reads history, c/x explicitly starts a new conversation".into());
+                    return;
+                };
+                request = Request::ResumeSelected {
+                    request: id.clone(),
+                    workspace: self.entries[index].1.task().to_owned(),
+                    session: source.session,
+                };
+            }
         }
         if matches!(
             request,
@@ -1615,12 +1664,22 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     unreachable!()
                 };
                 if let Some(workspace) = registry.workspaces.iter().find(|w| &w.id == workspace) {
-                    if let Some(index) = session.entries.iter().position(|(_, owner)| {
+                    let matching = |owner: &agent_session::AgentSession| {
                         owner.task() == workspace.task
                             || workspace
                                 .legacy_tasks
                                 .iter()
                                 .any(|task| task == owner.task())
+                    };
+                    let occupied = session
+                        .entries
+                        .iter()
+                        .position(|(_, owner)| matching(owner) && owner.reserved());
+                    if let Some(index) = occupied.or_else(|| {
+                        session
+                            .entries
+                            .iter()
+                            .position(|(_, owner)| matching(owner))
                     }) {
                         session.selected = index;
                         session.handle(request, &storage, adoption.is_some());

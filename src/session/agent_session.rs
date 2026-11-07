@@ -69,6 +69,7 @@ pub(super) struct AgentSession {
 #[derive(Default)]
 struct Launch {
     resolving: Option<String>,
+    cancelling: Option<(String, bool)>,
     selected: Option<(String, crate::persistence::ResumeIdentity)>,
     pending_launch: Option<Request>,
     prepared_ready: bool,
@@ -188,20 +189,22 @@ impl AgentSession {
         let directory = directory.as_path();
         use crate::persistence::Completion;
         match event {
-            Completion::ResumeIdentity(target, request, result) => {
+            Completion::ResumeIdentity(..) => {
+                unreachable!("resolved resume rechecks supervisor admission")
+            }
+            Completion::ResumeCancelled(target, request, result) => {
                 if target != self.state.control_target
-                    || self.launch.resolving.as_deref() != Some(&request)
+                    || self.launch.cancelling.as_ref().map(|(id, _)| id) != Some(&request)
                 {
                     return;
                 }
-                self.launch.resolving = None;
                 match result {
-                    Ok(identity) => {
-                        self.launch.selected = Some((request.clone(), identity));
-                        self.handle(Request::Resume(request), storage, false);
-                    }
+                    Ok(()) => self.launch.cancelling = None,
                     Err(error) => {
-                        self.state.error = Some(error);
+                        self.launch.cancelling = Some((request, false));
+                        self.state.error = Some(format!(
+                            "Resume cancellation not durable: {error}; Stop remains pending"
+                        ));
                     }
                 }
             }
@@ -545,6 +548,7 @@ impl AgentSession {
         }
 
         self.state.metadata_pending = self.launch.resolving.is_some()
+            || self.launch.cancelling.is_some()
             || self.writes.metadata_pending()
             || self.metadata_failed
             || self.launch.pending_launch.is_some()
@@ -602,7 +606,20 @@ impl AgentSession {
         {
             self.history.seal_pending = true;
         }
+        if let Some((request, false)) = &self.launch.cancelling {
+            if storage
+                .commands
+                .try_send(crate::persistence::Command::CancelResume {
+                    target: self.state.control_target.clone(),
+                    request: request.clone(),
+                })
+                .is_ok()
+            {
+                self.launch.cancelling.as_mut().unwrap().1 = true;
+            }
+        }
         self.state.stopped = self.shutdown
+            && self.launch.cancelling.is_none()
             && self.history.final_flush
             && self.writes.is_empty()
             && !self.metadata_failed
@@ -1382,7 +1399,7 @@ impl AgentSession {
                 }
                 Request::Stop | Request::Shutdown => {
                     if let Some(request) = self.launch.resolving.take() {
-                        storage.commands.try_send(crate::persistence::Command::CancelResume(request)).map_err(|error|format!("Resume cancellation not saved: {error}; retry Stop"))?;
+                        self.launch.cancelling = Some((request,false));
                     }
                     self.launch.selected = None;
                     if self.state.storage_wait_millis >= 250 || self.state.producer_wait_millis > 0 || self.state.storage_error.is_some() { self.state.capture_loss_possible = true; }
@@ -1549,6 +1566,7 @@ impl AgentSession {
             screen.snapshot(&mut self.state);
         }
         self.state.metadata_pending = self.launch.resolving.is_some()
+            || self.launch.cancelling.is_some()
             || self.writes.metadata_pending()
             || self.metadata_failed
             || self.launch.pending_launch.is_some()
@@ -1556,6 +1574,34 @@ impl AgentSession {
             || self.launch.gate_receipt.is_some()
             || self.launch.outcome_reply;
         self.state.clone()
+    }
+    pub(super) fn resolved_resume(&self, request: &str) -> bool {
+        self.launch
+            .selected
+            .as_ref()
+            .is_some_and(|(id, _)| id == request)
+    }
+    pub(super) fn resolve_resume(
+        &mut self,
+        target: &str,
+        request: String,
+        result: Result<crate::persistence::ResumeIdentity, String>,
+    ) -> Option<Request> {
+        if target != self.state.control_target || self.launch.resolving.as_deref() != Some(&request)
+        {
+            return None;
+        }
+        self.launch.resolving = None;
+        match result {
+            Ok(identity) => {
+                self.launch.selected = Some((request.clone(), identity));
+                Some(Request::Resume(request))
+            }
+            Err(error) => {
+                self.state.error = Some(error);
+                None
+            }
+        }
     }
     pub(super) fn report_error(&mut self, error: String) {
         self.state.error = Some(error);
@@ -1607,6 +1653,7 @@ impl AgentSession {
     }
     pub(super) fn reserved(&self) -> bool {
         self.launch.resolving.is_some()
+            || self.launch.cancelling.is_some()
             || self.state.execution.is_some()
             || !self.history.eof
             || self.history.capture_done.is_some()
