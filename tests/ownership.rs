@@ -11290,7 +11290,7 @@ fn six_stream_coordination_measurement19() {
         .unwrap();
     std::fs::write(fixture.state().join("proof-storage-ledger"), "enabled").unwrap();
     log(
-        serde_json::json!({"kind":"manifest","source":String::from_utf8_lossy(&Command::new("git").args(["rev-parse","HEAD"]).output().unwrap().stdout).trim(),"dirty":!Command::new("git").args(["diff","HEAD","--quiet"]).status().unwrap().success(),"binary_sha256":String::from_utf8_lossy(&Command::new("shasum").args(["-a","256",env!("CARGO_BIN_EXE_agent-terminal")]).output().unwrap().stdout),"coding_only":true,"native_agents":false,"projects":3,"streams":6,"offered_bytes_per_second_per_stream":65536,"producer_duration_ms":120000,"record_bytes":1024,"style":"cursor overwrite, green SGR, lambda/CJK UTF8, X padding","healthy_controller_seconds":30,"navigation_samples":60,"healthy_attach_samples":15,"fault":"session-scoped debug ENOSPC marker, not physical exhaustion","outer_terminal":"portable-pty + continuously consumed vt100 parsed cells 160x40; no pixel latency","instrumentation":"single Controller selects each owner; bounded durable-commit rings retained separately; per-owner snapshots; 1s ps/disk sampling; monotonic input-to-parsed-visible timestamps"}),
+        serde_json::json!({"kind":"manifest","source":String::from_utf8_lossy(&Command::new("git").args(["rev-parse","HEAD"]).output().unwrap().stdout).trim(),"dirty":!Command::new("git").args(["diff","HEAD","--quiet"]).status().unwrap().success(),"binary_sha256":String::from_utf8_lossy(&Command::new("shasum").args(["-a","256",env!("CARGO_BIN_EXE_agent-terminal")]).output().unwrap().stdout),"coding_only":true,"native_agents":false,"projects":3,"streams":6,"offered_bytes_per_second_per_stream":65536,"producer_duration_ms":120000,"record_bytes":1024,"style":"cursor overwrite, green SGR, lambda/CJK UTF8, X padding","healthy_controller_seconds":30,"navigation_samples":60,"healthy_attach_samples":18,"healthy_attach_owners":[0,1,2,3,4,5],"healthy_attach_samples_per_owner":3,"attach_scope":"Controller selects a retained running owner before each exact-folder dashboard; UUID-verified prepared-session attachment, selection latency excluded","fault":"session-scoped debug ENOSPC marker, not physical exhaustion","outer_terminal":"portable-pty + continuously consumed vt100 parsed cells 160x40; no pixel latency","instrumentation":"single Controller selects each owner; bounded durable-commit rings retained separately; per-owner snapshots; 1s ps/disk sampling; monotonic input-to-parsed-visible timestamps"}),
     );
     for (command, args) in [
         ("sw_vers", vec![]),
@@ -11458,7 +11458,7 @@ fn six_stream_coordination_measurement19() {
                 s["browse"]["request"] == request && s["browse"]["preparing"] == false
             });
             log(
-                serde_json::json!({"kind":"search","index":index,"request":request,"us":measurement_clock().saturating_sub(since)/1000,"rows":result["browse"]["rows"],"partial":result["browse"]["partial"]}),
+                serde_json::json!({"kind":"search","index":index,"request":request,"us":measurement_clock().saturating_sub(since)/1000,"response":result["browse"]}),
             );
             let request = format!("m219-diff-{cycle}-{index}");
             let since = measurement_clock();
@@ -11513,28 +11513,89 @@ fn six_stream_coordination_measurement19() {
         if us >= 100000 {
             failures.push(format!("healthy navigation {sample}: {us}us"));
         }
-        if sample % 4 == 0 {
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    drop(dashboard);
+    dashboard_pid.store(0, Ordering::Relaxed);
+    let mut control = Controller::connect(&fixture);
+    // Candidate j/k navigation above does not adopt a runtime. Explicitly select
+    // each retained owner before opening its exact checkout dashboard. Selection
+    // and dashboard startup are outside the prepared-session attach measurement.
+    for (index, _) in streams.iter().enumerate() {
+        control.request(serde_json::json!({"SelectSession":streams[index].0}));
+        let selected = cleanup_wait15(&mut control, |state| {
+            state["control_target"] == streams[index].0
+                && state["session_identity"]["session"] == streams[index].1
+                && state["lifecycle"] == "Running"
+        });
+        sample_state(index, "healthy-selected-for-attach", &selected);
+        drop(control);
+        let deadline = Instant::now() + Duration::from_secs(8);
+        let reopened = loop {
+            let mut candidate = Dashboard::open(&folders[index], &fixture.state());
+            let screen = candidate.wait_any(&[
+                "Process: Running",
+                "Another dashboard controls this supervisor",
+            ]);
+            if screen.contains("Process: Running") {
+                break candidate;
+            }
+            candidate.kill();
+            assert!(Instant::now() < deadline, "controller EOF was not released");
+        };
+        let mut dashboard = LiveDashboard::new(reopened);
+        dashboard_pid.store(
+            dashboard.dashboard.child.process_id().unwrap(),
+            Ordering::Relaxed,
+        );
+        dashboard.wait(&streams[index].1);
+        dashboard.send(&[0x1d]);
+        dashboard.wait("Focus: dashboard");
+        for local_sample in 0..3 {
+            let sample = index * 3 + local_sample;
+            assert!(
+                dashboard
+                    .latest
+                    .lock()
+                    .unwrap()
+                    .0
+                    .contains(&streams[index].1),
+                "wrong current managed session before timed attach {sample}"
+            );
             let before = measurement_clock();
             dashboard.send(b"\r");
             dashboard.wait("Focus: session");
             let nonce = format!("m219-{sample:03}");
             dashboard.send(format!("ack17 {nonce}\r").as_bytes());
             let visible = dashboard.observe(&format!("ACK17 {nonce} "), Duration::from_secs(2));
-            let us = visible.as_ref().map(|s| s.1.saturating_sub(before) / 1000);
+            let us = visible
+                .as_ref()
+                .map(|screen| screen.1.saturating_sub(before) / 1000);
+            if let Some((screen, _)) = &visible {
+                assert!(
+                    screen.contains(&streams[index].1),
+                    "ACK appeared for wrong managed session: intended {}: {screen}",
+                    streams[index].1
+                );
+            }
             log(
-                serde_json::json!({"kind":"attach","phase":"six-stream-healthy","sample":sample,"nonce":nonce,"injected_ns":before,"visible_ns":visible.as_ref().map(|s|s.1),"us":us,"screen":visible.as_ref().map(|s|&s.0)}),
+                serde_json::json!({"kind":"attach","phase":"six-stream-healthy","sample":sample,"owner_index":index,"expected_target":streams[index].0,"expected_session":streams[index].1,"nonce":nonce,"injected_ns":before,"visible_ns":visible.as_ref().map(|screen|screen.1),"us":us,"screen":visible.as_ref().map(|screen|&screen.0)}),
             );
             if us.is_none_or(|us| us >= 1000000) {
-                failures.push(format!("healthy attach {sample}: {us:?}us"));
+                failures.push(format!("healthy owner {index} attach {sample}: {us:?}us"));
             }
             dashboard.send(&[0x1d]);
             dashboard.wait("Focus: dashboard");
         }
-        std::thread::sleep(Duration::from_millis(100));
+        drop(dashboard);
+        dashboard_pid.store(0, Ordering::Relaxed);
+        control = Controller::connect(&fixture);
+        assert_eq!(
+            control.greeting["session_identity"]["session"],
+            streams[index].1
+        );
+        sample_state(index, "healthy-after-attach", &control.greeting);
     }
-    drop(dashboard);
-    dashboard_pid.store(0, Ordering::Relaxed);
-    let mut control = Controller::connect(&fixture);
     for (index, _) in streams.iter().enumerate() {
         let state = control.request(serde_json::json!({"SelectSession":streams[index].0}));
         sample_state(index, "healthy-after-ui", &state);
@@ -11570,11 +11631,11 @@ fn six_stream_coordination_measurement19() {
             let request = uuid::Uuid::new_v4().to_string();
             let since = measurement_clock();
             control.request(serde_json::json!({"Browse":{"request":request,"mode":"History","text":"pace17","after":0,"workspace":null,"passage":null,"cancel":false}}));
-            cleanup_wait15(&mut control, |s| {
+            let result = cleanup_wait15(&mut control, |s| {
                 s["browse"]["request"] == request && s["browse"]["preparing"] == false
             });
             log(
-                serde_json::json!({"kind":"search","phase":"one-stream-enospc","index":index,"request":request,"us":measurement_clock().saturating_sub(since)/1000}),
+                serde_json::json!({"kind":"search","phase":"one-stream-enospc","index":index,"request":request,"us":measurement_clock().saturating_sub(since)/1000,"response":result["browse"]}),
             );
             let request = uuid::Uuid::new_v4().to_string();
             let since = measurement_clock();
@@ -11613,6 +11674,7 @@ fn six_stream_coordination_measurement19() {
     dashboard.send(&[0x1d]);
     dashboard.wait("Focus: dashboard");
     dashboard.wait("Branch: main");
+    dashboard.wait(&streams[0].1);
     for sample in 0..20 {
         let (key, expected) = if sample % 2 == 0 {
             (b"j", "Branch: other19")
@@ -11637,8 +11699,15 @@ fn six_stream_coordination_measurement19() {
     dashboard.wait("Focus: session");
     dashboard.send(b"ack17 m219-fault\r");
     let visible = dashboard.observe("ACK17 m219-fault ", Duration::from_secs(2));
+    if let Some((screen, _)) = &visible {
+        assert!(
+            screen.contains(&streams[0].1),
+            "fault ACK belongs to another managed session: {screen}"
+        );
+    }
+    assert!(dashboard.latest.lock().unwrap().0.contains(&streams[0].1));
     log(
-        serde_json::json!({"kind":"attach","phase":"one-stream-enospc","injected_ns":before,"visible_ns":visible.as_ref().map(|s|s.1),"censor_ns":measurement_clock(),"usable":visible.is_some(),"screen":dashboard.latest.lock().unwrap().0}),
+        serde_json::json!({"kind":"attach","phase":"one-stream-enospc","owner_index":0,"expected_target":streams[0].0,"expected_session":streams[0].1,"injected_ns":before,"visible_ns":visible.as_ref().map(|s|s.1),"censor_ns":measurement_clock(),"usable":visible.is_some(),"screen":dashboard.latest.lock().unwrap().0}),
     );
     dashboard.send(&[0x1d]);
     dashboard.wait("Focus: dashboard");
@@ -11740,7 +11809,23 @@ fn six_stream_coordination_measurement19() {
             std::fs::copy(entry.path(), evidence.join(entry.file_name())).unwrap();
         }
     }
+    let index_db = rusqlite::Connection::open_with_flags(
+        evidence.join("history.sqlite3"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap();
     for (index, (_, session, _, _)) in streams.iter().enumerate() {
+        let (frontier, ordinal, sealed, durable): (u64, u64, bool, u64) = index_db.query_row(
+            "SELECT p.frontier,p.ordinal,p.sealed,s.durable FROM history_projection p JOIN sessions s ON s.id=p.session WHERE p.session=?1",
+            [session], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        ).unwrap();
+        assert!(
+            frontier > 0 && frontier <= durable && ordinal > 0,
+            "stream {index} has no valid committed index progress"
+        );
+        log(
+            serde_json::json!({"kind":"index-frontier","index":index,"session":session,"committed_frontier":frontier,"passages":ordinal,"projection_sealed":sealed,"durable_raw_prefix":durable,"caught_up":frontier == durable,"fully_sealed":frontier == durable && sealed,"scope":"quiescent copied SQLite after confirmed owner shutdown; raw durability is independent of derivative indexing"}),
+        );
         let mut chunks: Vec<_> = std::fs::read_dir(&evidence)
             .unwrap()
             .flatten()

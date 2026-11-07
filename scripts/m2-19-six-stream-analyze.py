@@ -29,7 +29,28 @@ for index in range(6):
     snapshots = [row for row in rows if row['kind'] == 'stream-snapshot' and row['index'] == index]
     pre_fault = max(snapshot['durable_commits'][-1]['sequence'] for snapshot in snapshots if snapshot['phase'] == 'healthy-end')
     healthy = [commit for commit in commits if commit['sequence'] > commit_row['stream_after_sequence'] and (index != 0 or commit['sequence'] <= pre_fault)]
-    summary['streams'].append({'index': index, 'identity': next(row for row in rows if row['kind'] == 'stream-identity' and row['index'] == index), 'accepted': final['accepted_bytes'], 'written': final['written_bytes'], 'durable': final['durable_bytes'], 'pending': final['capture_pending_bytes'], 'capture_high_water': final['capture_high_water'], 'backpressure_count': final['capture_backpressure_count'], 'subscriber_frame_high_water': final['subscriber_frame_high_water'], 'commits': len(commits), 'max_healthy_accepted_age_us': max(commit['oldest_accepted_micros'] for commit in healthy), 'max_healthy_completion_gap_us': max(b['completed_micros'] - a['completed_micros'] for a, b in zip(healthy, healthy[1:])), 'retained_raw': next(row for row in rows if row['kind'] == 'retained-raw' and row['index'] == index)})
+    summary['streams'].append({'index': index, 'identity': next(row for row in rows if row['kind'] == 'stream-identity' and row['index'] == index), 'accepted': final['accepted_bytes'], 'written': final['written_bytes'], 'durable': final['durable_bytes'], 'pending': final['capture_pending_bytes'], 'capture_high_water': final['capture_high_water'], 'backpressure_count': final['capture_backpressure_count'], 'subscriber_frame_high_water': final['subscriber_frame_high_water'], 'commits': len(commits), 'max_healthy_accepted_age_us': max(commit['oldest_accepted_micros'] for commit in healthy), 'max_healthy_completion_gap_us': max(b['completed_micros'] - a['completed_micros'] for a, b in zip(healthy, healthy[1:])), 'retained_raw': next(row for row in rows if row['kind'] == 'retained-raw' and row['index'] == index), 'index_progress': next((row for row in rows if row['kind'] == 'index-frontier' and row['index'] == index), None)})
+# The UUID in the parsed ACK screen binds usability to the prepared runtime,
+# independently of a tree candidate selection or a focus label.
+identities = {row['index']: row for row in rows if row['kind'] == 'stream-identity'}
+attach_checks = []
+for row in rows:
+    if row['kind'] != 'attach':
+        continue
+    owner = row.get('owner_index', 0)  # Original 335ba44 run measured current owner 0.
+    expected = identities[owner]['session']
+    visible = row.get('visible_ns') is not None
+    screen = row.get('screen') or ''
+    attach_checks.append({'phase': row['phase'], 'sample': row.get('sample'), 'owner_index': owner, 'expected_session': expected, 'visible': visible, 'screen_matches_expected_session': expected in screen, 'nonce': row.get('nonce')})
+    assert expected in screen, f"wrong current managed session in attach screen: {attach_checks[-1]}"
+summary['attach_identity_checks'] = attach_checks
+if summary['manifest'].get('healthy_attach_owners'):
+    counts = collections.Counter(row['owner_index'] for row in attach_checks if row['phase'] == 'six-stream-healthy')
+    expected_count = summary['manifest']['healthy_attach_samples_per_owner']
+    assert counts == {owner: expected_count for owner in summary['manifest']['healthy_attach_owners']}, counts
+    summary['healthy_attach_samples_by_owner'] = dict(counts)
+responses = [row['response'] for row in rows if row['kind'] == 'search' and 'response' in row]
+summary['search_responses'] = {'samples': len(responses), 'error_count': sum(response['error'] is not None for response in responses), 'more_count': sum(response['more'] for response in responses), 'preparing_count': sum(response['preparing'] for response in responses), 'rows_distribution': distribution([len(response['rows']) for response in responses]), 'indexing_scope': 'Response has no partial/indexing field. Committed derivative frontiers are reported separately from raw durability and can lag while these bounded searches return.'}
 rss = collections.defaultdict(list)
 disks = []
 for row in rows:
@@ -45,6 +66,6 @@ summary['rss_kib_by_pid'] = {pid: {'n': len(values), 'first': values[0], 'last':
 summary['disk_samples'] = disks
 summary['windows'] = next(row for row in rows if row['kind'] == 'windows')
 summary['result'] = next(row for row in rows if row['kind'] == 'result')
-summary['limitations'] = ['Fixture coding streams, not Claude/Codex throughput or semantic status.', 'macOS portable-pty/vt100 terminal cells, not graphical pixel timing.', 'One stream uses an injected ENOSPC write fault, not actual volume exhaustion.', 'Faulted visible native output can remain blocked: censored attachment is not a healthy attach pass.', 'RSS and disk are samples; no allocator maximum or power-loss guarantee follows.', 'completed_micros is relative to the storage worker origin; oldest_accepted_micros already stores age.']
+summary['limitations'] = ['Fixture coding streams, not Claude/Codex throughput or semantic status.', 'macOS portable-pty/vt100 terminal cells, not graphical pixel timing.', 'One stream uses an injected ENOSPC write fault, not actual volume exhaustion.', 'Faulted visible native output can remain blocked: censored attachment is not a healthy attach pass.', 'RSS and disk are samples; no allocator maximum or power-loss guarantee follows.', 'completed_micros is relative to the storage worker origin; oldest_accepted_micros already stores age.', 'Prepared-session attach excludes explicit owner selection and dashboard startup; the parsed screen UUID verifies the selected runtime.', 'Search results cover the committed indexed prefix, which may lag the separately durable raw transcript.']
 (root / 'analysis.json').write_text(json.dumps(summary, indent=2) + '\n')
 print(json.dumps(summary, indent=2))
