@@ -201,3 +201,24 @@ Final cold checkpoints use this verifier; earlier hash-bound checkpoints remain
 earlier evidence. Formatting, diff whitespace and all proof-script AST parsing
 checks also passed for the documentation/tooling closeout. The root integration
 review and final all-target checks remain required.
+
+## Integration candidate checks
+
+The candidate `217284bd4a17d6c659705030d055e453b6e2aad9` was merged without
+conflicts into the integration branch as
+`23847054765d3872f77ea39f62b4a15221a93320`. Its production `src`, `Cargo.toml`
+and `Cargo.lock` have no diff from qualified source `335ba44`. On that merge,
+stable locked build, formatting, warnings-denied all-target Clippy and whitespace
+checks passed. Focused serial binary tests passed: App 37, UI 19, persistence
+14 with two native-corpus qualifications explicitly ignored. The proof-tool
+regressions passed all 18 cases; all six ticket 19 Python scripts parsed.
+Logs are retained at `/tmp/rat19-integration-{build,clippy,app,ui,persistence}.log`.
+These scoped checks introduce no new native, physical-transition or full
+aggregate claim. Two-axis review and a final serial all-target run remain due.
+
+The clean, fully merged implementer worktree `/tmp/rat-ticket19` was removed;
+its branch was retained. The detached persistent source and private proof state
+remain available for coordinated physical-transition preparation. An unrelated
+untracked `strict-editor-supplement.log` was preserved for its owner's closeout;
+it was not included in this integration commit. Ticket 19 and the spec remain
+**Resolved: no**; actual sleep/wake, physical reboot and C6 remain open.
