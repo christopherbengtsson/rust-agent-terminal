@@ -158,3 +158,27 @@ is prior integration evidence, and ticket 19 owns final combined qualification.
 The [Git configuration reference](https://git-scm.com/docs/git-config/2.48.1)
 distinguishes committed object hardening from the separate `reference` component;
 both are requested explicitly.
+
+## Integration merge verification
+
+Ticket 16 was merged with `--no-ff` into
+`integration/milestone-2-coding-coordination` at
+`f6876d8536292a30e9c27cf49849b4fd3e62d75b`, from completed branch
+`ticket16-archive` at `34533ab223fe339dcc518d6ff638e378825042d4`.
+Blocker ticket 10 and ticket 16 both had `Resolved: yes`. The integration parent
+`3b4b364456a115c3b357331390e906c1915af134` was already an ancestor of the
+completed branch. The merge was conflict-free and its tree exactly matched that
+branch; no product or test edits were made during integration.
+
+On this merged tree, locked build, formatting check, all-target warnings-denied
+Clippy and `git diff --check` passed. The focused commands listed above passed:
+15 real-Git archive Job tests (2.15 seconds), 32 App tests, 18 UI tests and the
+selected-resume persistence test (0.42 seconds). The seven prior Controller/PTY
+archive scenarios and selected-resume ownership check were not rerun for this
+unchanged merge tree; their source/version scope remains as recorded above.
+The full suite and combined native/resource/reboot qualification remain ticket
+19 work. Native compatibility, physical power-loss and stale Git lock/manual
+repair limitations remain unchanged.
+
+The clean, fully merged ticket worktree was removed after ancestry and clean-state
+verification; its `ticket16-archive` branch was retained.
