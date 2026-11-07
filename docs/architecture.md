@@ -1538,3 +1538,33 @@ there is no universal external-write atomicity or physical power-loss guarantee.
 Git filters/LFS retain ordinary Git semantics for external resources. See
 [ticket 18 evidence](proofs/m2-18-removal.md). Full native/combined-workload,
 sleep/wake and physical reboot qualification remains ticket 19.
+
+
+## Integrated coding qualification corrections (Milestone 2 ticket 19)
+
+The capture writer takes a bounded turn for each stream before the existing
+512-byte derivative-index step: at most 64 blocks/64 KiB, ending after a
+completed write reaches 2 ms. A write can itself block beyond that budget. This
+avoids paying an index checkpoint for every small native PTY append while
+retaining rotation, queue bounds, control priority, committed-prefix durability,
+index transaction atomicity and FULL/fullfsync. The source-pinned qualification
+records fair raw capture under six streams; derivative indexing remains partial
+under that workload, so durable raw history is not an immediate full-search
+completion guarantee.
+
+An explicit launch/resume action on a terminal historical segment gets a fresh
+request even when its old launch outcome is absent. Pending/uncertain execution
+and retrying an unobserved new intent retain their existing request identity.
+Historical native lookup verifies selected membership and identity, and reports
+a known missing current workspace before native-descriptor rejection; unknown
+legacy locations still allow identity-only lookup. Neither path changes the
+saved native conversation UUID.
+
+The [integrated qualification](proofs/m2-19-qualification.md) preserves the failed
+first aggregate, regression evidence and clean corrected aggregate, separate
+fixture/native boundaries, real archive/removal/local recovery, and exact
+version limits. Native crash restoration can retain a conservative same-boot
+Interrupted reservation after its processes are gone; the proof preserves it
+rather than clearing ownership from saved PIDs. Actual sleep/wake and physical
+reboot remain open, as do final integration review/checks. C6 and full milestone
+completion are not claimed.

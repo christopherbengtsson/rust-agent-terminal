@@ -89,10 +89,14 @@ Acceptance: complete C1–C7, including real macOS checks with both supported to
 Persistence and necessary setup arrive with the first feature that needs them;
 they are not deferred to release validation.
 
-Tickets 01–18 implement the local coordination features. Ticket 19 remains open
-while integrated native, six-session resource and real recovery qualification is
-completed. In particular, injected boot identities do not establish actual
-reboot recovery or C6. See the [qualification record](proofs/m2-19-qualification.md).
+Tickets 01–18 implement the local coordination features. Ticket 19 records a
+clean frozen all-target aggregate, the three-project/six-stream measurement and
+the integrated six-native-session workflow, including installed editors and
+local archive/removal recovery. Final integration review/checks and real
+sleep/wake and physical reboot remain open. C6 and milestone completion remain
+unclaimed; injected boot identities do not establish the physical gate. See the
+[qualification record](proofs/m2-19-qualification.md) and the explicitly unexecuted
+[physical-transition plan](proofs/m2-19-physical-transition-plan.md).
 
 Begin with the prerequisites identified from the completed session proof:
 retained project/workspace/session records and migration, explicitly targeted

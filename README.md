@@ -49,8 +49,9 @@ checkouts retain distinct workspace identities. Re-adoption selects retained wor
 Legacy tasks whose repository/path was never recorded appear under Unknown
 project with checkout unknown; the dashboard does not infer a path from display
 text. Workspace history remains readable when its checkout is unavailable.
-Adding, selecting, discovering and re-adopting never start an agent. The active
-session remains separate from browsing; stop it before adopting another checkout.
+Adding, selecting, discovering and re-adopting never start an agent. The adopted native session remains separate from browsing. Select another retained
+workspace to switch owners while coding in other workspaces continues; one active
+managed coding session is allowed per canonical worktree.
 The workspace picker temporarily occupies the session pane, including in small
 terminals; normal navigation retains Reviews above the worktree sidebar.
 
@@ -70,7 +71,7 @@ terminals; normal navigation retains Reviews above the worktree sidebar.
 | `O`, `[` / `]` in creation receipt | Open creation receipts / select the original operation by stable identity |
 | `L` / `G` / `Z` in creation receipt | Explicit pinned local fallback after fetch failure / query or recover without starting / cancel pending creation |
 | `j` / `k`, `[` / `]` in workspace picker | Select a workspace or jump between projects |
-| Enter / `a` / `h` in workspace picker | Discover selected project's worktrees / explicitly adopt selected checkout / read its latest retained session |
+| Enter / `a` / `h` in workspace picker | Discover selected project or select its retained workspace (a running owner can attach immediately) / explicitly adopt selected checkout / read its latest retained session |
 | `w` / Esc in workspace picker | Return to the native session pane without changing execution |
 | `a` | Explicitly adopt the selected usable checkout |
 | `C` / `X` | Enter an optional first prompt, then Enter explicitly starts Claude / Codex; Esc cancels |
@@ -79,7 +80,7 @@ terminals; normal navigation retains Reviews above the worktree sidebar.
 | `x` | Start a new Codex CLI conversation with `--no-daemon` (experimental) |
 | `v` | Explicitly resume the latest managed native conversation using its saved native ID |
 | `l` | Launch the scripted PTY fixture in the adopted checkout |
-| Enter | Attach to the existing managed session |
+| Enter | Attach to the current adopted managed session; sidebar browsing alone does not switch it |
 | Ctrl-] | Return from attached focus to dashboard navigation |
 | `s` | In dashboard focus, stop the managed native/fixture session and keep the dashboard open |
 | `g` | Inspect history cleanup; `j`/`k` select, `n`/`p` page, Enter preview, `D` confirm selected deletion, Esc cancel/back |
@@ -96,6 +97,11 @@ atomic view of files an agent can still change. Stop, quit and detach remain
 available. Binary, conflict, submodule, missing/unsupported and oversized content
 have explicit explanations. Inspection neither changes the index nor runs
 repository-defined external diff, text conversion or fsmonitor programs.
+
+To inspect a retained workspace in another project, open `w`, highlight it and
+press `f` while the picker remains open. Outside the picker, `f` can use the
+browsed sidebar candidate. If selecting a running owner attaches immediately,
+Ctrl-] returns to dashboard navigation.
 
 Within inspection, `w` explicitly switches between Working and Whole workspace.
 Whole workspace compares the common ancestor of the current HEAD and the selected

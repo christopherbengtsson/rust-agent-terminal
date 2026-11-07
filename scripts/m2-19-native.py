@@ -44,8 +44,10 @@ def boundary(args):
     value = {"source": source, "binary": str(args.binary.resolve()),
              "binary_sha256": sha(args.binary),
              "dirty": run("git", "-C", str(args.source), "status", "--porcelain")}
+    assert not value["dirty"], ("source must be clean", value)
     if args.pin:
         expected = json.loads(args.pin.read_text())
+        assert not expected.get("dirty"), "pinned source must be clean"
         assert value["source"] == expected["source"], ("source changed", value)
         assert value["binary_sha256"] == expected["binary_sha256"], ("binary changed", value)
     return value
@@ -93,7 +95,97 @@ def process_evidence(observation):
     return evidence
 
 
+def parse_darwin_procargs2(payload):
+    """Decode only argc, kernel executable path and exact NUL-separated argv."""
+    import struct
+    if len(payload) < 5:
+        raise ValueError("truncated KERN_PROCARGS2 header")
+    argc = struct.unpack_from("=i", payload)[0]
+    if not 1 <= argc <= 4096:
+        raise ValueError("invalid KERN_PROCARGS2 argc")
+    end = payload.find(b"\0", 4)
+    if end < 0 or end == 4:
+        raise ValueError("missing KERN_PROCARGS2 executable")
+    executable = payload[4:end]
+    cursor = end + 1
+    while cursor < len(payload) and payload[cursor] == 0:
+        cursor += 1
+    argv = []
+    for _ in range(argc):
+        end = payload.find(b"\0", cursor)
+        if end < 0:
+            raise ValueError("truncated KERN_PROCARGS2 argv")
+        argv.append(payload[cursor:end])
+        cursor = end + 1
+    if not argv[0]:
+        raise ValueError("missing KERN_PROCARGS2 argv[0]")
+    return executable, argv
+
+
+def darwin_editor_identity(pid):
+    """Read a fresh foreground leader's executable/argv; never signal it."""
+    import ctypes
+    import sys
+    if sys.platform != "darwin":
+        raise RuntimeError("exact editor ownership requires Darwin process APIs")
+    if not isinstance(pid, int) or pid <= 1:
+        raise ValueError("invalid foreground process-group leader")
+    proc = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+    proc.proc_pidpath.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
+    proc.proc_pidpath.restype = ctypes.c_int
+    path = ctypes.create_string_buffer(4096)
+    if proc.proc_pidpath(pid, path, len(path)) <= 0:
+        raise OSError(ctypes.get_errno(), "proc_pidpath unavailable")
+    executable = path.value
+    libc = ctypes.CDLL(None, use_errno=True)
+    libc.sysctl.argtypes = [ctypes.POINTER(ctypes.c_int), ctypes.c_uint,
+                           ctypes.c_void_p, ctypes.POINTER(ctypes.c_size_t),
+                           ctypes.c_void_p, ctypes.c_size_t]
+    libc.sysctl.restype = ctypes.c_int
+    mib = (ctypes.c_int * 3)(1, 49, pid)  # CTL_KERN, KERN_PROCARGS2, pid
+    size = ctypes.c_size_t()
+    if libc.sysctl(mib, 3, None, ctypes.byref(size), None, 0) != 0:
+        raise OSError(ctypes.get_errno(), "KERN_PROCARGS2 size unavailable")
+    if not 1 <= size.value <= 2 * 1024 * 1024:
+        raise ValueError("KERN_PROCARGS2 exceeds explicit 2 MiB observation cap")
+    data = ctypes.create_string_buffer(size.value)
+    if libc.sysctl(mib, 3, data, ctypes.byref(size), None, 0) != 0:
+        raise OSError(ctypes.get_errno(), "KERN_PROCARGS2 argv unavailable")
+    kernel_executable, argv = parse_darwin_procargs2(data.raw[:size.value])
+    # Recheck the executable after argv acquisition; unavailable/changed evidence
+    # never authorizes subsequent editor keystrokes. Foreground pgrp is rechecked
+    # by the caller. This is an observation, not an atomic lifetime guarantee.
+    again = ctypes.create_string_buffer(4096)
+    if proc.proc_pidpath(pid, again, len(again)) <= 0 or again.value != executable:
+        raise RuntimeError("editor executable changed during ownership observation")
+    return {"pid_observed_only": pid,
+            "executable": executable.decode("utf-8", "backslashreplace"),
+            "executable_bytes": list(executable),
+            "kernel_executable_bytes": list(kernel_executable),
+            "argv": [part.decode("utf-8", "backslashreplace") for part in argv],
+            "argv_bytes": [list(part) for part in argv],
+            "method": "Darwin proc_pidpath + KERN_PROCARGS2; environment not retained"}
+
+
+def editor_identity_matches(identity, expected):
+    """Exact resolved executable and exact raw argv operand, with no substrings."""
+    try:
+        executable = bytes(identity["executable_bytes"])
+        kernel_executable = bytes(identity["kernel_executable_bytes"])
+        expected_executable = os.fsencode(expected["executable"])
+        operand = os.fsencode(expected["operand"])
+        argv = [bytes(part) for part in identity["argv_bytes"]]
+        return (bool(operand) and os.path.isabs(expected_executable)
+                and os.path.isabs(executable) and os.path.isabs(kernel_executable)
+                and os.path.realpath(executable) == os.path.realpath(expected_executable)
+                and os.path.realpath(kernel_executable) == os.path.realpath(expected_executable)
+                and operand in argv[1:])
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
 def drive(args):
+    runner_sha256 = sha(Path(__file__))
     before = boundary(args)
     plan = json.loads(args.plan.read_text())
     rows, cols = plan.get("geometry", [40, 160])
@@ -103,6 +195,8 @@ def drive(args):
     argv = [str(args.binary.resolve()), str(args.repo.resolve()),
             "--state-dir", str(args.state.resolve())]
     env = dict(os.environ, TERM="xterm-256color")
+    if plan.get("dashboard_color"):
+        env.pop("NO_COLOR", None)
     if "editor" in plan:
         env["RAT_EDITOR_JSON"] = json.dumps(plan["editor"])
     def claim_terminal():
@@ -143,6 +237,8 @@ def drive(args):
     observation = None
     try:
         drain(plan.get("startup_seconds", 2))
+        send(b"\x1d")
+        drain(.2)
         for number, step in enumerate(plan["steps"]):
             record = {"step": number, "action": step,
                       "start_ms": (time.monotonic()-start)*1000,
@@ -171,12 +267,52 @@ def drive(args):
                     drain(.05)
                 # This is explicitly a byte check, not a visible-cell assertion.
                 record["raw_subsequence_seen"] = True
+            if "expect_editor" in step:
+                expected = step["expect_editor"]
+                deadline = time.monotonic()+step.get("timeout", 8)
+                last = None
+                while True:
+                    group = os.tcgetpgrp(master)
+                    try:
+                        identity = darwin_editor_identity(group) if group > 1 and group != child.pid else None
+                        last = {"group": group, "identity": identity}
+                        if (child.poll() is None and group == os.tcgetpgrp(master)
+                                and editor_identity_matches(identity, expected)):
+                            record["editor_ownership"] = {"foreground_pgrp": group,
+                                                          "identity": identity,
+                                                          "expected": expected,
+                                                          "exact_executable_and_operand": True}
+                            break
+                    except (OSError, ValueError, RuntimeError) as error:
+                        last = {"group": group, "identity_unavailable": repr(error)}
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError("expected exact editor foreground/executable/operand unavailable: "+repr({"last": last, "expected": expected}))
+                    drain(.03)
+            if "expect_visible" in step:
+                assert args.parser, "visible assertions require the pinned real terminal parser"
+                deadline = time.monotonic() + step.get("timeout", 30)
+                assertion_capture = folder / ("visible-assertion-"+str(number)+".raw")
+                while True:
+                    assertion_capture.write_bytes(raw)
+                    subprocess.run([str(args.parser), str(assertion_capture), str(rows), str(cols)], check=True)
+                    parsed = json.loads(assertion_capture.with_suffix(".cells.json").read_text())
+                    if step["expect_visible"] in parsed["text"]:
+                        record["visible_assertion"] = {"needle": step["expect_visible"], "cells": str(assertion_capture.with_suffix(".cells.json"))}
+                        break
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError("missing current visible cells: "+step["expect_visible"])
+                    drain(.03)
             if "capture" in step:
                 capture = folder / (step["capture"] + ".raw")
                 capture.write_bytes(raw)
                 if args.parser:
                     subprocess.run([str(args.parser), str(capture), str(rows), str(cols)], check=True)
                     record["cell_capture"] = str(capture.with_suffix(".cells.json"))
+            try:
+                record["foreground_pgrp"] = os.tcgetpgrp(master)
+                record["termios_sha256"] = hashlib.sha256(repr(termios.tcgetattr(master)).encode()).hexdigest()
+            except OSError as error:
+                record["terminal_state_observation_error"] = repr(error)
             record["raw_after"] = len(raw)
             record["end_ms"] = (time.monotonic()-start)*1000
             steps.append(record)
@@ -210,16 +346,26 @@ def drive(args):
             deadline = time.monotonic() + 5
             while child.poll() is None and time.monotonic() < deadline:
                 drain(.02)
-        restored = termios.tcgetattr(slave) == original
+        try:
+            restored = termios.tcgetattr(slave) == original
+            restoration_error = None
+        except termios.error as error:
+            restored = None
+            restoration_error = repr(error)
         os.close(slave)
         os.close(master)
         (folder / "terminal.raw").write_bytes(raw)
+        if failure and observation is None:
+            try:
+                observation = observe(args.state, timeout=3)
+            except Exception as error:
+                failure += "; post-failure observation unavailable: "+repr(error)
         after = boundary(args)
-        result = {"before": before, "after": after, "boundary_stable": before == after,
-                  "argv": argv, "plan": plan, "steps": steps, "failure": failure,
+        result = {"runner_path": str(Path(__file__).resolve()), "runner_sha256": runner_sha256, "before": before, "after": after, "boundary_stable": before == after,
+                  "argv": argv, "terminal_env": {key: env.get(key) for key in ["TERM", "NO_COLOR"]}, "initial_dashboard_focus_escape": True, "plan": plan, "steps": steps, "failure": failure,
                   "parser": {"path": str(args.parser), "sha256": sha(args.parser)} if args.parser else None,
                   "dashboard_pid": child.pid, "dashboard_exit": child.poll(),
-                  "terminal_restored": restored, "observation": observation,
+                  "terminal_restored": restored, "restoration_observation_error": restoration_error, "observation": observation,
                   "processes": process_evidence(observation) if observation else []}
         save(folder / "result.json", result)
         print(json.dumps({"evidence": str(folder), "failure": failure,

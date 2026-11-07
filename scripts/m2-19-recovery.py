@@ -152,6 +152,76 @@ def database(state, old_prefixes=None):
         connection.close()
 
 
+def recovery_ref_role(name):
+    """Return the source-defined M2 ref role and required Git object type."""
+    import uuid
+    parts = name.split("/")
+    if len(parts) < 4 or parts[:2] != ["refs", "rat"]:
+        raise ValueError("unknown recovery reference role: "+name)
+
+    def canonical(identity):
+        if str(uuid.UUID(identity)) != identity:
+            raise ValueError("recovery ref identity is not canonical UUID: "+name)
+
+    role = parts[2]
+    if role == "creation" and len(parts) == 4:
+        canonical(parts[3])
+        return "creation-base-claim", "commit"
+    if len(parts) < 5:
+        raise ValueError("unknown recovery reference role: "+name)
+    workspace, request = parts[3:5]
+    archive_tree_role = None
+    if role == "archive":
+        for suffix, tree_role in [("-index", "archive-index"),
+                                  ("-prepared", "archive-prepared")]:
+            if request.endswith(suffix):
+                request = request[:-len(suffix)]
+                archive_tree_role = tree_role
+                break
+    canonical(workspace)
+    canonical(request)
+    if role == "archive" and len(parts) == 5:
+        return (archive_tree_role, "tree") if archive_tree_role else ("archive-checkpoint", "commit")
+    if role == "removal" and len(parts) == 5:
+        return "removal-recovery", "commit"
+    if role == "restore" and len(parts) >= 6 and all(parts[5:]):
+        # The validated Git ref supplies the branch suffix, including any '/'.
+        return "restored-branch-marker", "commit"
+    raise ValueError("unknown recovery reference role: "+name)
+
+
+def require_recovery_ref_type(name, object_type):
+    role, expected = recovery_ref_role(name)
+    if object_type != expected:
+        raise ValueError(f"{role} must point to {expected}, observed {object_type}: {name}")
+    return role, expected
+
+
+def selected_context_preserved(previous_public, observation, before):
+    """Exact selected workspace/segment/native context, or missing evidence."""
+    if not previous_public.get("available"):
+        return None
+    previous = previous_public.get("observation")
+    if not isinstance(previous, dict):
+        return None
+    previous_registry = previous.get("registry")
+    registry = observation.get("registry")
+    if (not isinstance(previous_registry, dict) or "selected" not in previous_registry
+            or not isinstance(registry, dict) or "selected" not in registry):
+        return None
+    if previous_registry["selected"] != registry["selected"]:
+        return False
+    selected = (observation.get("session_identity") or {}).get("session")
+    previous_selected = (previous.get("session_identity") or {}).get("session")
+    if selected != previous_selected:
+        return False
+    if selected is None:
+        return observation.get("native_conversation") == previous.get("native_conversation")
+    return (selected in before
+            and observation.get("native_conversation") == previous.get("native_conversation")
+            and observation.get("native_conversation") == before[selected]["native_conversation"])
+
+
 def code_snapshot(registry):
     result = {"workspaces": [], "recovery_refs": []}
     for workspace in registry["workspaces"]:
@@ -188,9 +258,12 @@ def code_snapshot(registry):
         references = output(["git", "--git-dir", directory, "for-each-ref", "--format=%(refname) %(objectname)", "refs/rat/"]).decode().splitlines()
         for reference in references:
             name, commit = reference.split()
-            output(["git", "--git-dir", directory, "cat-file", "-e", commit+"^{commit}"])
+            object_type = output(["git", "--git-dir", directory, "cat-file", "-t", commit]).decode().strip()
+            role, expected_type = require_recovery_ref_type(name, object_type)
+            output(["git", "--git-dir", directory, "cat-file", "-e", commit])
             result["recovery_refs"].append({"project": project["id"], "reference": name,
-                                           "commit": commit, "commit_present": True})
+                                           "object": commit, "object_type": object_type, "object_present": True,
+                                           "role": role, "expected_object_type": expected_type})
     return result
 
 
@@ -220,7 +293,7 @@ def source_identity(repository, commit):
 
 def current(args, old_prefixes=None):
     data = database(args.state, old_prefixes)
-    return {"format": 1, "captured_unix_ns": time.time_ns(), "root": str(args.root),
+    return {"format": 1, "verifier": {"path": str(Path(__file__).resolve()), "sha256": sha(Path(__file__))}, "captured_unix_ns": time.time_ns(), "root": str(args.root),
             "state": str(args.state), "boot": boot(),
             "binary": {"path": str(args.binary), "sha256": sha(args.binary)},
             "source": source_identity(args.git_repo, args.source_commit),
@@ -264,6 +337,7 @@ def main():
         parser.error("verify requires --checkpoint")
     previous = json.loads(args.checkpoint.read_text())
     assert previous["root"] == str(args.root) and previous["state"] == str(args.state)
+    assert previous["verifier"]["sha256"] == sha(Path(__file__)), "verifier changed since checkpoint"
     assert previous["binary"]["sha256"] == sha(args.binary), "frozen binary changed"
     assert previous["source"]["commit"] == args.source_commit, "source commit changed"
     now = boot()
@@ -330,11 +404,8 @@ def main():
                 latest[membership[session["id"]]] = session["id"]
         checks["public_latest_segments_restored"] = set(latest.values()).issubset(
             {row.get("session") for row in observation.get("sessions", [])})
-        selected = (observation.get("session_identity") or {}).get("session")
-        previous_selected = ((previous.get("public", {}).get("observation") or {}).get("session_identity") or {}).get("session")
-        checks["public_selected_native_id_preserved"] = (
-            selected in before and observation.get("native_conversation") == before[selected]["native_conversation"]
-            if selected is not None else previous_selected is None)
+        checks["public_selected_native_id_preserved"] = selected_context_preserved(
+            previous.get("public", {}), observation, before)
     else:
         for check in ["no_automatic_running_coding_observed", "public_registry_identities_preserved",
                       "public_latest_segments_restored", "public_selected_native_id_preserved"]:

@@ -114,7 +114,8 @@ memory checks (RSS 10,656→11,056 KiB). The unchanged sustained test passed in
 347.32 seconds, preserving all four stream modes, queue/saturation assertions and
 all 131,072 numbered records exactly once. Its temporary resource file was not
 retained; the pass log and exact source diff/executable hashes are retained.
-Further focused checks and the corrected frozen full aggregate remain required.
+At that checkpoint, further focused checks and a corrected frozen full aggregate
+remained required; their later results follow below.
 
 The subsequent [focused correction archive](m2-19-correction-evidence.tar.gz)
 ([manifest](m2-19-correction-manifest.json)) records all nine exact checks passing
@@ -126,5 +127,77 @@ run times were 4.93, 1.39, 1.59, 7.77, 2.41, 2.41, 5.32, 3.99 and 4.78 seconds.
 The child-free persistence group also passed 14 with its two explicitly ignored
 native-corpus qualifications, including identity lookup with an unknown legacy
 checkout location, selected-resume retention/deletion, index restart/passages,
-fair capture and scoped final flushing. These focused results still require a
-new clean all-target aggregate before the fixture/native qualification intervals.
+fair capture and scoped final flushing. These focused results did not replace a
+clean all-target aggregate; the subsequent frozen pass below preceded both the
+fixture and native intervals.
+
+## Clean aggregate and final product boundary
+
+The corrected, clean frozen aggregate used source `335ba44e980f2e448f86bafe85aa4bfac82b1e5d` and product SHA-256 `89382b1a23124461fbec2bd0944e4b012cfb8d7f056990119a6a02a777569154`. Stable locked build, formatting, warnings-denied all-target Clippy and all-target prebuild passed before the runtime interval. The serial command `cargo +stable test --locked --all-targets -- --test-threads=1 --nocapture` exited **0** in 792.733 seconds: main 157 passed/3 ignored, editor 1 passed/1 ignored, ownership 113 passed/3 ignored, scripted interaction 1 passed and screen 2 passed. This is **274 passed, seven explicit ignored qualifications**. Source stayed clean and every product/test executable hash matched before and after. No competing native/PTY/resource workload, build or source edit occurred during the interval. The earlier failed aggregate remains retained above.
+
+Source `a56eee5b25196f236969b5f2051e3d85707f3e0d` then refined only the ignored six-owner measurement and its analyzer. Its production `src` tree is byte-identical (`33cc9a17fffb6b72b4ede4dc537f377d6be58bd6`), and the product executable hash is unchanged. Build, formatting, warnings-denied all-target Clippy and all-target prebuild passed again; the strengthened ignored measurement and actual installed-editor qualification passed against that pin. A second immediate default aggregate was deferred for this ignored-harness-only change. Final integration/review checks remain required at their own final source; no later product change inherits these native/performance claims silently.
+
+The [clean gate/editor archive](m2-19-final-static-evidence.tar.gz) and [per-artifact manifest](m2-19-final-static-manifest.json) retain exact logs, all executable boundaries, versions, unchanged sustained-capture telemetry, search/removal terminal captures, a56 preparation and installed-editor results. The real macOS Vim/Pico qualification passed in 8.00 seconds: both comparison modes, live-source saves, Ctrl-C, resize, foreground process-group ownership, terminal settings and supervisor continuity. Actual editor versions were Vim 9.1 patches 1–1752 and Pico 5.09. The integrated native editor run below separately verifies real source path/argv before sending save keys.
+
+## Six-session workload and native interactions
+
+The [measurement and 319 supplement](m2-19-measurements.md) records both the original current-owner-only fixture result and the strengthened UUID-verified all-six-owner result, including every per-stream counter and the partial index boundary. In the strengthened declared workload, visible navigation worst was 10.049 ms healthy and 4.641 ms with a peer storage fault; all 18 prepared healthy owner attaches produced their fresh visible ACK below one second (worst 950.150 ms). Selection and dashboard preparation precede that attach timer. The faulted owner did not produce its ACK within two seconds and is not a healthy attach pass. Healthy capture completion age stayed below 531.540 ms and receipt gaps below 418.969 ms; all six final accepted/written/durable extents matched with empty queues. Indexing remained partial. These finite fixture observations are separate from actual native behavior.
+
+The [main integrated native proof](m2-19-native.md) records the real three-project/six-concurrent-session workflow at source a56 and the identical qualified product. Claude 2.1.318 is selected through a proof-only PATH; the host-default 2.1.319 supplement retains its Unknown semantic status. Native versions, exact managed/native identities, actual interaction outcomes, original-ID recall, archive/removal recovery and all failed harness attempts remain explicit.
+
+## Visual review and working instructions
+
+The actual vision image was viewed alongside native-run terminal captures at 160×40 and 60×18. The [capture images](m2-19-visual/) retain the parsed visible cells and rendered PNGs. At 160×40 the dark/cyan composition keeps Reviews above browsed worktrees beside the prominent native pane. At 60×18 the compact layout hides the left sidebar and gives the native viewport 58×11 cells; current managed identity remains visible. These are parsed PTY screens rendered for inspection, not physical-screen or font latency evidence.
+
+Long labels still clip: the one-row Repository header can show its label while wrapping a long path below the row; the compact Adopted status can also lose a long path. Normal Selection details and native cwd/context provide additional identity, and the managed UUID prefix remains visible, but these captures do not establish perfect path visibility at either geometry. This is a documented display limitation, not silently called a successful fit.
+
+Browsing a sidebar candidate and selecting the adopted native owner are separate actions. The native run exposed this distinction when an initial comparison targeted the old sidebar candidate. That attempt is retained and unclaimed. For a retained workspace in another project, open `w`, highlight that workspace and press `f` while the picker is still open. Enter on a retained running owner can attach immediately; Ctrl-] restores dashboard focus. README now describes these actual controls and permits switching among concurrent owners without stopping their peers.
+
+## Crash reservation and physical-transition handoff
+
+The main active-owner crash restored the latest Cobalt Claude segment as
+Interrupted with a conservative same-boot reservation, with no native process
+remaining and no automatic coding restart. That reservation was preserved. An
+authenticated ordinary Shutdown did not complete while it remained reserved;
+the timed-out attempt is retained rather than called a normal-quit pass. The
+zero-coding owner was then attributed through a fresh authenticated Unix
+LOCAL_PEERPID and exact canonical executable/argv/cwd/start identity before
+termination. Saved or text-matched PIDs were never authority. Earlier ordinary
+quit with six native owners is separate successful evidence.
+
+The [physical-transition plan](m2-19-physical-transition-plan.md) is explicitly
+unexecuted. It specifies known original native IDs and a proposed mixed
+running/stopped/archived/removed state across three projects, to be prepared only
+after review/fixes/final integration checks. Its fresh checkpoint must precede
+any user restart request. The cold closeout checkpoint and its same-boot negative
+verification are preparation evidence; unchanged real boot UUID/boottime must
+fail, and do not satisfy C6. The final handoff preserves the private state and
+qualified executable outside `/tmp`; no coding is automatically started by
+restoring an owner. Actual sleep/wake and physical reboot remain open.
+
+## Proof tooling closeout
+
+The repository driver now retains the actually exercised external adaptations:
+initial dashboard focus escape, versioned runner hash, current parsed-cell
+assertions, per-step foreground/terminal observations and honest ENOTTY reporting.
+The strict supplement additionally checks the actual Darwin executable and exact
+NUL-separated argv file operand before a separate editing-key step. Stable dirty
+source is rejected. The reboot verifier binds its own hash, exact previous
+selected workspace/segment/native context (or marks unavailable prior evidence
+unverified), and source-defined reference roles: archive index/prepared trees,
+primary archive/removal/restore commits and creation-base commits. It never
+launches coding, signals a saved PID or substitutes a fixture for a real boot.
+
+The [proof-guard archive](m2-19-proofguard-evidence.tar.gz) retains original
+counterexamples, 18 passing pure regressions, baseline/corrected hashes and the
+earlier [16-case archive](m2-19-proofguard-initial-evidence.tar.gz). The first
+strict ref-role parser passed its narrow pure cases but failed on the real cold
+state because it omitted valid archive `-prepared` trees and creation commit
+refs; that failed actual capture and original parser are preserved. The final
+parser adds those exact source-defined roles with wrong-type/name regressions,
+without relaxing unknown-role rejection. Final verifier SHA-256 is
+`47cec00b410c74fc3745a4a8c645170a8c7c0e66dfe167382348eacf32a1db01`.
+Final cold checkpoints use this verifier; earlier hash-bound checkpoints remain
+earlier evidence. Formatting, diff whitespace and all proof-script AST parsing
+checks also passed for the documentation/tooling closeout. The root integration
+review and final all-target checks remain required.

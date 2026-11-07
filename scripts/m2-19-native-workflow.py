@@ -66,7 +66,7 @@ def main():
         active = [row for row in value["registry"]["workspaces"]
                   if row["id"] not in value["registry"]["archived"]]
         index = next(i for i, row in enumerate(active) if row["id"] == workspace["id"])
-        return [text("w"), text("k" * (len(active)+1)), text("j" * index), key("0d", 1)]
+        return [text("w"), text("k" * (len(active)+1)), text("j" * index), key("0d", 1), key("1d", .3)]
 
     def workspace(name):
         path = os.fsencode(str(args.root / name))
@@ -90,13 +90,20 @@ def main():
                 folder = args.root / name
                 marker = "M2_19_" + name.upper().replace("-", "_")
                 prompt = "Reply exactly " + marker + ". Do not use tools or change files."
-                steps = select(base) + [text("N", 1), key("15"), text("main"), key("09"),
+                if folder.exists():
+                    created = workspace(name)
+                    drive("recover-explicit-first-prompt-"+name, select(created)+[
+                        text("C" if agent == "claude" else "X"), text(prompt), key("0d", 4)])
+                    steps = None
+                else:
+                    steps = select(base) + [text("N", 1), key("15"), text("main"), key("09"),
                       key("15"), text("workspace/m2-19-"+name), key("09"), key("15"),
                       text(str(folder)), key("09"), text(prompt), key("09")]
-                if agent == "codex":
-                    steps += [key("1b5b43")]
-                steps += [key("13", 4), {"capture": "created-and-started", "wait": .5}]
-                value = drive("create-"+name, steps)
+                if steps is not None:
+                    if agent == "codex":
+                        steps += [key("1b5b43")]
+                    steps += [key("13", 4), {"capture": "created-and-started", "wait": .5}]
+                    value = drive("create-"+name, steps)
                 created = workspace(name)
                 value = drive("attach-"+name, select(created)+[key("0d", 3),
                               {"capture": "first-native-frame", "wait": .5}])

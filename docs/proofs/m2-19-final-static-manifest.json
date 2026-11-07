@@ -1,0 +1,130 @@
+{
+  "archive": "m2-19-final-static-evidence.tar.gz",
+  "archive_sha256": "156a997a249352ea6163e57ef8428d7f3e355c99f815112b0fe960017707e12d",
+  "artifacts": {
+    "full-gate-335ba44/335ba44e980f-all-targets-serial-nocapture.log": {
+      "bytes": 73404,
+      "sha256": "7ea91592130369e0b1261347dfa52e9f48ee8709bb1db12a54ec482cff35ed89"
+    },
+    "full-gate-335ba44/after.json": {
+      "bytes": 970,
+      "sha256": "bbd0e4e6bcd8a1474e3f2dcdde24ecd348302c057b0eb1b1437104aea968b543"
+    },
+    "full-gate-335ba44/before.json": {
+      "bytes": 970,
+      "sha256": "bbd0e4e6bcd8a1474e3f2dcdde24ecd348302c057b0eb1b1437104aea968b543"
+    },
+    "full-gate-335ba44/inventory.json": {
+      "bytes": 455,
+      "sha256": "5fbbbcfb8f6e134b176592d6f1b61b13db87bcb3001c4a1fad63b153668339bc"
+    },
+    "full-gate-335ba44/prebuild.jsonl": {
+      "bytes": 107396,
+      "sha256": "0d8c4de16c0e96c2f0af193889633af3c14dfa4531339ec011f5ef65f07da27a"
+    },
+    "full-gate-335ba44/prebuild.stderr": {
+      "bytes": 73,
+      "sha256": "b95194ab24ab7d22012b5e92cdd46b5d16aa049d9a2989f2196d8492650a2fa8"
+    },
+    "full-gate-335ba44/prepare-results.json": {
+      "bytes": 624,
+      "sha256": "58693ac6dc8addc9aef5f8905a58e368b6c2015f68f945251ccee9a70ed2a685"
+    },
+    "full-gate-335ba44/prepare.log": {
+      "bytes": 339,
+      "sha256": "bdba83e72d9cc3354031484104976028df008d733ce506c60d334ad2f80fdb73"
+    },
+    "full-gate-335ba44/removal-captures/remove-160-blocker.txt": {
+      "bytes": 8277,
+      "sha256": "e7dbe1d30965847e3dd0abe56d57951ad3cbee709caa4b42b9eb06aa716ef7e7"
+    },
+    "full-gate-335ba44/removal-captures/remove-160-confirm.txt": {
+      "bytes": 8275,
+      "sha256": "1715666f9206b8b3946034ebadb44fae006d0569ffcce2f317c91db05a94a5af"
+    },
+    "full-gate-335ba44/removal-captures/remove-160-preview.txt": {
+      "bytes": 8270,
+      "sha256": "561b42807610da94d90dd873d76501d189f22b8aa5f211032c3bfb9bd550ef69"
+    },
+    "full-gate-335ba44/removal-captures/remove-160-result.txt": {
+      "bytes": 8275,
+      "sha256": "f1377d5ce3e720215b01d4fe12ab3de16c75966fe51285339c34e914ea6e2829"
+    },
+    "full-gate-335ba44/removal-captures/remove-60-blocker.txt": {
+      "bytes": 1471,
+      "sha256": "f7263ff1edc85444e39ce88cc9a08f4a4d77ae2338213258f265073ff3947ff2"
+    },
+    "full-gate-335ba44/removal-captures/remove-60-confirm.txt": {
+      "bytes": 1469,
+      "sha256": "e43a676b16c74c6a9e724536afd84acd66f0b2a27ebd06fb2418f2808044cbe9"
+    },
+    "full-gate-335ba44/removal-captures/remove-60-preview.txt": {
+      "bytes": 1470,
+      "sha256": "04ced44cde6f9b1e0af7e4c3003675576ef1125f84907f261fe0a1ce35d35d08"
+    },
+    "full-gate-335ba44/removal-captures/remove-60-result.txt": {
+      "bytes": 1470,
+      "sha256": "75b55a647817f5cb1b8632445fa2c44391b8bbec608d30ee59de03e44bcc7e5d"
+    },
+    "full-gate-335ba44/result.json": {
+      "bytes": 536,
+      "sha256": "f49e5495f88ab1ee8ee5a4d7301ed7ca39dca40ad35fe6872632529c939dec27"
+    },
+    "full-gate-335ba44/search-captures/11-keyboard-passage-160x40.txt": {
+      "bytes": 8293,
+      "sha256": "5295a04aaaea2aa063e4efdfeb7e8290e10951a7efc80e1a36443e37f0ea7fa2"
+    },
+    "full-gate-335ba44/search-captures/11-keyboard-passage-60x18.txt": {
+      "bytes": 1446,
+      "sha256": "1b369bbcce7b7aae3ea421a76362260deeeb44b40fa808ed5078133bd0c5fbd6"
+    },
+    "full-gate-335ba44/sustained-capture.jsonl": {
+      "bytes": 757533,
+      "sha256": "b8c93c2453c433c378fdaeab0d2cd2e67cf47a9b74a93e3ff41f14e62913485b"
+    },
+    "full-gate-335ba44/versions.json": {
+      "bytes": 613,
+      "sha256": "7f1b79342d494636dccb161a1b22cc0193030547283fb3f502fea43984bfe8c5"
+    },
+    "installed-editors-a56eee5/actual-vim-pico.log": {
+      "bytes": 199,
+      "sha256": "4608854cf31c42e5b3c5a5b83f9dbefdb6bdbea639f095e769a93527ce76eade"
+    },
+    "installed-editors-a56eee5/after.json": {
+      "bytes": 970,
+      "sha256": "38cb5313ae4c8a7c58db2b4831c371b68f6e5b90fd7fb0def88e90bc66f352a9"
+    },
+    "installed-editors-a56eee5/before.json": {
+      "bytes": 970,
+      "sha256": "38cb5313ae4c8a7c58db2b4831c371b68f6e5b90fd7fb0def88e90bc66f352a9"
+    },
+    "installed-editors-a56eee5/result.json": {
+      "bytes": 296,
+      "sha256": "224192fc086ca5cc3daa3238b5298ee34023029a8ad30de479e6b3912349158e"
+    },
+    "installed-editors-a56eee5/versions.json": {
+      "bytes": 3304,
+      "sha256": "fdfaf5e2d0d4f0fcf03d9b05249b7db20a04d3ac97f508c9faf2ca1ead4c2ed0"
+    },
+    "test-refinement-preparation-a56eee5/inventory.json": {
+      "bytes": 455,
+      "sha256": "5fbbbcfb8f6e134b176592d6f1b61b13db87bcb3001c4a1fad63b153668339bc"
+    },
+    "test-refinement-preparation-a56eee5/prebuild.jsonl": {
+      "bytes": 107396,
+      "sha256": "e27615606d387f38f961b4394a756f23cafbea4a7a515cf85dd658a4e70c9316"
+    },
+    "test-refinement-preparation-a56eee5/prebuild.stderr": {
+      "bytes": 73,
+      "sha256": "ceddc815a481307909e0791f229b4609ad75e093c6300cfccda5aeb20c680eb2"
+    },
+    "test-refinement-preparation-a56eee5/prepare-results.json": {
+      "bytes": 625,
+      "sha256": "0d7deb8cff0e16389a969649ca732875b22961ec05ee090c15b966400b8959cb"
+    },
+    "test-refinement-preparation-a56eee5/prepare.log": {
+      "bytes": 276,
+      "sha256": "c30fd274efdc2fb0e9fd5ae49de7496d5ce81b438d7abb85984628c8da326fde"
+    }
+  }
+}
