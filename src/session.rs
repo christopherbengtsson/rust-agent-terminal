@@ -520,7 +520,7 @@ impl Sessions {
                     result: if state.metadata_pending {
                         None
                     } else {
-                        state.launch_result.clone()
+                        owner.recorded_launch(&state.launch_request)
                     },
                     pending: state.metadata_pending,
                     error: state.error.clone(),
@@ -1130,10 +1130,15 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                 ));
             }
             let command = registry
-                .projects
+                .workspaces
                 .iter()
-                .find(|p| p.id == handoff.record.intent.project)
-                .and_then(|p| p.setup_command.clone());
+                .find(|w| w.task == handoff.record.intent.request)
+                .and_then(|w| w.creation.as_ref())
+                .and_then(|facts| facts.setup.as_ref())
+                .and_then(|policy| match policy {
+                    crate::setup::Policy::Command(command) => Some(command.clone()),
+                    crate::setup::Policy::Disabled => None,
+                });
             setup.accept(handoff, command, &storage);
         }
         setup.advance(&storage);
@@ -1572,7 +1577,9 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             | Request::CreateWorkspace(_)
             | Request::RecoverCreation { .. }) => {
                 let configured = matches!(&request,Request::CreateWorkspace(intent) if registry.projects.iter().any(|p|p.id==intent.project && p.setup_command.is_some()));
+                let repeated = matches!(&request,Request::CreateWorkspace(intent) if creation.view.records.iter().any(|r|r.intent.request==intent.request));
                 if matches!(request, Request::CreateWorkspace(_))
+                    && !repeated
                     && (registry_operation.is_some()
                         || setup.admission_busy()
                         || configured

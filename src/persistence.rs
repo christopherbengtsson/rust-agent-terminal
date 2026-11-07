@@ -834,7 +834,7 @@ impl Store {
         }
         if version < 8 {
             let tx = db.transaction()?;
-            tx.execute_batch("CREATE TABLE IF NOT EXISTS project_setup(project TEXT PRIMARY KEY, command TEXT NOT NULL); CREATE TABLE IF NOT EXISTS workspace_setup(attempt TEXT PRIMARY KEY, record TEXT NOT NULL); PRAGMA user_version=8;")?;
+            tx.execute_batch("CREATE TABLE IF NOT EXISTS project_setup(project TEXT PRIMARY KEY, command TEXT NOT NULL); CREATE TABLE IF NOT EXISTS workspace_setup(attempt TEXT PRIMARY KEY, record TEXT NOT NULL); CREATE TABLE IF NOT EXISTS workspace_setup_policies(request TEXT PRIMARY KEY, command TEXT); PRAGMA user_version=8;")?;
             tx.commit()?;
         }
         if version < 9 {
@@ -842,6 +842,7 @@ impl Store {
             tx.execute_batch("CREATE TABLE resume_selections(request TEXT PRIMARY KEY, workspace TEXT NOT NULL, session TEXT NOT NULL, cancelled INTEGER NOT NULL DEFAULT 0); PRAGMA user_version=9;")?;
             tx.commit()?;
         }
+        db.execute_batch("CREATE TABLE IF NOT EXISTS workspace_setup_policies(request TEXT PRIMARY KEY, command TEXT);")?;
         let mut store = Self {
             search_job: None,
             index_cursor: 0,
@@ -1386,6 +1387,7 @@ impl Store {
                 |row| row.get(0),
             )
             .optional()?;
+        let new_intent = previous.is_none();
         if let Some(previous) = previous {
             let previous: crate::creation::Record = serde_json::from_str(&previous)?;
             if serde_json::to_string(&previous.intent)? != serde_json::to_string(&record.intent)?
@@ -1398,6 +1400,9 @@ impl Store {
         })? >= 256
         {
             return Err("Creation receipt capacity reached; retained outcomes preserved".into());
+        }
+        if new_intent {
+            tx.execute("INSERT INTO workspace_setup_policies VALUES(?1,(SELECT command FROM project_setup WHERE project=?2))",rusqlite::params![record.intent.request,record.intent.project])?;
         }
         if let Some(checkout) = &record.checkout {
             let path = crate::session::path_bytes(&checkout.root);
@@ -1445,12 +1450,31 @@ impl Store {
         tx.commit()?;
         crate::registry::snapshot(&self.db, None)
     }
-    fn setups(&self) -> Result<Vec<crate::setup::Record>> {
-        self.db
+    fn setups(&mut self) -> Result<Vec<crate::setup::Record>> {
+        let mut records: Vec<crate::setup::Record> = self
+            .db
             .prepare("SELECT record FROM workspace_setup ORDER BY rowid LIMIT 32")?
             .query_map([], |r| r.get::<_, String>(0))?
             .map(|j| Ok(serde_json::from_str(&j?)?))
-            .collect()
+            .collect::<Result<_>>()?;
+        let obligations=self.db.prepare("SELECT c.record,p.command FROM workspace_setup_policies p JOIN workspace_creations c ON c.id=p.request WHERE p.command IS NOT NULL ORDER BY c.rowid LIMIT 256")?.query_map([],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?)))?.collect::<std::result::Result<Vec<_>,_>>()?;
+        for (json, command) in obligations {
+            let creation: crate::creation::Record = serde_json::from_str(&json)?;
+            if creation.phase != crate::creation::Phase::Created
+                || records
+                    .iter()
+                    .any(|r| r.creation.intent.request == creation.intent.request)
+            {
+                continue;
+            }
+            if records.len() >= 32 {
+                return Err("Setup receipt capacity reached while recovering a retained obligation; no execution admitted".into());
+            }
+            let record=crate::setup::Record {attempt:uuid::Uuid::new_v4().to_string(),creation,command,phase:crate::setup::Phase::Failed,execution:crate::recovery::Execution::prepared()?,cleanup_confirmed:true,output:String::new(),discarded:0,message:"Setup never started: creation completed before any setup Prepared receipt committed. Explicit Retry or Continue without setup required; coding stays stopped".into()};
+            self.save_setup(&record)?;
+            records.push(record);
+        }
+        Ok(records)
     }
     fn save_setup(&mut self, record: &crate::setup::Record) -> Result<()> {
         crate::setup::validate_command(&Some(record.command.clone()))?;

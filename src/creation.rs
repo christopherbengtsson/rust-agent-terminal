@@ -48,6 +48,8 @@ pub struct Record {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Facts {
+    #[serde(default)]
+    pub setup: Option<crate::setup::Policy>,
     pub request: String,
     pub original_base_ref: String,
     pub original_base_commit: String,
