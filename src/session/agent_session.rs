@@ -1020,6 +1020,9 @@ impl AgentSession {
                         let identity = crate::events::SessionIdentity { task: self.task_identity.clone(), session, request: request.clone() };
                         self.state.identity = Some(identity.label());
                         self.state.session_identity = Some(identity);
+                        // A prior segment's late status receipt cannot rewrite the new identity.
+                        self.execution.monitor = None;
+                        self.execution.codex_monitor = None;
                         if let Some(selected) = &selected {
                             self.state.agent = Some(match selected.agent { crate::events::NativeAgent::Claude => "Claude Code", crate::events::NativeAgent::Codex => "Codex CLI" }.into());
                             self.state.native_conversation = Some(selected.native.clone());

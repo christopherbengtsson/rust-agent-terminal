@@ -8965,3 +8965,141 @@ fn configured_setup_empty_owner_stop_follows_original_handoff_but_never_later_co
     );
     f.finish();
 }
+
+#[test]
+fn selected_resume_uses_original_segment_tool_and_native_identity() {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = Fixture::new();
+    let tools = fixture.temp.path().join("selected-tools");
+    std::fs::create_dir(&tools).unwrap();
+    let python = Command::new("which").arg("python3").output().unwrap();
+    let python = String::from_utf8(python.stdout).unwrap();
+    let script = r#"import sys,os,json,re,shlex,subprocess,uuid
+args=sys.argv[1:]
+tool=os.path.basename(sys.argv[0])
+resumed=('resume' in args or '--resume' in args)
+if resumed: native=args[args.index('resume' if tool=='codex' else '--resume')+1]
+elif tool=='claude': native=args[args.index('--session-id')+1]
+else: native=str(uuid.uuid4())
+with open(sys.argv[0]+'.argv','a') as f: f.write(json.dumps({'args':args,'native':native,'cwd':os.getcwd()})+'\n')
+if tool=='codex':
+ for arg in args:
+  if arg.startswith('hooks.SessionStart='):
+   helper=json.loads(re.search(r'command=("(?:[^"\\]|\\.)*")',arg).group(1))
+   subprocess.run(shlex.split(helper),input=json.dumps({'hook_event_name':'SessionStart','session_id':native}).encode(),check=True)
+print('selected-native-ready',flush=True)
+for line in sys.stdin:
+ if line.strip()=='exit': break
+ print('context '+line.strip(),flush=True)
+"#;
+    for tool in ["claude", "codex"] {
+        let file = tools.join(tool);
+        std::fs::write(&file, format!("#!{}\n{script}", python.trim())).unwrap();
+        std::fs::set_permissions(file, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let path = std::env::join_paths(
+        std::iter::once(tools.clone())
+            .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+    )
+    .unwrap();
+    let mut dashboard =
+        Dashboard::open_with_path(&fixture.repository, &fixture.state(), Some(&path));
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted");
+    dashboard.kill();
+    let mut control = Controller::connect(&fixture);
+    let mut originals = Vec::new();
+    for (n, tool) in ["LaunchClaude", "LaunchCodex", "LaunchClaude"]
+        .into_iter()
+        .enumerate()
+    {
+        control.request(serde_json::json!({tool: format!("selected-original-{n}")}));
+        let running = cleanup_wait15(&mut control, |s| {
+            s["lifecycle"] == "Running"
+                && s["native_conversation"].is_string()
+                && s["screen"]
+                    .as_str()
+                    .unwrap_or("")
+                    .contains("selected-native-ready")
+        });
+        originals.push((
+            running["session_identity"]["session"]
+                .as_str()
+                .unwrap()
+                .to_owned(),
+            running["native_conversation"].clone(),
+            running["agent"].clone(),
+        ));
+        control.request(serde_json::json!({"Input":b"exit\r"}));
+        cleanup_wait15(&mut control, |s| {
+            s["lifecycle"] == "Exited" && s["metadata_pending"] == false
+        });
+        let deadline = Instant::now() + Duration::from_secs(8);
+        while cleanup_page15(&mut control)["cleanup"]["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["eligible"] != true)
+        {
+            assert!(Instant::now() < deadline);
+        }
+    }
+    let state = control.request(serde_json::json!("Screen"));
+    let workspace = state["registry"]["workspaces"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    for (n, index) in [1usize, 0, 2, 1].into_iter().enumerate() {
+        let (source, native, agent) = &originals[index];
+        let request = format!("selected-resume-{n}");
+        control.request(serde_json::json!({"ResumeSelected":{"request":request,"workspace":workspace,"session":source}}));
+        let running = cleanup_wait15(&mut control, |s| {
+            s["lifecycle"] == "Running" && s["metadata_pending"] == false
+        });
+        assert_eq!(&running["native_conversation"], native);
+        assert_eq!(&running["agent"], agent);
+        assert_ne!(
+            running["session_identity"]["session"].as_str().unwrap(),
+            source
+        );
+        assert_eq!(
+            running["session_identity"]["task"],
+            state["session_identity"]["task"]
+        );
+        // A changed source with the same request returns the recorded execution.
+        let replay=control.request(serde_json::json!({"ResumeSelected":{"request":request,"workspace":workspace,"session":originals[2].0}}));
+        assert_eq!(replay["session_identity"], running["session_identity"]);
+        control.request(serde_json::json!({"Input":b"exit\r"}));
+        cleanup_wait15(&mut control, |s| {
+            s["lifecycle"] == "Exited" && s["metadata_pending"] == false
+        });
+        let deadline = Instant::now() + Duration::from_secs(8);
+        while cleanup_page15(&mut control)["cleanup"]["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["eligible"] != true)
+        {
+            assert!(Instant::now() < deadline);
+        }
+    }
+    for tool in ["claude", "codex"] {
+        let log = std::fs::read_to_string(tools.join(format!("{tool}.argv"))).unwrap();
+        let records = log
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(records.len(), if tool == "claude" { 4 } else { 3 });
+        for record in records {
+            assert_eq!(record["cwd"], fixture.repository.to_str().unwrap());
+            let args = record["args"].as_array().unwrap();
+            if args.iter().any(|v| v == "resume" || v == "--resume") {
+                assert!(!args.iter().any(|v| v == "--session-id" || v == "--"));
+            }
+        }
+    }
+    assert_no_owned_coding(&fixture);
+    control.request(serde_json::json!("Shutdown"));
+    cleanup_wait15(&mut control, |s| s["stopped"] == true);
+}
