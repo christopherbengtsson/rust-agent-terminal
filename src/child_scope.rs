@@ -44,8 +44,7 @@ impl Scope {
         );
         let weak = Arc::downgrade(&scope.0);
         thread::spawn(move || {
-            loop {
-                let Some(state) = weak.upgrade() else { break };
+            while let Some(state) = weak.upgrade() {
                 Self(state.clone(), pid).refresh();
                 drop(state);
                 thread::sleep(Duration::from_millis(100));

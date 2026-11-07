@@ -243,6 +243,9 @@ See the [first-slice evidence](docs/proofs/01-scripted-pty.md) and
 
 ## Development
 
+For Linux cloud setup, agent prerequisites and repeatable checks, see
+[cloud development](docs/cloud-development.md).
+
 ```sh
 cargo build --locked
 cargo fmt --all -- --check

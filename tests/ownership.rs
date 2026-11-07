@@ -137,7 +137,12 @@ struct Fixture {
 impl Fixture {
     fn new() -> Self {
         let scenario = SCENARIO.lock().unwrap_or_else(|error| error.into_inner());
-        let temp = tempfile::tempdir_in("/private/tmp").unwrap();
+        let root = if cfg!(target_os = "macos") {
+            "/private/tmp"
+        } else {
+            "/tmp"
+        };
+        let temp = tempfile::tempdir_in(root).unwrap();
         let repository = temp.path().join("checkout with spaces");
         std::fs::create_dir(&repository).unwrap();
         assert!(

@@ -5,6 +5,9 @@ Read the [vision](VISION.md), [product requirements](PRODUCT.md),
 
 Use the stable Rust toolchain and Git. From the repository root:
 
+For Linux cloud prerequisites and repeatable setup/check commands, read
+[cloud development](docs/cloud-development.md).
+
 ```sh
 cargo build --locked
 cargo run --locked -- /path/to/repository
