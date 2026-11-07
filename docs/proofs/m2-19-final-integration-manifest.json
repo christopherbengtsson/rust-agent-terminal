@@ -1,0 +1,119 @@
+{
+  "schema": 1,
+  "source": "59fed09a8c13505b68d93dd10e5612419a3d08d5",
+  "production_src_tree": "b1c2ad000e1e1bcc269f116b1a9f6a5a67f84f50",
+  "product_sha256": "b50530e0e859eb23fd7c61d4442d5fc8dd47c11aaffe39615897be76df460faf",
+  "result": {
+    "argv": [
+      "cargo",
+      "+stable",
+      "test",
+      "--locked",
+      "--all-targets",
+      "--",
+      "--test-threads=1",
+      "--nocapture"
+    ],
+    "exit": 0,
+    "started": 1794025521.0645518,
+    "finished": 1794026334.613036,
+    "evidence_environment": {
+      "RAT_RESOURCE_EVIDENCE": "/Users/christopherbengtsson/.rat19-final-gate-59fed09/sustained-capture.jsonl",
+      "RAT_SEARCH_EVIDENCE": "/Users/christopherbengtsson/.rat19-final-gate-59fed09/search-captures",
+      "RAT_REMOVAL_EVIDENCE": "/Users/christopherbengtsson/.rat19-final-gate-59fed09/removal-captures"
+    },
+    "boundary_stable": true
+  },
+  "tests": {
+    "passed": 278,
+    "ignored": 8,
+    "failed": 0
+  },
+  "files": {
+    "59fed09a8c13-all-targets-serial-nocapture.log": {
+      "bytes": 73935,
+      "sha256": "bf58d871050a63a1f8363c1c19681f81b63d24c40d679690d72d7399ab847153"
+    },
+    "after.json": {
+      "bytes": 1186,
+      "sha256": "5cc0bade1963fd9a7d4f261ecf499d2ca7204b3f5cf800e514b9ece0d0205ff8"
+    },
+    "before.json": {
+      "bytes": 1186,
+      "sha256": "5cc0bade1963fd9a7d4f261ecf499d2ca7204b3f5cf800e514b9ece0d0205ff8"
+    },
+    "inventory.json": {
+      "bytes": 671,
+      "sha256": "b696a8eb4d3d1a1930b219e19ee44d134fa36f0065b788946b1c47b75f3b2bcd"
+    },
+    "prebuild.jsonl": {
+      "bytes": 116869,
+      "sha256": "3765df07d302af6c214e13609a9451b0272e0898d3ac7241c833e71869b9e781"
+    },
+    "prebuild.stderr": {
+      "bytes": 172,
+      "sha256": "60c300dde67c2cb23755b028a602f100b827187072ecc56a786affb1bccb10ef"
+    },
+    "prepare-results.json": {
+      "bytes": 624,
+      "sha256": "6701c3048feb534917ae76c86f048e1e6fee807e25dbcf4d92d29b844124c6c0"
+    },
+    "prepare.log": {
+      "bytes": 276,
+      "sha256": "c30fd274efdc2fb0e9fd5ae49de7496d5ce81b438d7abb85984628c8da326fde"
+    },
+    "removal-captures/remove-160-blocker.txt": {
+      "bytes": 8277,
+      "sha256": "40cd5e190fd2e5172c8c0ecf4c202b403a87e5c6a90bd336403c7b8b6cb84905"
+    },
+    "removal-captures/remove-160-confirm.txt": {
+      "bytes": 8275,
+      "sha256": "66780d273df965a51e98f98386f93d36ac1c6422d93f6942252af2c17815c868"
+    },
+    "removal-captures/remove-160-preview.txt": {
+      "bytes": 8270,
+      "sha256": "6ec37ff8cbc31228f43f68809f59434d34036e40a6a9b70e5afdd75411a2e5ed"
+    },
+    "removal-captures/remove-160-result.txt": {
+      "bytes": 8275,
+      "sha256": "cd10dd75dea9f7214b0c0eb98baf31c46facc4b98409651c99e8c8a5b578c447"
+    },
+    "removal-captures/remove-60-blocker.txt": {
+      "bytes": 1471,
+      "sha256": "5512c08695ccf409549b14963730731117c7a695f113c741cf4bd1b1d87f99f5"
+    },
+    "removal-captures/remove-60-confirm.txt": {
+      "bytes": 1469,
+      "sha256": "d32a4a16ca5826a6dba2e52ea4ffa724a9f563ca0b8d4327ed107f2250facdc1"
+    },
+    "removal-captures/remove-60-preview.txt": {
+      "bytes": 1470,
+      "sha256": "0c6b6ce4188ede56391ad6dff099e393d1f0f9f3305d94924a34ad9f84690f8a"
+    },
+    "removal-captures/remove-60-result.txt": {
+      "bytes": 1470,
+      "sha256": "735f7a97b2b901c00f4e1b27c4f3bb907edd0e4021f4d161cf87fc7962d9ea89"
+    },
+    "result.json": {
+      "bytes": 598,
+      "sha256": "563060931a532544a0d920e4d41079aa14e89cf6b6924366d120c0161c5c5583"
+    },
+    "search-captures/11-keyboard-passage-160x40.txt": {
+      "bytes": 8293,
+      "sha256": "63994c5486ec0672b0f1d53e7ebaef4b49e4574e097ef57d1645e0cb618a29b9"
+    },
+    "search-captures/11-keyboard-passage-60x18.txt": {
+      "bytes": 1446,
+      "sha256": "b1435a974f33dc00effac12da72725f390024ec0ce592a07001d683d80610477"
+    },
+    "sustained-capture.jsonl": {
+      "bytes": 877171,
+      "sha256": "87cfdc32428468291050accbde3637c65581790990682ee29b6e95e3d8e6fac9"
+    },
+    "versions.json": {
+      "bytes": 613,
+      "sha256": "7f1b79342d494636dccb161a1b22cc0193030547283fb3f502fea43984bfe8c5"
+    }
+  },
+  "archive_sha256": "ef32541e533aff7eb5a05a4dddac8d7cd127e9b7066f08f9dd824791ec7e7c47"
+}

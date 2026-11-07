@@ -248,3 +248,41 @@ prebuild pass; the root's final frozen serial all-target suite remains required.
 Actual sleep/wake, physical reboot and C6 remain open; ticket 19/spec stay
 **Resolved: no**. The linked record and archive preserve the precise source,
 binary, workload and failure boundaries.
+
+## Final reviewed integration gate
+
+The two independent reviews at `e3cf58e` found no confirmed documented-standard
+violation, one optional duplicated-presentation finding, and two spec findings:
+completed archive/removal refusal guidance and editor positioning for new files
+and renamed/abbreviated sections. The single fresh fixer addressed all three;
+independent read-only validators confirmed the committed production delta at
+`2523e947`. The [review-fix record](m2-19-review-fixes.md) retains red/green
+regressions, actual current-source Vim/Pico checks, the copied-state refusal,
+corrected six-owner measurements and the failed hot-journal-copy attempt.
+
+After merge and scoped checks, final integration source
+`59fed09a8c13505b68d93dd10e5612419a3d08d5` was clean and frozen. Stable locked build,
+formatting, warnings-denied all-target Clippy and all-target prebuild passed.
+The serial locked all-target runtime command exited **0** in **813.55 seconds**:
+main 159 passed/4 ignored, editor 1 passed/1 ignored, ownership 115 passed/3 ignored,
+scripted session 1 passed and screen 2 passed: **278 passed, eight intentional
+ignores, zero failures**. Those explicit qualifications include installed editors
+and six-owner measurements exercised separately at their recorded sources.
+All source and every product/test executable hash remained unchanged throughout
+the runtime interval, without overlapping builds, source edits or native/resource
+workloads. Production src tree is `b1c2ad000e1e1bcc269f116b1a9f6a5a67f84f50`;
+this worktree's product SHA-256 is
+`b50530e0e859eb23fd7c61d4442d5fc8dd47c11aaffe39615897be76df460faf`.
+
+The [final integration archive](m2-19-final-integration-evidence.tar.gz) and
+[per-file manifest](m2-19-final-integration-manifest.json) retain preparation,
+complete runtime logs, versions, before/after boundaries, sustained-capture
+telemetry, and actual search/removal terminal captures. This later clean pass
+does not overwrite earlier failed aggregates or silently move the exact a56
+native observations to the new binary; the review-fix delta has its own evidence.
+
+This fulfills the final code-review/runtime checkpoint. **Ticket 19, C6 and
+milestone acceptance remain open** pending actual sleep/wake and explicitly
+user-authorized physical reboot. The new mixed-state preparation is a separate
+phase after this gate, with fresh source/executable/state pins; neither the cold
+closeout nor a same-boot negative verifier is a physical-transition pass.
