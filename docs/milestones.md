@@ -3,6 +3,10 @@
 The [product specification](../PRODUCT.md) defines the first release. These are
 engineering checkpoints within that release, not a reduction of its requirements.
 
+Use the [testing and opt-in qualification policy](testing.md) when planning each
+milestone's validation. Select required supplemental checks for affected features
+and record anything not rerun; ignored tests do not count as passing evidence.
+
 The [dashboard image](images/conductor-dashboard-v3.jpg) is the UI target throughout
 implementation. Shape each usable UI slice toward its composition and visual
 direction, showing real functionality and honest empty/unavailable states as
@@ -82,12 +86,21 @@ own-PR feedback/merging, setup, and notifications follow this proof.
 ## Milestone 2 — coding coordination
 
 Following the native-session proof, complete multi-project navigation, independent
-task and worktree creation, task/history search, native resume, archival and safe
-worktree removal, and working/whole-task diffs with external-editor return.
+workspace and worktree creation, workspace/history search, native resume, archive
+and safe folder removal, and Working/Whole workspace diffs with external-editor return.
 
 Acceptance: complete C1–C7, including real macOS checks with both supported tools.
 Persistence and necessary setup arrive with the first feature that needs them;
 they are not deferred to release validation.
+
+Tickets 01–19 are resolved for the declared macOS coding-only scope. The final
+reviewed integration passed stable locked build/format/Clippy and 278 tests
+(eight intentional ignores), six-owner measurement, real six-native workflow,
+installed editors, archive/removal recovery and actual user-performed sleep/wake
+and reboot. Owner-only reboot restore started no coding; explicit original-ID
+recalls and cold cleanup passed. See the [qualification record](proofs/m2-19-qualification.md)
+and [actual reboot evidence](proofs/m2-19-reboot.md). Version, layout, indexing and
+external-Git limits remain explicit; later combined release gates are unclaimed.
 
 Begin with the prerequisites identified from the completed session proof:
 retained project/workspace/session records and migration, explicitly targeted

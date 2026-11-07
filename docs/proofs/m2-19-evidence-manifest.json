@@ -1,0 +1,54 @@
+{
+  "scope": "ticket19 non-physical qualification evidence; unresolved real sleep/wake, physical reboot and final integration review/checks",
+  "clean_full_aggregate_source": "335ba44e980f2e448f86bafe85aa4bfac82b1e5d",
+  "measurement_native_source": "a56eee5b25196f236969b5f2051e3d85707f3e0d",
+  "production_src_tree": "33cc9a17fffb6b72b4ede4dc537f377d6be58bd6",
+  "product_sha256": "89382b1a23124461fbec2bd0944e4b012cfb8d7f056990119a6a02a777569154",
+  "native_root": "/Users/christopherbengtsson/.rat19-proof-a56eee5",
+  "persistent_source": "/Users/christopherbengtsson/.rat19-source-a56eee5",
+  "native_runtime": "cold; no native/helper/supervisor processes remain",
+  "reserved_interrupted_managed": "ebe8ec5a-f329-4ff3-8eb6-a19a849db98b",
+  "final_verifier_sha256": "47cec00b410c74fc3745a4a8c645170a8c7c0e66dfe167382348eacf32a1db01",
+  "final_cold_capture": "final-reviewed-v2-cold-capture.json",
+  "sameboot_negative": "final-reviewed-v2-sameboot-negative.json",
+  "resolved": false,
+  "C6_claimed": false,
+  "archives": {
+    "m2-19-claude319-evidence.tar.gz": {
+      "bytes": 1204991,
+      "sha256": "351f2c3776802203ebc453f94bbcebdfb688a0a23559234caca9a35258f98cb5"
+    },
+    "m2-19-correction-evidence.tar.gz": {
+      "bytes": 9792,
+      "sha256": "560377c1c7f412bd5704023577e663c7ce029a8fa97ac76429fd64615403934d"
+    },
+    "m2-19-final-static-evidence.tar.gz": {
+      "bytes": 95702,
+      "sha256": "156a997a249352ea6163e57ef8428d7f3e355c99f815112b0fe960017707e12d"
+    },
+    "m2-19-measure-current-owner-evidence.tar.gz": {
+      "bytes": 1264313,
+      "sha256": "b8ba17de64ceee41111f88ab26628906e6599122bfaf0388a312cae7397f9951"
+    },
+    "m2-19-measure-six-owners-evidence.tar.gz": {
+      "bytes": 1457352,
+      "sha256": "3951401fa9a8744e5a3a8c36fae6adc64d7735fcad0a85ed7546aa4aaee0f172"
+    },
+    "m2-19-native-evidence.tar.gz": {
+      "bytes": 8263056,
+      "sha256": "1325e1781a3cb1782424136b24748a198e133785f767059698d8d4f31c249d77"
+    },
+    "m2-19-preflight-evidence.tar.gz": {
+      "bytes": 76770,
+      "sha256": "e60d342d5b1183edfa33dc863ea2bc1e37cb4db0e697313d2aaa45d6633076e3"
+    },
+    "m2-19-proofguard-evidence.tar.gz": {
+      "bytes": 41126,
+      "sha256": "5db3843d9618e858eba2e4b4ce3096c90b1161a6b8695b041a30c38eb75493cf"
+    },
+    "m2-19-proofguard-initial-evidence.tar.gz": {
+      "bytes": 30253,
+      "sha256": "3102f70709965e55b40bda1217823b95c2e1bf16ed3d72e785bf820246c41c04"
+    }
+  }
+}

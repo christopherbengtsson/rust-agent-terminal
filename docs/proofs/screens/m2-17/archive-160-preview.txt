@@ -1,0 +1,40 @@
+┌ Reviews ───────────────────────────────────────────┐┌ Session · Focus: dashboard · Process: Idle · semantic status: unknown ─────────────────────────────────┐
+│Unavailable · milestone 1                           ││Workspace 9aca9d99                                                                                      │
+└────────────────────────────────────────────────────┘│Enter: Stop, save and archive                                                                           │
+┌ Agent terminal · Worktrees ────────────────────────┐│Delete local branch on archive: on · b toggle                                                           │
+│Repository: /private/tmp/.tmp3SjDYg/checkout with   ││Target: refs/heads/main                                                                                 │
+└────────────────────────────────────────────────────┘│Tracked + new nonignored files become a local Archive checkpoint, not pushed. Ignored files remain in   │
+┌ Project / worktrees (1) ───────────────────────────┐│the folder, excluded from saving. Chats and folder stay. Original staged content has a separate recovery│
+│> └ main  /private/tmp/.tmp3SjDYg/checkout with spac││tree.                                                                                                   │
+│    └ adopted · c/x start · C/X prompt · R rename   ││Request 012c98bb-d3e9-4a19-ac66-2d87281cc3aa                                                            │
+│                                                    ││                                                                                                        │
+│                                                    ││Enter confirms/retries same request · z cancels archive · n new snapshot                                │
+│                                                    ││Esc dismisses (operation continues) · j/k scroll · q quit/stop · d detach                               │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+└────────────────────────────────────────────────────┘│                                                                                                        │
+┌ Selection ─────────────────────────────────────────┐│                                                                                                        │
+│Path: /private/tmp/.tmp3SjDYg/checkout with spaces  ││                                                                                                        │
+│Branch: main  HEAD:                                 ││                                                                                                        │
+│5bb0b39aa5f71925b7d6081ea271afb5167801b2            ││                                                                                                        │
+│                                                    ││                                                                                                        │
+└────────────────────────────────────────────────────┘└────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌ Status · semantic status: unknown ·  ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│Adopted: /private/tmp/.tmp3SjDYg/checkout with spaces · ready: c Claude / x Codex / l fixture                                                                 │
+│History: metadata committed · durable bytes 0                                                                                                                 │
+│Evidence: unavailable ·                                                                                                                                       │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+Enter confirm/retry · z cancel · Esc dismiss                                                                                                                    

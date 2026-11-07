@@ -13,6 +13,14 @@ explicit native recovery are implemented. Native status has bounded per-version
 evidence; GitHub workflows remain unavailable. The first release targets macOS;
 fixture tests do not establish native-agent compatibility.
 
+Local multi-project coordination, independent workspace creation/setup, retained
+search, selected native resume, Working/Whole workspace diffs, external editors,
+archive recovery, branch cleanup and separate folder removal are implemented.
+The [Milestone 2 qualification record](docs/proofs/m2-19-qualification.md) records
+completed C1–C7 coding-only checks for its declared macOS/tool/workload scope,
+including user-performed sleep/wake and physical reboot recovery. Native version
+limits and later GitHub/reviewer/notification release gates remain explicit.
+
 The [integrated Milestone 1 evidence](docs/proofs/18-milestone-evidence.md) records
 exact native versions, measured capacity and limits. The discovered default
 Codex foreground-subprocess Stop failure was fixed and real Stop/quit retests
@@ -36,23 +44,113 @@ it at any directory inside a repository or one of its linked worktrees.
 Discovery reads Git metadata; it does not create worktrees or start agents.
 Errors appear in the dashboard, where you can retry or quit.
 
+Project and workspace identities survive restart, branch/name changes and missing
+folders. Canonical Git common directories deduplicate project aliases; linked
+checkouts retain distinct workspace identities. Re-adoption selects retained work.
+Legacy tasks whose repository/path was never recorded appear under Unknown
+project with checkout unknown; the dashboard does not infer a path from display
+text. Workspace history remains readable when its checkout is unavailable.
+Adding, selecting, discovering and re-adopting never start an agent. The adopted native session remains separate from browsing. Select another retained
+workspace to switch owners while coding in other workspaces continues; one active
+managed coding session is allowed per canonical worktree.
+The workspace picker temporarily occupies the session pane, including in small
+terminals; normal navigation retains Reviews above the worktree sidebar.
+
+
 | Key | Action |
 | --- | --- |
 | `j` / Down | Select next worktree |
 | `k` / Up | Select previous worktree |
 | `r` | Refresh worktrees in the background |
+| `f` | Inspect the selected retained workspace’s Working diff; in the worktree list, adopt an unknown checkout first |
+| `w` | Open retained projects/workspaces; available in small terminals |
+| `A` | Enter an existing local repository path and register it without adopting or starting coding |
+| `U` | Edit optional project setup shell command; Enter saves, empty disables, Ctrl-U clears, Esc cancels |
+| `T` / `Y` / `I` in creation receipt | Retry setup / Continue without setup (launch effect shown) / informed reconciliation or retry after uncertainty |
+| `N` | Create an independent workspace for the selected registered project; Tab edits base/branch/folder/prompt/agent, Left/Right changes agent |
+| Enter / Ctrl-S in creation | Create without starting / Create and start the chosen native agent |
+| `O`, `[` / `]` in creation receipt | Open creation receipts / select the original operation by stable identity |
+| `L` / `G` / `Z` in creation receipt | Explicit pinned local fallback after fetch failure / query or recover without starting / cancel pending creation |
+| `j` / `k`, `[` / `]` in workspace picker | Select a workspace or jump between projects |
+| Enter / `a` / `h` in workspace picker | Discover selected project or select its retained workspace (a running owner can attach immediately) / explicitly adopt selected checkout / read its latest retained session |
+| `w` / Esc in workspace picker | Return to the native session pane without changing execution |
 | `a` | Explicitly adopt the selected usable checkout |
+| `C` / `X` | Enter an optional first prompt, then Enter explicitly starts Claude / Codex; Esc cancels |
+| `R` | Edit the selected workspace name; Enter saves, Ctrl-U clears, Esc cancels |
 | `c` | Start a new Claude Code conversation in the adopted checkout (experimental) |
 | `x` | Start a new Codex CLI conversation with `--no-daemon` (experimental) |
 | `v` | Explicitly resume the latest managed native conversation using its saved native ID |
 | `l` | Launch the scripted PTY fixture in the adopted checkout |
-| Enter | Attach to the existing managed session |
+| Enter | Attach to the current adopted managed session; sidebar browsing alone does not switch it |
 | Ctrl-] | Return from attached focus to dashboard navigation |
 | `s` | In dashboard focus, stop the managed native/fixture session and keep the dashboard open |
 | `g` | Inspect history cleanup; `j`/`k` select, `n`/`p` page, Enter preview, `D` confirm selected deletion, Esc cancel/back |
 | `y` | Retry history storage after repair; the sole writer retains pending bytes |
 | `d` | In dashboard focus, detach and exit while preserving execution |
 | `q` / Esc / Ctrl-C | In dashboard focus, request supervisor shutdown and quit after confirmed stop |
+
+Working inspection always opens a fresh read-only snapshot of staged, unstaged
+and new files. `j`/`k` selects changed files; arrows scroll content, Page Up/Down
+moves eight lines, and Home returns to the start. `r` refreshes while preserving
+the selected file/context where available; `f` or Esc returns. Workspace,
+checkout, request and capture time identify the snapshot: it is not a live or
+atomic view of files an agent can still change. Stop, quit and detach remain
+available. Binary, conflict, submodule, missing/unsupported and oversized content
+have explicit explanations. Inspection neither changes the index nor runs
+repository-defined external diff, text conversion or fsmonitor programs.
+
+To inspect a retained workspace in another project, open `w`, highlight it and
+press `f` while the picker remains open. Outside the picker, `f` can use the
+browsed sidebar candidate. If selecting a running owner attaches immediately,
+Ctrl-] returns to dashboard navigation.
+
+Within inspection, `w` explicitly switches between Working and Whole workspace.
+Whole workspace compares the common ancestor of the current HEAD and the selected
+local base with current files, including earlier commits, staged/unstaged changes,
+and new files. `b` selects a full local ref such as `refs/heads/main` or
+`refs/remotes/origin/main`; Enter durably saves that base and compares, Esc cancels.
+The selected base ref and its commit are retained separately from the current
+branch. Ref movement uses the new local tip and labels the original selection;
+branch, HEAD, actual base tip and common ancestor identify the snapshot. No fetch
+runs during inspection. Missing bases, unrelated history and multiple common
+ancestors require an explicit related base choice. Every new inspection still
+opens Working.
+
+Inside either comparison, `e` opens a fresh **full comparison inspection** in the
+configured editor. The owner generates bounded content for every inventoried
+file, identifies HEAD/base/common ancestor where applicable, and labels binary,
+conflict, oversized or omitted content. The dashboard materializes a private,
+read-only `.diff` outside the checkout. That artifact stays unchanged while open;
+`e` again captures fresh content. The current selected file is positioned in the
+artifact where supported.
+
+`o` opens the selected **live source file** for editing; `E` opens the live
+workspace directory from dashboard navigation or inspection. These files are
+shared with the active agent: saving changes the workspace. The owner checks the
+retained checkout identity and returns only an existing regular source file within
+it. Deleted/missing files remain inspectable through `e`; source editing never
+substitutes a fabricated filename. Vim positions source at the new-side hunk
+nearest the visible diff line. This is a local-host source editing capability;
+remote source editing is not implemented.
+
+Vim is the default. Configure an executable and literal argument list with
+`RAT_EDITOR_JSON`, for example:
+
+```sh
+RAT_EDITOR_JSON='{"executable":"/usr/bin/vim","arguments":["-u","NONE"],"position":"vim"}' cargo run --locked -- /path/to/repository
+RAT_EDITOR_JSON='{"executable":"/usr/bin/pico","arguments":[],"position":"plus"}' cargo run --locked -- /path/to/repository
+```
+
+`position` is `vim` (line position and read-only inspection options), `plus`
+(`+line`), or `none` (the default for custom configurations). Paths are absolute
+argv operands; no shell parses executable, arguments, or paths. GUI editors must
+have a wait argument configured so dashboard ownership returns after editing,
+for example `arguments: ["--wait"]` for an editor supporting that option.
+Terminal ownership is released while the editor runs and reacquired after success,
+nonzero exit, or spawn failure. Selection, focus, history and diff context remain
+in memory, the dashboard redraws at the actual terminal size, and agents continue
+in the supervisor. Editor errors appear in the footer; the next key restores the
+usual keyboard help.
 
 In attached focus, UTF-8 characters, Ctrl-C, legacy control/Alt shortcuts,
 arrows, navigation keys, F1–F12 and Shift-Tab reach the native/fixture PTY. The pane and
@@ -154,6 +252,8 @@ cargo test --locked --all-targets
 
 CI runs these checks on pull requests on macOS and Linux. Tests create isolated
 temporary repositories and do not require agent accounts or GitHub access.
+See [testing and opt-in qualification](docs/testing.md) for the eight ignored
+tests, their prerequisites, and the checks future milestones must select.
 
 Claude Code launch uses `claude` from the supervisor's inherited PATH and the
 existing native login. Install Claude Code and run `claude auth login` in your
@@ -192,12 +292,146 @@ See [the versioned status proof](docs/proofs/12-codex-status.md) for the native
 scenarios and conservative limits.
 
 Readable history is independent of a live child, native resume, and the checkout.
-In dashboard focus press `h` to open/close retained history, `n`/`p` for older/newer
-sessions, `[`/`]` for byte pages, and `j`/`k` to scroll the current page. History
-shows chronological captured output; carriage returns and escape controls appear
-as printable escapes, including text erased by redraws or alternate screens.
+In dashboard focus press `h` to open/close the current session’s retained history.
+Press `B` to browse conversations by stable session identity; `n`/`p` from a
+UUID-selected history page return to this list. `[`/`]` select raw byte ranges,
+and `j`/`k` scroll the current page.
+The default readable view decodes UTF-8 across pages, removes terminal styles and
+hidden control strings, and follows bounded line edits and horizontal cursor
+movement. Replay runs in background batches; a cold distant page can show
+Preparing readable history while capture and controls continue. Press `v` inside
+history to toggle the escaped raw view. Outside history, `v` remains native Resume.
+
+Press `/` for Find workspace (project/title/last observed branch/path), `S` for
+Search history across all projects, or `B` for retained sessions. Enter submits
+an edited query; arrow keys select results; Enter opens the selected workspace’s
+conversations, exact session, or matching passage. Tab changes search mode,
+`n` requests the next bounded result page, Ctrl-R refreshes, and Esc returns.
+Reading does not select another coding runtime, launch an agent, or change native
+Resume’s target. On a selected conversation row, `v` explicitly resumes that row’s
+original tool and native conversation. The row shows workspace, managed segment,
+and native identity before the action. Enter only reads history.
+
+History search matches all case-insensitive words (Unicode letters/digits; punctuation
+separates words), up to eight words/256 query bytes. Metadata Find matches a
+case-insensitive substring. Results contain bounded snippets and stable passage
+IDs/ranges; opening a hit retrieves its persisted readable passage directly,
+including when controls span many raw pages. The index catches up incrementally
+to committed output; results are labelled partial and Ctrl-R refreshes. Completed
+lines are indexed; an unfinished tail becomes searchable after final capture is
+sealed. Raw bytes remain available through the session’s history view.
+
+`K` previews Stop, save and archive. Enter confirms; Escape dismisses the
+panel while the operation continues, `z` cancels archive, and `j`/`k` scrolls
+receipts/exclusions. Stop remains an independent session action. Archive cancels
+pending native/setup intent and waits for confirmed owned cleanup and durable
+history. An uncertain Stop blocks saving. Quit stops outstanding local work;
+detach leaves the supervisor available for reconnect.
+
+A dirty workspace gets an **Archive checkpoint** commit using your Git identity,
+hooks and signing settings. A clean workspace keeps its existing HEAD. The
+receipt says **saved locally, not pushed**, lists ignored exclusions, and shows
+the saved commit and workspace recovery ref. Files and chats stay in place.
+The checkpoint combines tracked and new nonignored working changes. Git's
+original staged tree is pinned separately at the receipt's ref plus `-index`,
+including staged-only content no longer present in working files. For example,
+`git show '<receipt-ref>-index:path/to/file'` reads that saved staged version.
+A successful save leaves the index matching the checkpoint; partial staging is
+combined as part of the save. Git save failures preserve the original real index;
+a successful Git save followed by a metadata failure already has the combined
+index and retains the staged recovery tree. Either failure leaves the workspace
+unarchived; partial Git outcomes are reported explicitly.
+
+Enter retries the same archive request after a partial outcome or lost reply.
+If files changed since its prepared snapshot, cancel that operation and press
+`n` for a new snapshot, then Enter. Existing recovery refs remain retained.
+Conflicts, submodules/nested repositories, sparse/split/special index state,
+missing identity, rejecting hooks, external edits and uncertain checks block
+complete-save success with an explanation. Abrupt supervisor loss during Git
+may leave Git locks; the app never removes uncertain locks automatically.
+Verify no Git process owns a lock before resolving it through normal Git repair.
+Before confirming archive, `b` toggles **Delete local branch on archive** for the
+exact displayed local branch. It starts on for product-created branches and off
+for adopted branches. Immutable creation provenance remains separate from the
+last observed branch; an external rename/switch causes conservative retention.
+Cleanup starts only after the saved recovery ref and archive metadata are
+confirmed. It uses safe ordinary detach, retains the folder/ignored files, and
+reports cleanup separately from save/archive success. Main/default/base branches,
+branches in another checkout, external advances, uncertain checks, custom
+`core.hooksPath` and executable `reference-transaction` hooks retain the branch.
+Automatic deletion is currently qualified only for Git 2.50 with the files ref
+backend. Other versions/backends retain the branch with an explanation. Remote
+branches are never deleted. Git's worktree-use checks are immediate snapshots;
+concurrent external worktree registration is not universally locked out.
+
+Return explicitly restores a branch from the saved point before restoring active
+visibility. A reused old name gets a fresh alternative; no existing ref is
+overwritten. Failed switch, missing folder or changed recovery remains visible
+and keeps the workspace archived. Coding always stays stopped. Enter retries the
+exact displayed archive revision; a stale Return cannot affect a later archive.
+Cancellation before branch mutation does not rearm on a late receipt. Once Git's
+branch result is awaiting its durable acknowledgement, cancellation is too late
+and the panel says so. Folder removal remains a separate later action.
+
+`M` opens a separate **Remove workspace folder** preview for the selected
+workspace, including an archived workspace shown through `w`, then `z`. It
+freezes the canonical folder, current HEAD, branch, recovery ref and actionable
+blockers. Unsaved tracked, untracked **and ignored files** block removal; move or
+save them first, then `n` requests a fresh preview. An active or uncertain coding
+session, setup, pending native-resume lookup, unfinished capture or archive
+mutation also blocks removal. Removal never implicitly stops that activity.
+
+When the preview is eligible, `y` explicitly confirms that exact folder/HEAD.
+If code has no confirmed remote backup, press Space to acknowledge **local only,
+not pushed**, then `y`. No remotes is reported as local-only. Without an upstream, live push-destination
+evidence must independently cover HEAD to report remote backup; otherwise the
+local-only acknowledgement applies. A configured but unavailable/missing remote
+or uncertain push evidence blocks removal. Live push-destination checks can require connectivity/authentication;
+changed evidence requires a fresh preview. The worker pins the exact current
+commit at the displayed `refs/rat/removal/<workspace>/<request>` ref, including
+never-archived/detached work, and saves durable intent before ordinary Git removal.
+Main checkouts, locked/prunable worktrees and unsafe identities are excluded.
+Git refusal is preserved; no force removal or recursive saved-path deletion is
+used. Special/sparse/submodule indexes, shallow/partial clones and external Git
+object stores are conservatively excluded when complete saved coverage is unknown.
+
+Saved commits, old archive refs, all retained branches, workspace/native identities
+and session history stay. For example, `git show '<removal-ref>:path/to/file'`
+reads saved code through the project’s remaining checkout after folder removal.
+Readable history/search remains usable without the removed checkout; in-place
+native resume is unavailable. This action neither archives the workspace nor
+deletes chats. `j`/`k` scroll the preview/receipt; Escape dismisses it, `d` detaches,
+and `q` cancels pending mutation and quits after owned work settles. A mutation
+already completed by Git cannot be rolled back by cancellation.
+
+On a lost result or supervisor restart, reopen `M` and press `g` for **read-only
+reconciliation** of the same request. Startup and reconciliation never replay
+folder deletion. A safe retained folder requires a fresh `n` preview and explicit
+confirmation; a replacement path or uncertain identity remains blocked for
+inspection. Storage errors stop further mutation; `r` in the removal panel retries storage,
+then `g` reconciles the receipt. Recovery refs have no
+automatic expiration. Checks protect observed state; external tools can still
+write after the final check, so avoid editing a workspace while removing it.
+
+Archived metadata and confirmed missing/inaccessible folders are labelled without
+requiring the checkout for reading. `K` opens Stop, save and archive for the
+selected workspace; `w`, then `z`, includes archived workspaces and `K` opens
+Restore branch and return without starting coding.
+Branches are labelled **last observed** from Git discovery, never inferred from
+the original creation branch. Refresh discovery to observe ordinary Git branch
+changes. Legacy facts that were not recorded remain unknown. Explicit transcript
+deletion invalidates prior results/passages and prevents their return after restart.
+See the [search proof](docs/proofs/m2-11-retained-search.md) for bounds and evidence.
+
+This is captured terminal output, not reconstructed chat messages. Full-screen
+redraws can repeat text, leave fragments or spacing artifacts, and the last line
+is provisional until later output finishes it. Exact raw bytes remain retained
+independently; only committed bytes are shown. Passage locations use the stable
+session UUID, projection version and raw byte ranges rather than screen rows.
 Input keys/paste are not separately recorded, so hidden password input is not
-copied into history. Output itself can contain sensitive text.
+copied into history. Output itself can contain sensitive text. See the
+[readable-history proof](docs/proofs/m2-08-readable-history.md) for current native
+examples, bounds and limitations.
 
 The supervisor stores SQLite metadata and 64 KiB transcript chunks under
 `~/Library/Application Support/rat/proof` (or the explicit isolated `--state-dir`).
@@ -272,8 +506,10 @@ retrying the same request does not start another agent. See the
 
 ### Explicit native conversation recovery
 
-In dashboard focus, `v` resumes the latest managed native conversation using its
-saved tool and conversation ID: Claude `--resume <id>` or Codex `resume <id>
+In dashboard focus, `v` resumes the latest managed native conversation. To choose
+an older one, press `B`, select its conversation row, and press `v`. Both actions
+resolve the saved segment through the storage worker and use its original tool
+and native conversation ID: Claude `--resume <id>` or Codex `resume <id>
 --no-daemon`. It supplies no coding prompt. Native folder/hook trust prompts stay
 in the native pane. `c` and `x` explicitly start new conversations; unavailable
 resume explains the reason and never silently starts a replacement. Live sessions
@@ -283,11 +519,13 @@ resume or a new launch. Opening the dashboard never starts coding.
 History (`h`) remains available when no native ID was captured or the checkout
 is missing. A missing checkout prevents continuing in place; restore its path
 before resuming. Native records remain owned by the original tool, which can
-reject an unavailable ID through its captured native UI. This proof-level path
-covers the most recent managed conversation, without history search or arbitrary
-resume selection. See [both original-conversation proofs](docs/proofs/16-native-recovery.md)
-for exact versions, marker recall, supervisor restart and separate injected
-reboot-style checks; no physical reboot is claimed.
+reject an unavailable ID through its captured native UI. A running process does
+not prove native recovery succeeded. Readable history and native resume metadata
+remain independent, including after explicit transcript deletion. Selected recovery
+uses a new managed segment in the retained workspace and leaves Git’s current
+HEAD, index and working files in place. See [selected recovery evidence](docs/proofs/m2-12-selected-native-resume.md)
+and the earlier [latest-conversation proof](docs/proofs/16-native-recovery.md).
+No physical reboot is claimed.
 
 ## Development measurement proof
 
@@ -310,3 +548,70 @@ preflight; it cannot replace the sustained resource/latency proof. Terminal-pars
 visible timings are not physical monitor timestamps. Full storage can block
 native ACK output until repair even when input receipt and dashboard navigation
 remain responsive.
+
+Workspace labels are local metadata. A new adoption receives a stable generated
+`Workspace <id>` fallback. Its first supplied prompt can replace that fallback
+with a readable local label (collapsed whitespace, at most 72 characters).
+Manual names and labels from an earlier prompt survive later launches. Renaming
+never moves the folder, changes the branch or changes a native conversation ID.
+The dashboard does not infer native titles from terminal output or submit a
+hidden naming turn. Names saved by an older version are retained.
+
+`C` / `X` opens an optional first-prompt editor; Enter is the explicit launch
+step. Native interactive invocation receives that prompt as one positional
+argument after `--`, alongside the normal passive status hooks. `c` / `x`
+continues to start without a supplied prompt. Resume never supplies an initial
+prompt. Startup, restoration, cancellation and reconciliation do not execute a
+prompt. Independent workspace creation uses the same native launch boundary.
+
+`N` creates an independent workspace in the selected registered project. The form
+shows its base, suggested branch and stable folder, chosen agent and optional
+first prompt; it requires no title. Choose a local branch explicitly when there
+is no unambiguous remote default. With remotes configured, use an explicit remote
+base (for example `origin/main`) or a local branch with a configured upstream.
+Enter means Create without starting; Ctrl-S
+means Create and start. Generated folders live under the supervisor state
+folder's `workspaces/<project>/<operation>` directory, outside the original
+checkout. Branch, folder and base overrides never overwrite existing work.
+
+Creation normally fetches the selected remote branch and saves the exact ref and
+commit before adding the checkout. A failed fetch stops at a visible local-code
+choice. Its receipt shows the exact locally available commit; `L` explicitly
+chooses that pinned version, including the displayed launch choice. Later ref
+movement cannot change it. `G` queries or reconciles the original operation
+without starting an agent. `Z` cancels pending creation; completed files/branches
+are retained. Restore only reads saved receipts. A failed native launch retains
+the created workspace, and a later explicit Start creates a new conversation.
+
+Creation receipts retain separate checkout and native-launch results. `O` opens
+receipts and `[`/`]` chooses an older operation. Late completion and background
+launch do not change your current workspace selection. Native folder-trust,
+hook-review and account prompts remain with the chosen CLI. See the
+[creation evidence](docs/proofs/m2-09-workspace-creation.md).
+
+`U` configures an optional project setup command, executed explicitly through
+`/bin/sh -c` in each newly created workspace. Empty configuration runs no setup.
+The exact command is frozen for each creation/attempt; later edits affect future
+workspaces. Setup runs before the requested native launch, including when creating
+without starting coding. `O` shows separate setup and native outcomes, with a
+bounded combined stdout/stderr tail and discarded-byte count. Setup output is
+local setup progress, not native conversation history. Live progress can be lost
+until a phase receipt commits; the saved tail is not a complete transcript.
+
+After failure, `T` retries the frozen setup command and `Y` explicitly continues
+without setup. The receipt says whether that action will start the agent under
+still-armed Create and start permission, or keep coding stopped. Bare Start is
+refused until setup's failure choice is settled. `s`, `Z` and ordinary quit cancel
+owned setup and disarm its pending coding launch; unrelated sessions keep running.
+Restore never reruns setup or rearms launch. A lost result remains uncertain:
+`I` performs read-only survivor reconciliation before an informed retry choice
+that may repeat external effects. Saved PIDs are never used as signal authority;
+some released executions require verified reboot to exclude escaped survivors.
+A known terminal cleanup is recorded independently of command-outcome certainty.
+
+One setup executes at a time; other native sessions remain usable. The current
+bound retains 32 setup attempts per state directory and refuses additional
+configured setup at that limit. Commands are limited to 4096 bytes and the output
+tail to 8192 raw bytes; older output is explicitly discarded. A storage failure
+retains the owned outcome for `y` retry after repair, without rerunning the command.
+See [setup evidence and limits](docs/proofs/m2-10-project-setup.md).

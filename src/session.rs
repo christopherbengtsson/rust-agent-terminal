@@ -1,7 +1,6 @@
-//! Thin scripted-session proof. All blocking transport and PTY operations live here.
-use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+//! Supervisor transport, controller ownership and execution-owned Git coordination.
+//! Concrete native session progression lives in `agent_session`.
 use std::{
-    collections::{HashMap, VecDeque},
     fs::{self, File, OpenOptions},
     io::{self, BufRead, BufReader, Read, Write},
     os::unix::{
@@ -12,14 +11,12 @@ use std::{
     },
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
-        mpsc::{self, Receiver, SyncSender},
-    },
+    sync::mpsc::{self, Receiver, SyncSender},
     thread,
     time::{Duration, Instant},
 };
+
+mod agent_session;
 
 pub const ROWS: u16 = 24;
 pub const COLS: u16 = 100;
@@ -100,6 +97,62 @@ fn transport(
     let mut greeting: Observation = serde_json::from_slice(&read_frame(&mut reader)?)?;
     decode_screen(&mut greeting);
     if greeting.control_denied {
+        if greeting.diff_protocol != 2
+            || greeting.git_jobs_protocol != 1
+            || greeting.registry_protocol != 1
+            || greeting.sessions_protocol != 1
+            || greeting.prompt_naming_protocol != 1
+            || greeting.creation_protocol != 1
+            || greeting.archive_protocol != 2
+            || greeting.removal_protocol != 1
+            || greeting.resume_protocol != 1
+            || greeting.setup_protocol != 1
+        {
+            events.send(greeting)?;
+            return Ok(());
+        }
+        drop(reader);
+        drop(stream);
+        events.send(greeting.clone())?;
+        while let Ok(request) = requests.recv() {
+            greeting.discovery = None;
+            match request {
+                Request::Discover {
+                    request,
+                    repository,
+                } => {
+                    let path = PathBuf::from(std::ffi::OsString::from_vec(repository.clone()));
+                    let result = crate::git::read_only_discovery(&path);
+                    greeting.discovery = Some(crate::git::Discovery {
+                        request,
+                        repository,
+                        result,
+                    });
+                }
+                Request::Shutdown => greeting.stopped = true, // local exit only; no owner control
+                _ => {} // a refused dashboard cannot send any session command
+            }
+            let stopped = greeting.stopped;
+            events.send(greeting.clone())?;
+            if stopped {
+                return Ok(());
+            }
+        }
+        return Ok(());
+    }
+    if greeting.diff_protocol != 2
+        || greeting.git_jobs_protocol != 1
+        || greeting.registry_protocol != 1
+        || greeting.sessions_protocol != 1
+        || greeting.prompt_naming_protocol != 1
+        || greeting.creation_protocol != 1
+        || greeting.archive_protocol != 2
+        || greeting.removal_protocol != 1
+        || greeting.resume_protocol != 1
+        || greeting.setup_protocol != 1
+    {
+        greeting.control_denied = true;
+        greeting.error = Some("Existing supervisor does not support this dashboard's worktree, registry, session or comparison protocol. Use its compatible dashboard to stop activity before upgrading; d detaches locally.".into());
         events.send(greeting)?;
         return Ok(());
     }
@@ -144,22 +197,6 @@ fn decode_screen(observation: &mut Observation) {
     observation.decoded = Some(parser.screen().clone());
 }
 
-struct ScreenState {
-    parser: vt100::Parser,
-    output_bytes: u64,
-}
-impl ScreenState {
-    fn snapshot(&self, state: &mut Observation) {
-        let screen = self.parser.screen();
-        state.screen = screen.contents();
-        state.formatted = screen.state_formatted();
-        let (rows, cols) = screen.size();
-        state.rows = rows.get();
-        state.cols = cols.get();
-        state.output_bytes = self.output_bytes;
-    }
-}
-
 fn read_frame(reader: &mut impl BufRead) -> io::Result<Vec<u8>> {
     let mut bytes = Vec::new();
     reader
@@ -170,6 +207,7 @@ fn read_frame(reader: &mut impl BufRead) -> io::Result<Vec<u8>> {
     }
     Ok(bytes)
 }
+
 pub fn path_bytes(path: &Path) -> Vec<u8> {
     path.as_os_str().as_bytes().to_vec()
 }
@@ -270,6 +308,696 @@ impl Delivery {
     }
 }
 
+// Runtime selection belongs to the supervisor. Each concrete owner retains its
+// private launch, cleanup and capture phases while another owner is selected.
+struct Sessions {
+    resume_completions: Vec<crate::persistence::Completion>,
+    setup_reservations: Vec<crate::git::CheckoutIdentity>,
+    archive_reservations: Vec<crate::git::CheckoutIdentity>,
+    settled_checkout_refusals: Vec<(crate::git::CheckoutIdentity, &'static str)>,
+    setup_ready: bool,
+    archive_ready: bool,
+    history_revision: u64,
+    browse: Option<crate::persistence::search::Response>,
+    browse_request: Option<String>,
+    entries: Vec<(String, agent_session::AgentSession)>,
+    selected: usize,
+    directory: PathBuf,
+    selection_pending: Option<uuid::Uuid>,
+}
+impl std::ops::Deref for Sessions {
+    type Target = agent_session::AgentSession;
+    fn deref(&self) -> &Self::Target {
+        &self.entries[self.selected].1
+    }
+}
+impl std::ops::DerefMut for Sessions {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.entries[self.selected].1
+    }
+}
+impl Sessions {
+    fn restore(
+        directory: &Path,
+        restored: crate::persistence::Restored,
+        storage: &crate::persistence::Worker,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        let mut restored = restored;
+        restored.state.creation.launches.clear();
+        let others = std::mem::take(&mut restored.sessions);
+        let selected_id = restored
+            .state
+            .session_identity
+            .as_ref()
+            .map(|id| id.session.clone());
+        if let Some(id) = &selected_id
+            && let Some(known) = others.iter().find(|entry| {
+                entry
+                    .state
+                    .session_identity
+                    .as_ref()
+                    .is_some_and(|identity| &identity.session == id)
+            })
+        {
+            restored.task = known.task.clone();
+        }
+        let selected_task = restored.task.clone();
+        let launches = restored.launches.clone();
+        let mut owner = agent_session::AgentSession::restore(directory, restored, storage)?;
+        let target = owner.observation().control_target;
+        let mut entries = vec![(target, owner)];
+        for recovered in others {
+            let recovered_id = recovered
+                .state
+                .session_identity
+                .as_ref()
+                .map(|id| id.session.clone());
+            if recovered_id == selected_id
+                && (selected_id.is_some() || recovered.task == selected_task)
+            {
+                continue;
+            }
+            let restored = crate::persistence::Restored {
+                sessions: Vec::new(),
+                state: recovered.state,
+                checkout: recovered.checkout.as_deref().map(path_bytes),
+                task: recovered.task.clone(),
+                launches: launches
+                    .iter()
+                    .filter(|result| {
+                        result.identity.as_ref().is_some_and(|label| {
+                            label.starts_with(&format!("task={} session=", recovered.task))
+                        })
+                    })
+                    .cloned()
+                    .collect(),
+            };
+            let mut owner = agent_session::AgentSession::restore(directory, restored, storage)?;
+            let target = owner.observation().control_target;
+            entries.push((target, owner));
+        }
+        let selection_pending = if entries[0].1.checkout().is_some() {
+            let operation = uuid::Uuid::new_v4();
+            storage
+                .commands
+                .try_send(crate::persistence::Command::SelectWorkspace(
+                    operation,
+                    selected_task,
+                ))?;
+            Some(operation)
+        } else {
+            None
+        };
+        Ok(Self {
+            resume_completions: Vec::new(),
+            setup_reservations: Vec::new(),
+            archive_reservations: Vec::new(),
+            settled_checkout_refusals: Vec::new(),
+            setup_ready: false,
+            archive_ready: false,
+            history_revision: 0,
+            browse: None,
+            browse_request: None,
+            entries,
+            selected: 0,
+            directory: directory.to_owned(),
+            selection_pending,
+        })
+    }
+
+    fn complete(
+        &mut self,
+        event: crate::persistence::Completion,
+        storage: &crate::persistence::Worker,
+    ) {
+        if matches!(event, crate::persistence::Completion::ResumeIdentity(..)) {
+            self.resume_completions.push(event);
+            return;
+        }
+        if let crate::persistence::Completion::Browse(response) = &event {
+            if self.browse_request.as_ref() == Some(&response.request) {
+                self.browse = Some(response.clone());
+            }
+            return;
+        }
+        if let crate::persistence::Completion::HistoryHidden(_) = &event {
+            self.history_revision = self.history_revision.wrapping_add(1);
+            self.browse =
+                self.browse_request
+                    .as_ref()
+                    .map(|request| crate::persistence::search::Response {
+                        request: request.clone(),
+                        error: Some(
+                            "History deletion hides previous search results; Ctrl-R refreshes"
+                                .into(),
+                        ),
+                        ..Default::default()
+                    });
+        }
+        if let crate::persistence::Completion::Selected(operation, result) = event {
+            if self.selection_pending != Some(operation) {
+                return;
+            }
+            self.selection_pending = None;
+            if let Err(error) = result {
+                self.report_error(format!(
+                    "Workspace selection not saved: {error}; retry selection"
+                ));
+            }
+            return;
+        }
+        // Attributed completions are ignored by owners without the matching
+        // obligation. Projection replies belong to the selected owner only.
+        if matches!(
+            event,
+            crate::persistence::Completion::Committed(_)
+                | crate::persistence::Completion::Failed(..)
+                | crate::persistence::Completion::Deleted(_)
+                | crate::persistence::Completion::HistoryHidden(_)
+                | crate::persistence::Completion::HistoryTarget(..)
+                | crate::persistence::Completion::ResumeCancelled(..)
+        ) {
+            for (_, owner) in &mut self.entries {
+                owner.complete(event.clone(), storage);
+            }
+        } else {
+            self.entries[self.selected].1.complete(event, storage);
+        }
+    }
+    fn advance(&mut self, storage: &crate::persistence::Worker, adopting: bool) {
+        // Setup's current reservations are refreshed before advance. Resolve
+        // only here, then reuse global admission before durable Prepare.
+        for event in std::mem::take(&mut self.resume_completions) {
+            let crate::persistence::Completion::ResumeIdentity(target, request, result) = event
+            else {
+                unreachable!()
+            };
+            if let Some(index) = self.entries.iter().position(|(id, _)| id == &target)
+                && let Some(command) = self.entries[index]
+                    .1
+                    .resolve_resume(&target, request, result)
+            {
+                let session = self.entries[index]
+                    .1
+                    .observation()
+                    .session_identity
+                    .map(|id| id.session);
+                self.handle(
+                    Request::Session {
+                        target,
+                        session,
+                        command: Box::new(command),
+                    },
+                    storage,
+                    adopting,
+                );
+            }
+        }
+        for (_, owner) in &mut self.entries {
+            owner.advance(storage, adopting);
+        }
+    }
+    fn observation(&mut self) -> Observation {
+        let mut summaries = Vec::new();
+        for (target, owner) in &mut self.entries {
+            let state = owner.observation();
+            summaries.push(crate::events::SessionSummary {
+                status: state.status.clone(),
+                reserved: owner.reserved()
+                    || state.checkout_identity.as_ref().is_some_and(|c| {
+                        self.setup_reservations
+                            .iter()
+                            .any(|r| r.common_dir == c.common_dir && r.git_dir == c.git_dir)
+                    }),
+                target: target.clone(),
+                task: owner.task().to_owned(),
+                session: state.session_identity.map(|id| id.session),
+                lifecycle: state.lifecycle,
+                checkout: owner.checkout().map(path_bytes),
+            });
+        }
+        let mut state = self.entries[self.selected].1.observation();
+        state.history_revision = self.history_revision;
+        state.browse_protocol = 1;
+        state.resume_protocol = 1;
+        state.browse = self.browse.clone();
+        state.sessions_protocol = 1;
+        state.control_target = self.entries[self.selected].0.clone();
+        state.sessions = summaries;
+        state.metadata_pending |= self.selection_pending.is_some();
+        state
+    }
+    fn creation_receipts(
+        &mut self,
+        records: &[crate::creation::Record],
+        previous: &[crate::creation::LaunchReceipt],
+    ) -> Vec<crate::creation::LaunchReceipt> {
+        if records.is_empty() {
+            return previous.to_vec();
+        }
+        records
+            .iter()
+            .filter_map(|record| {
+                let request = &record.intent.request;
+                let result = self
+                    .entries
+                    .iter()
+                    .filter(|(_, owner)| owner.task() == request)
+                    .find_map(|(_, owner)| owner.recorded_launch(request));
+                // A later conversation has its own request and lifecycle. Refresh
+                // this receipt only from the original request's typed native owner.
+                let original = self
+                    .entries
+                    .iter_mut()
+                    .filter(|(_, owner)| owner.task() == request)
+                    .find_map(|(_, owner)| {
+                        let state = owner.observation();
+                        (state.launch_request == *request
+                            && state
+                                .session_identity
+                                .as_ref()
+                                .is_none_or(|id| id.request == *request))
+                        .then_some(state)
+                    });
+                if let Some(state) = original {
+                    let pending = state.metadata_pending
+                        || self.entries.iter().any(|(_, owner)| {
+                            owner.task() == request && owner.pending_launch_request(request)
+                        });
+                    return Some(crate::creation::LaunchReceipt {
+                        request: request.clone(),
+                        session: state.session_identity.map(|id| id.session),
+                        lifecycle: state.lifecycle,
+                        result: if pending { None } else { result.clone() },
+                        pending,
+                        error: result.and_then(|r| r.error),
+                    });
+                }
+                if let Some(mut retained) = previous
+                    .iter()
+                    .find(|receipt| receipt.request == *request)
+                    .cloned()
+                {
+                    if let Some(result) = result {
+                        retained.error = result.error.clone();
+                        retained.result = Some(result);
+                        retained.pending = false;
+                    }
+                    return Some(retained);
+                }
+                result.map(|result| crate::creation::LaunchReceipt {
+                    request: request.clone(),
+                    session: None,
+                    lifecycle: Lifecycle::Interrupted,
+                    pending: false,
+                    error: Some(
+                        "Original launch result retained; original runtime state unavailable"
+                            .into(),
+                    ),
+                    result: Some(result),
+                })
+            })
+            .collect()
+    }
+    fn all_stopped(&mut self) -> bool {
+        self.selection_pending.is_none()
+            && self
+                .entries
+                .iter_mut()
+                .all(|(_, owner)| owner.observation().stopped)
+    }
+    fn adopt_checkout(
+        &mut self,
+        identity: crate::git::CheckoutIdentity,
+        task: String,
+        storage: &crate::persistence::Worker,
+    ) -> Result<(), String> {
+        self.adopt_checkout_at(identity, task, storage, true)
+            .map(|_| ())
+    }
+    fn adopt_checkout_at(
+        &mut self,
+        identity: crate::git::CheckoutIdentity,
+        task: String,
+        storage: &crate::persistence::Worker,
+        select: bool,
+    ) -> Result<usize, String> {
+        let matching = |owner: &mut agent_session::AgentSession| {
+            let state = owner.observation();
+            state.checkout_identity.as_ref().is_some_and(|known| {
+                known.git_dir == identity.git_dir && known.common_dir == identity.common_dir
+            }) || owner.checkout() == Some(identity.root.as_path())
+        };
+        let index = self
+            .entries
+            .iter_mut()
+            .position(|(_, owner)| owner.reserved() && matching(owner))
+            .or_else(|| {
+                self.entries
+                    .iter_mut()
+                    .position(|(_, owner)| matching(owner))
+            });
+        if let Some(index) = index {
+            if select {
+                self.selected = index;
+            }
+            self.entries[index]
+                .1
+                .adopt(identity, true, task.clone(), storage);
+            if select {
+                let operation = uuid::Uuid::new_v4();
+                storage
+                    .commands
+                    .try_send(crate::persistence::Command::SelectWorkspace(
+                        operation, task,
+                    ))
+                    .map_err(|error| {
+                        format!("Workspace selection not saved: {error}; retry selection")
+                    })?;
+                self.selection_pending = Some(operation);
+            }
+            return Ok(index);
+        }
+        if self.entries.len() >= 1024 {
+            return Err("Session owner capacity reached; retained owners are preserved".into());
+        }
+        let restored = crate::persistence::Restored {
+            sessions: Vec::new(),
+            state: Observation::default(),
+            checkout: None,
+            task: task.clone(),
+            launches: Vec::new(),
+        };
+        let mut owner = agent_session::AgentSession::restore(&self.directory, restored, storage)
+            .map_err(|e| e.to_string())?;
+        owner.adopt(identity, false, task.clone(), storage);
+        if select {
+            let operation = uuid::Uuid::new_v4();
+            storage
+                .commands
+                .try_send(crate::persistence::Command::SelectWorkspace(
+                    operation, task,
+                ))
+                .map_err(|error| {
+                    format!("Workspace selection not saved: {error}; retry selection")
+                })?;
+            self.selection_pending = Some(operation);
+        }
+        let target = owner.observation().control_target;
+        self.entries.push((target, owner));
+        let index = self.entries.len() - 1;
+        if select {
+            self.selected = index;
+        }
+        Ok(index)
+    }
+    fn cancel_creation_launch(
+        &mut self,
+        request: &str,
+        native_session: Option<&str>,
+        storage: &crate::persistence::Worker,
+    ) {
+        for (_, owner) in &mut self.entries {
+            let state = owner.observation();
+            if owner.task() == request
+                && state.launch_request == request
+                && native_session.is_none_or(|expected| {
+                    state
+                        .session_identity
+                        .as_ref()
+                        .is_some_and(|id| id.session == expected && id.request == request)
+                })
+            {
+                owner.handle(Request::Stop, storage, false);
+            }
+        }
+    }
+    fn handle(&mut self, request: Request, storage: &crate::persistence::Worker, adopting: bool) {
+        if let Request::Browse(query) = request {
+            let request = query.request.clone();
+            match storage
+                .commands
+                .try_send(crate::persistence::Command::Browse(query))
+            {
+                Ok(()) => {
+                    self.browse_request = Some(request);
+                    self.browse = None;
+                }
+                Err(error) => {
+                    self.browse_request = Some(request.clone());
+                    self.browse = Some(crate::persistence::search::Response {
+                        request,
+                        error: Some(format!("Search busy: {error}; Enter retries")),
+                        ..Default::default()
+                    });
+                }
+            }
+            return;
+        }
+        let (index, mut request) = match request {
+            Request::Session {
+                target,
+                session,
+                command,
+            } => {
+                let Some(index) = self.entries.iter().position(|(id, _)| *id == target) else {
+                    self.report_error(
+                        "Session target no longer exists; refresh before retrying".into(),
+                    );
+                    return;
+                };
+                let current = self.entries[index]
+                    .1
+                    .observation()
+                    .session_identity
+                    .map(|id| id.session);
+                if current != session {
+                    self.entries[index].1.report_error(
+                        "Session changed before command delivery; refresh before retrying".into(),
+                    );
+                    return;
+                }
+                if matches!(
+                    *command,
+                    Request::PreviewRemoval { .. }
+                        | Request::ConfirmRemoval { .. }
+                        | Request::ReconcileRemoval { .. }
+                        | Request::Archive { .. }
+                        | Request::CancelArchive { .. }
+                        | Request::Unarchive { .. }
+                        | Request::Browse(_)
+                        | Request::Session { .. }
+                        | Request::SelectSession(_)
+                        | Request::Shutdown
+                        | Request::Adopt(_)
+                        | Request::Register(_)
+                        | Request::PreviewCreation { .. }
+                        | Request::ConfigureSetup { .. }
+                        | Request::RecoverSetup { .. }
+                        | Request::CreateWorkspace(_)
+                        | Request::RecoverCreation { .. }
+                        | Request::CancelCreation { .. }
+                        | Request::RenameWorkspace { .. }
+                        | Request::Discover { .. }
+                        | Request::InspectWorking { .. }
+                        | Request::EditorSource { .. }
+                ) {
+                    self.report_error("Invalid targeted session command".into());
+                    return;
+                }
+                (index, *command)
+            }
+            Request::SelectSession(target) => {
+                if let Some(index) = self.entries.iter().position(|(id, _)| *id == target) {
+                    self.selected = index;
+                    let operation = uuid::Uuid::new_v4();
+                    if let Err(error) =
+                        storage
+                            .commands
+                            .try_send(crate::persistence::Command::SelectWorkspace(
+                                operation,
+                                self.entries[index].1.task().to_owned(),
+                            ))
+                    {
+                        self.report_error(format!(
+                            "Workspace selection not saved: {error}; retry selection"
+                        ));
+                    } else {
+                        self.selection_pending = Some(operation);
+                    }
+                } else {
+                    self.report_error("Session target no longer exists".into());
+                }
+                return;
+            }
+            Request::Shutdown => {
+                for (_, owner) in &mut self.entries {
+                    owner.handle(Request::Shutdown, storage, adopting);
+                }
+                return;
+            }
+            request => (self.selected, request),
+        };
+        let launch_request = match &request {
+            Request::Launch(id)
+            | Request::LaunchClaude(id)
+            | Request::LaunchCodex(id)
+            | Request::Resume(id)
+            | Request::ResumeSelected { request: id, .. }
+            | Request::QueryLaunch(id)
+            | Request::LaunchNative { request: id, .. } => Some(id),
+            _ => None,
+        };
+        if let Some(id) = launch_request
+            && self
+                .entries
+                .iter()
+                .enumerate()
+                .any(|(other, (_, owner))| other != index && owner.pending_launch_request(id))
+        {
+            self.entries[index].1.report_error("This launch request still has an unsettled result in another session; wait for its durable outcome before retrying".into());
+            return;
+        }
+        if let Some(id) = launch_request
+            && let Some(result) = self
+                .entries
+                .iter()
+                .find_map(|(_, owner)| owner.recorded_launch(id))
+        {
+            self.entries[index]
+                .1
+                .handle_recorded(request, result, storage, adopting);
+            return;
+        }
+        if let Request::Resume(id) = &request
+            && !self.entries[index].1.resolved_resume(id)
+            && !self.entries[index].1.reserved()
+        {
+            let source = self.entries[index].1.observation().session_identity;
+            let Some(source) = source else {
+                self.entries[index].1.report_error("Native resume unavailable: no retained managed conversation identity; h reads history, c/x explicitly starts a new conversation".into());
+                return;
+            };
+            request = Request::ResumeSelected {
+                request: id.clone(),
+                workspace: self.entries[index].1.task().to_owned(),
+                session: source.session,
+            };
+        }
+        if matches!(
+            request,
+            Request::LaunchNative { .. }
+                | Request::Launch(_)
+                | Request::LaunchClaude(_)
+                | Request::LaunchCodex(_)
+                | Request::Resume(_)
+                | Request::ResumeSelected { .. }
+        ) {
+            if !self.setup_ready || !self.archive_ready {
+                self.entries[index].1.report_error(
+                    "Setup/archive recovery is loading; retry after committed receipts arrive"
+                        .into(),
+                );
+                return;
+            }
+            if let Some(target) = self.entries[index].1.observation().checkout_identity
+                && self
+                    .archive_reservations
+                    .iter()
+                    .any(|r| r.common_dir == target.common_dir && r.git_dir == target.git_dir)
+            {
+                let reason = self.settled_checkout_refusals.iter().find(|(known, _)| known.common_dir == target.common_dir && known.git_dir == target.git_dir).map_or(
+                    "Workspace archive owns this checkout or folder removal is pending; settle its receipt before Start",
+                    |(_, reason)| *reason,
+                );
+                self.entries[index].1.report_error(reason.into());
+                return;
+            }
+            if self.entries[index]
+                .1
+                .observation()
+                .checkout_identity
+                .is_some_and(|target| {
+                    self.setup_reservations
+                        .iter()
+                        .any(|r| r.common_dir == target.common_dir && r.git_dir == target.git_dir)
+                })
+            {
+                self.entries[index].1.report_error("Workspace setup owns this checkout or has an uncertain outcome; Stop/reconcile setup before Start".into());
+                return;
+            }
+            let active = self
+                .entries
+                .iter()
+                .filter(|(_, owner)| owner.reserved())
+                .count();
+            if active + self.setup_reservations.len() >= 32 && !self.entries[index].1.reserved() {
+                self.entries[index].1.report_error(
+                    "At most 32 unsettled session executions or capture streams can be admitted"
+                        .into(),
+                );
+                return;
+            }
+            let target_checkout = self.entries[index].1.observation().checkout_identity;
+            if target_checkout.is_some_and(|target| {
+                self.entries
+                    .iter_mut()
+                    .enumerate()
+                    .any(|(other, (_, owner))| {
+                        other != index
+                            && owner.reserved()
+                            && owner.observation().checkout_identity.is_some_and(|known| {
+                                known.git_dir == target.git_dir
+                                    && known.common_dir == target.common_dir
+                            })
+                    })
+            }) {
+                self.entries[index].1.report_error("This canonical worktree already has an active or uncertain session; attach or reconcile it first".into());
+                return;
+            }
+        }
+        self.entries[index].1.handle(request, storage, adopting);
+    }
+}
+
+fn removal_blockers(
+    workspace: &crate::registry::Workspace,
+    sessions: &mut Sessions,
+    setup: &crate::setup::Coordinator,
+    creation: &crate::creation::Coordinator,
+    archive: &crate::archive::Coordinator,
+    storage: &crate::persistence::Worker,
+) -> Vec<String> {
+    let mut blockers = Vec::new();
+    let Some(checkout) = workspace.checkout.as_ref() else {
+        return vec!["Canonical workspace identity unavailable".into()];
+    };
+    if !setup.ready() || !archive.ready() {
+        blockers.push("Setup/archive recovery is loading".into());
+    }
+    if setup.reserved(checkout) || creation.pending_checkout(checkout) {
+        blockers.push("Setup or creation/launch handoff remains pending or uncertain".into());
+    }
+    if archive.blocks(checkout) {
+        blockers.push("Incomplete archive/branch mutation; settle its exact receipt first".into());
+    }
+    if sessions.entries.iter_mut().any(|(_, owner)| {
+        let known = owner.observation().checkout_identity;
+        let relevant = known
+            .as_ref()
+            .is_some_and(|c| c.common_dir == checkout.common_dir && c.git_dir == checkout.git_dir)
+            || owner.task() == workspace.task
+            || workspace
+                .legacy_tasks
+                .iter()
+                .any(|task| task == owner.task());
+        relevant && !owner.archive_ready(storage)
+    }) {
+        blockers.push("Active/uncertain managed execution, launch lookup, metadata or final capture remains. Stop/reconcile and wait for durable history.".into());
+    }
+    blockers
+}
+
 pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let Some(_ownership) = elect_owner(directory)? else {
         return Ok(());
@@ -317,416 +1045,414 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             return Ok(());
         }
     };
-    let mut state = restored.state;
-    let mut task_identity = restored.task;
-    if state.launch_request.is_empty() {
-        state.launch_request = uuid::Uuid::new_v4().to_string();
-    }
-    let mut launches: HashMap<String, LaunchResult> = HashMap::new();
-    for result in restored.launches {
-        launches.insert(result.request.clone(), result);
-    }
-    let mut checkout = restored
-        .checkout
-        .map(|bytes| PathBuf::from(std::ffi::OsString::from_vec(bytes)));
-    storage
-        .commands
-        .try_send(crate::persistence::Command::Save(
-            crate::persistence::Snapshot::new(&state, checkout.as_deref(), &task_identity),
-        ))?;
-    let mut save_pending = 1usize;
-    let mut pending_launch: Option<Request> = None;
-    let mut prepared_ready = false;
-    let mut cancelled_launch = false;
-    let mut gate_release: Option<SyncSender<()>> = None;
-    let mut gate_receipt: Option<Receiver<crate::recovery::Receipt>> = None;
-    let mut outcome_reply = false;
-    state.metadata_pending = true;
-    let mut metadata_failed = false;
-    let mut flush_pending = false;
-    let mut final_flush = false;
-    let mut history_sealed = false;
-    let mut capture_started_here = false;
-    let mut capture_done: Option<Receiver<()>> = None;
-    let stop_drain = Arc::new(AtomicBool::new(false));
-    let mut eof = true;
-    let mut child: Option<Box<dyn portable_pty::Child + Send + Sync>> = None;
-    let mut writer: Option<SyncSender<Vec<u8>>> = None;
-    let (write_errors, input_errors) = mpsc::sync_channel(1);
-    let mut owned_scope: Option<crate::child_scope::Scope> = None;
-    let mut stopping: Option<Receiver<crate::lifecycle::Outcome>> = None;
-    let mut monitor: Option<crate::native_status::Monitor> = None;
-    let mut codex_monitor: Option<crate::codex_status::Monitor> = None;
-    let mut shutdown = false;
-    let mut retry_requested = false;
-    let screen = Arc::new(Mutex::new(ScreenState {
-        parser: vt100::Parser::new(ROWS.try_into().unwrap(), COLS.try_into().unwrap(), 0),
-        output_bytes: 0,
-    }));
-    let mut master: Option<Arc<Mutex<Box<dyn portable_pty::MasterPty + Send>>>> = None;
+    let mut creation = crate::creation::Coordinator::new(&storage);
+    creation.view.launches = restored.state.creation.launches.clone();
+    let mut setup = crate::setup::Coordinator::new(&storage);
+    let mut archive = crate::archive::Coordinator::new(&storage);
+    let mut removal = crate::removal::Coordinator::new(&storage);
+    let mut registry = restored.state.registry.clone();
+    let mut registry_error = None;
+    let mut registry_operation = None;
+    let mut registering = false;
+    let mut session = Sessions::restore(directory, restored, &storage)?;
+    let mut adoption: Option<crate::git::AdoptionJob> = None;
+    let mut discovery: Option<crate::git::GitWorker> = None;
+    let mut pending_discovery: Option<(u64, PathBuf)> = None;
+    let mut discovery_result = None;
+    let mut source_job: Option<crate::editor::SourceJob> = None;
+    let mut source_result = None;
+    let mut diff_job: Option<crate::working_diff::Job> = None;
+    let mut diff_result = None;
+    let mut diff_save: Option<(uuid::Uuid, crate::working_diff::Response)> = None;
+    let mut adoption_pending = false;
+    let mut quitting = false;
+    let mut subscriber_frame_high_water = 0;
     let mut controller: Option<UnixStream> = None;
     let mut delivery: Option<Delivery> = None;
     let mut pending = Vec::new();
     loop {
-        while let Ok(event) = storage.events.try_recv() {
-            use crate::persistence::Completion;
-            match event {
-                Completion::Retried | Completion::Sealed => {}
-                Completion::Cleanup(page) => state.cleanup = Some(page),
-                Completion::Deleted(id) => {
-                    state.cleanup_message = Some(format!(
-                        "History deletion completed: {id}. Capacity may remain low; y retry capture / s stop."
-                    ));
-                    state.history = None;
-                    state.history_index = 0;
-                    history_sealed = false;
-                    state.cleanup = None;
-                    let _ = storage
-                        .commands
-                        .try_send(crate::persistence::Command::Cleanup(0));
-                }
-                Completion::Prepared(request) => {
-                    save_pending = save_pending.saturating_sub(1);
-                    prepared_ready = !cancelled_launch
-                        && request == state.launch_request
-                        && pending_launch.is_some();
-                }
-                Completion::Authorized(request) => {
-                    save_pending = save_pending.saturating_sub(1);
-                    if !cancelled_launch
-                        && request == state.launch_request
-                        && let Some(release) = gate_release.take()
-                    {
-                        let _ = release.try_send(());
-                    }
-                }
-                Completion::Saved => {
-                    save_pending = save_pending.saturating_sub(1);
-                    if save_pending == 0 {
-                        if metadata_failed {
-                            state.error = None;
-                        }
-                        metadata_failed = false;
-                    }
-                }
-                Completion::History(page) => state.history = Some(page),
-                Completion::Flushed => {
-                    flush_pending = false;
-                    final_flush = true;
-                }
-                Completion::Error(kind, error) => {
-                    if kind == "cleanup" {
-                        state.cleanup_message = Some(format!(
-                            "History cleanup failed/incomplete: {error}; no recovery claimed; g reopen / select / retry, y capture retry / s stop"
-                        ));
-                        continue;
-                    }
-                    if kind == "history" {
-                        state.error = Some(error);
-                        continue;
-                    }
-                    if kind == "metadata" {
-                        save_pending = save_pending.saturating_sub(1);
-                        metadata_failed = true;
-                        pending_launch = None;
-                        prepared_ready = false;
-                        gate_release = None;
-                    }
-                    if outcome_reply || pending_launch.is_none() {
-                        outcome_reply = false;
-                        state.metadata_pending = true;
-                        state.error = Some(format!(
-                            "Launch/storage outcome not durable: {error}; stop or repair storage before retrying"
-                        ));
-                    }
-                    flush_pending = false;
-                    shutdown = false;
-                    final_flush = false;
-                    state.error = Some(format!(
-                        "History storage failed: {error}; not saved, retry quit"
-                    ));
-                }
-            }
-        }
-        if let Some(receipt) = &gate_receipt
-            && let Ok(result) = receipt.try_recv()
+        if source_job.as_ref().is_some_and(|job| job.is_finished())
+            && let Some(job) = source_job.take()
         {
-            gate_receipt = None;
-            crate::recovery::crash_barrier(directory, "before-result");
-            match result {
-                _ if cancelled_launch => {
-                    state.error =
-                        Some("Launch cancelled by Stop; metadata may still be pending".into());
-                }
-                crate::recovery::Receipt::Executed => {
-                    let verified = state
-                        .execution
-                        .as_ref()
-                        .ok_or_else(|| io::Error::other("Launch stopped before live exec receipt"))
-                        .and_then(|evidence| evidence.verify_live());
-                    if let Err(error) = verified {
-                        state.error = Some(format!(
-                            "Exec receipt lost its live process identity: {error}; launch outcome uncertain"
-                        ));
-                    }
-                }
-                crate::recovery::Receipt::ExecFailed(error) => {
-                    state.execution = None;
-                    state.error = Some(if state.agent.as_deref() == Some("Claude Code") {
-                        format!(
-                            "Claude Code launch failed: {error}; adopted checkout retained. Install claude on PATH and run claude auth login in your usual terminal"
-                        )
-                    } else if state.agent.as_deref() == Some("Codex CLI") {
-                        format!(
-                            "Codex CLI launch failed: {error}; adopted checkout retained. Install codex on PATH and run codex login in your usual terminal"
-                        )
-                    } else {
-                        format!(
-                            "Native executable launch failed: {error}; adopted checkout retained"
-                        )
-                    });
-                }
-                crate::recovery::Receipt::Unknown(error) => {
-                    state.error = Some(format!(
-                        "Native exec receipt uncertain: {error}; stop managed execution or reconcile explicitly"
-                    ))
-                }
-            }
-            let result = LaunchResult {
-                request: state.launch_request.clone(),
-                identity: state.identity.clone(),
-                error: state.error.clone(),
-            };
-            launches.insert(result.request.clone(), result.clone());
-            state.launch_result = Some(result);
-            match storage.commands.try_send(crate::persistence::Command::Save(
-                crate::persistence::Snapshot::new(&state, checkout.as_deref(), &task_identity),
-            )) {
-                Ok(()) => {
-                    save_pending += 1;
-                    outcome_reply = true;
-                }
-                Err(error) => {
-                    metadata_failed = true;
-                    state.error = Some(format!(
-                        "Launch outcome not durable: {error}; reconcile before replacement"
-                    ));
-                }
-            }
+            source_result = job.result.try_recv().ok();
         }
-        if outcome_reply && save_pending == 0 && !metadata_failed {
-            crate::recovery::crash_barrier(directory, "after-result");
-            outcome_reply = false;
-            state.metadata_pending = false;
-            screen.lock().unwrap().snapshot(&mut state);
-        }
-        if let Some(done) = &capture_done
-            && done.try_recv().is_ok()
+        if diff_job.as_ref().is_some_and(|job| job.is_finished())
+            && let Some(job) = diff_job.take()
+            && let Ok(mut response) = job.result.try_recv()
         {
-            eof = true;
-            capture_done = None;
-        }
-        if retry_requested {
-            let command = if metadata_failed {
-                crate::persistence::Command::Save(crate::persistence::Snapshot::new(
-                    &state,
-                    checkout.as_deref(),
-                    &task_identity,
-                ))
-            } else {
-                crate::persistence::Command::Retry
-            };
-            if storage.commands.try_send(command).is_ok() {
-                if metadata_failed {
-                    save_pending += 1;
-                }
-                retry_requested = false;
-            }
-        }
-        let progress = storage.progress.lock().unwrap().clone();
-        state.capacity = progress.capacity.clone();
-        state.accepted_bytes = progress.accepted;
-        state.written_bytes = progress.written;
-        state.storage_wait_millis = progress
-            .operation
-            .map_or(0, |(_, since)| since.elapsed().as_millis() as u64);
-        state.producer_wait_millis = progress
-            .producer_wait
-            .map_or(0, |since| since.elapsed().as_millis() as u64);
-        state.storage_error = progress.error.clone();
-        state.capture_pending_bytes = progress.pending_bytes;
-        state.capture_high_water = progress.pending_high_water;
-        state.capture_backpressure_count = progress.backpressure_count;
-        state.capture_backpressure_micros = progress.backpressure_micros;
-        state.durable_bytes = progress.durable;
-        state.durable_flush_count = progress.flush_count;
-        state.durable_commits.clone_from(&progress.commits);
-        state.durable_completed_millis = progress.completed_millis;
-        state.sync_commit_micros = progress.last_flush_micros;
-        state.accepted_to_durable_millis = progress.accepted_to_durable_millis;
-
-        state.metadata_pending = save_pending > 0
-            || metadata_failed
-            || pending_launch.is_some()
-            || gate_receipt.is_some()
-            || outcome_reply;
-        if (shutdown
-            || matches!(
-                state.lifecycle,
-                Lifecycle::Exited | Lifecycle::Stopped | Lifecycle::Failed
-            ))
-            && child.is_none()
-            && stopping.is_none()
-            && eof
-            && !flush_pending
-            && !final_flush
-            && storage
-                .commands
-                .try_send(crate::persistence::Command::Flush)
-                .is_ok()
-        {
-            flush_pending = true;
-        }
-        if capture_started_here
-            && !history_sealed
-            && final_flush
-            && !state.metadata_pending
-            && child.is_none()
-            && stopping.is_none()
-            && eof
-            && capture_done.is_none()
-            && progress.pending_bytes == 0
-            && matches!(
-                state.lifecycle,
-                Lifecycle::Stopped | Lifecycle::Exited | Lifecycle::Failed
-            )
-            && let Some(id) = state
-                .session_identity
-                .as_ref()
-                .map(|identity| identity.session.clone())
-            && storage
-                .commands
-                .try_send(crate::persistence::Command::Seal(id))
-                .is_ok()
-        {
-            history_sealed = true;
-        }
-        state.stopped = shutdown
-            && final_flush
-            && save_pending == 0
-            && !metadata_failed
-            && pending_launch.is_none()
-            && gate_receipt.is_none()
-            && !outcome_reply;
-        if let Ok(error) = input_errors.try_recv() {
-            state.error = Some(format!("Native input failed: {error}; stop or retry"));
-        }
-        if stopping.is_none()
-            && state.lifecycle != Lifecycle::StopFailed
-            && let Some(active) = child.as_mut()
-        {
-            match active.try_wait() {
-                Ok(Some(status)) => {
-                    state.process_exit = Some(crate::events::ProcessExit {
-                        code: status.exit_code(),
-                        signal: status.signal().map(str::to_owned),
-                    });
-                    writer = None;
-                    state.lifecycle = Lifecycle::Stopping;
-                    stop_drain.store(true, Ordering::Release);
-                    stopping = Some(crate::lifecycle::stop(
-                        child.take().unwrap(),
-                        owned_scope.as_ref().unwrap().clone(),
-                    ));
-                }
-                Ok(None) => {}
-                Err(error) => {
-                    state.error = Some(format!(
-                        "Cannot observe execution: {error}; stop explicitly"
-                    ))
-                }
-            }
-        }
-        if let Some(receiver) = &stopping
-            && let Ok(outcome) = receiver.try_recv()
-        {
-            stopping = None;
-            child = outcome.child;
-            if let Some(error) = outcome.error {
-                state.lifecycle = Lifecycle::StopFailed;
-                state.error = Some(error);
-                shutdown = false;
-            } else {
-                owned_scope = None;
-                state.lifecycle = match state.process_exit.as_ref() {
-                    Some(outcome) if outcome.failed() => Lifecycle::Failed,
-                    Some(_) => Lifecycle::Exited,
-                    None => Lifecycle::Stopped,
-                };
-                state.execution = None;
-                final_flush = false;
-                if storage
+            if let Ok(snapshot) = &mut response.result
+                && let Some(base) = snapshot.save_base.take()
+            {
+                let operation = uuid::Uuid::new_v4();
+                match storage
                     .commands
-                    .try_send(crate::persistence::Command::Save(
-                        crate::persistence::Snapshot::new(
-                            &state,
-                            checkout.as_deref(),
-                            &task_identity,
-                        ),
+                    .try_send(crate::persistence::Command::ComparisonBase(
+                        operation,
+                        response.workspace.clone(),
+                        base,
+                    )) {
+                    Ok(()) => diff_save = Some((operation, response)),
+                    Err(error) => {
+                        response.result = Err(format!(
+                            "Comparison base not saved: {error}; retry base selection"
+                        ));
+                        diff_result = Some(response);
+                    }
+                }
+            } else {
+                diff_result = Some(response);
+            }
+        }
+        if adoption
+            .as_ref()
+            .is_some_and(|job| !adoption_pending && job.is_finished())
+        {
+            adoption = None;
+        }
+        if discovery
+            .as_ref()
+            .is_some_and(|worker| worker.is_finished())
+        {
+            discovery = None;
+        }
+        if let Some(worker) = &discovery {
+            while let Ok(crate::events::Event::DiscoveryCompleted {
+                request,
+                repository,
+                result,
+            }) = worker.events.try_recv()
+            {
+                if pending_discovery.as_ref() != Some(&(request, repository.clone())) {
+                    continue;
+                }
+                if let Ok(worktrees) = &result {
+                    // Facts are retained only after an actual Git discovery, never guessed from creation metadata.
+                    for batch in worktrees.chunks(32) {
+                        let facts = batch
+                            .iter()
+                            .map(|w| {
+                                (
+                                    path_bytes(&w.path),
+                                    w.branch.clone().unwrap_or_else(|| "(detached HEAD)".into()),
+                                )
+                            })
+                            .collect();
+                        if storage
+                            .commands
+                            .try_send(crate::persistence::Command::ObservedBranches(facts))
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                }
+                pending_discovery = None;
+                discovery_result = Some(crate::git::Discovery {
+                    request,
+                    repository: path_bytes(&repository),
+                    result,
+                });
+            }
+        }
+        if let Some(result) = adoption
+            .as_ref()
+            .filter(|_| adoption_pending)
+            .and_then(|job| job.result.try_recv().ok())
+        {
+            adoption = None;
+            adoption_pending = false;
+            if registering {
+                registering = false;
+                let operation = uuid::Uuid::new_v4();
+                match result {
+                    Ok(identity) => match storage
+                        .commands
+                        .try_send(crate::persistence::Command::Register(operation, identity))
+                    {
+                        Ok(()) => registry_operation = Some(operation),
+                        Err(error) => {
+                            registry_error = Some(format!(
+                                "Project not registered / workspace name not saved: {error}; retry"
+                            ))
+                        }
+                    },
+                    Err(error) => registry_error = Some(error),
+                }
+                continue;
+            }
+            let result = result.and_then(|identity| {
+                let task = registry
+                    .checkout(&identity)
+                    .map(|workspace| workspace.task.clone())
+                    .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+                session.adopt_checkout(identity, task, &storage)?;
+                Ok(())
+            });
+            if let Err(error) = result {
+                session.adoption_failed(error, &storage);
+            }
+        }
+        while let Ok(event) = storage.events.try_recv() {
+            setup.complete(&event, &storage);
+            removal.complete(&event);
+            if let Some(snapshot) = archive.complete(&event) {
+                registry = snapshot;
+            }
+            if let Some(snapshot) = creation.complete(&event, &storage) {
+                registry = snapshot;
+            }
+            match event {
+                crate::persistence::Completion::Removals(_)
+                | crate::persistence::Completion::RemovalSaved(..)
+                | crate::persistence::Completion::Archives(_)
+                | crate::persistence::Completion::ArchiveSaved(..)
+                | crate::persistence::Completion::Setups(_)
+                | crate::persistence::Completion::SetupSaved(..)
+                | crate::persistence::Completion::Creations(_)
+                | crate::persistence::Completion::CreationSaved(..) => {}
+                crate::persistence::Completion::Registry(snapshot) => registry = snapshot,
+                crate::persistence::Completion::Selected(operation, result) => {
+                    session.complete(
+                        crate::persistence::Completion::Selected(operation, result.clone()),
+                        &storage,
+                    );
+                    if let Ok(snapshot) = result {
+                        registry = snapshot;
+                    }
+                }
+                crate::persistence::Completion::Registered(operation, result) => {
+                    if diff_save.as_ref().is_some_and(|(id, _)| *id == operation) {
+                        let (_, mut response) = diff_save.take().unwrap();
+                        match result {
+                            Ok(snapshot) => registry = snapshot,
+                            Err(error) => {
+                                response.result = Err(format!(
+                                    "Comparison base not saved: {error}; retry base selection"
+                                ))
+                            }
+                        }
+                        diff_result = Some(response);
+                        continue;
+                    }
+                    if registry_operation != Some(operation) {
+                        continue;
+                    }
+                    registry_operation = None;
+                    match result {
+                        Ok(snapshot) => registry = snapshot,
+                        Err(error) => {
+                            registry_error = Some(format!(
+                                "Project not registered / workspace name not saved: {error}; retry"
+                            ))
+                        }
+                    }
+                }
+                event => session.complete(event, &storage),
+            }
+        }
+        session.archive_reservations = registry
+            .workspaces
+            .iter()
+            .filter_map(|w| {
+                w.checkout
+                    .as_ref()
+                    .filter(|c| {
+                        registry.archived.contains(&w.id)
+                            || archive.blocks(c)
+                            || removal.blocks(c)
+                            || removal.view.records.iter().any(|r| {
+                                r.workspace == w.id && r.phase == crate::removal::Phase::Removed
+                            })
+                    })
+                    .cloned()
+            })
+            .collect();
+        session.settled_checkout_refusals = registry.workspaces.iter().filter_map(|w| {
+            let checkout = w.checkout.as_ref()?;
+            if archive.blocks(checkout) || removal.blocks(checkout) { return None; }
+            let reason = if removal.view.records.iter().any(|r| r.workspace == w.id && r.phase == crate::removal::Phase::Removed) {
+                "Workspace folder removed; in-place native resume and Start are unavailable. Restore saved code from its recovery reference into an available checkout and explicitly adopt it before coding; h reads retained history."
+            } else if registry.archived.contains(&w.id) {
+                "Workspace archived; Return/unarchive before Start or native resume. If the checkout is missing, restore saved code from its recovery reference into an available checkout and adopt it first; h reads retained history."
+            } else { return None; };
+            Some((checkout.clone(), reason))
+        }).collect();
+        creation.advance(&storage);
+        if let Some(mut handoff) = creation.launch.take() {
+            if let Some(checkout) = handoff.record.checkout.clone()
+                && let Err(error) = session.adopt_checkout_at(
+                    checkout,
+                    handoff.record.intent.request.clone(),
+                    &storage,
+                    false,
+                )
+            {
+                handoff.authorized_start = false;
+                creation.view.error = Some(format!(
+                    "Workspace retained; owner unavailable: {error}. Setup remains separate; adopt explicitly before Start"
+                ));
+            }
+            let command = registry
+                .workspaces
+                .iter()
+                .find(|w| w.task == handoff.record.intent.request)
+                .and_then(|w| w.creation.as_ref())
+                .and_then(|facts| facts.setup.as_ref())
+                .and_then(|policy| match policy {
+                    crate::setup::Policy::Command(command) => Some(command.clone()),
+                    crate::setup::Policy::Disabled => None,
+                });
+            if handoff.record.checkout.as_ref().is_some_and(|c| {
+                session
+                    .archive_reservations
+                    .iter()
+                    .any(|r| r.common_dir == c.common_dir && r.git_dir == c.git_dir)
+            }) {
+                handoff.authorized_start = false;
+                creation.view.error = Some(
+                    "Archive cancelled the pending setup/launch handoff; workspace retained".into(),
+                );
+            } else {
+                setup.accept(handoff, command, &storage);
+            }
+        }
+        setup.advance(&storage);
+        session.setup_reservations = setup
+            .view
+            .records
+            .iter()
+            .filter_map(|r| {
+                r.creation
+                    .checkout
+                    .as_ref()
+                    .filter(|c| setup.reserved(c))
+                    .cloned()
+            })
+            .fold(Vec::new(), |mut found, c| {
+                if !found.contains(&c) {
+                    found.push(c);
+                }
+                found
+            });
+        session.setup_ready = setup.ready();
+        session.archive_ready = archive.ready() && removal.ready();
+        if let Some(crate::creation::LaunchHandoff {
+            record,
+            authorized_start,
+        }) = setup.launch.take()
+            && let Some(checkout) = record.checkout
+        {
+            match session.adopt_checkout_at(
+                checkout,
+                record.intent.request.clone(),
+                &storage,
+                false,
+            ) {
+                Ok(index) if authorized_start => {
+                    let target = session.entries[index].0.clone();
+                    let expected = session.entries[index]
+                        .1
+                        .observation()
+                        .session_identity
+                        .map(|id| id.session);
+                    session.handle(
+                        Request::Session {
+                            target,
+                            session: expected,
+                            command: Box::new(Request::LaunchNative {
+                                request: record.intent.request,
+                                agent: record.intent.agent,
+                                prompt: record.intent.prompt,
+                            }),
+                        },
+                        &storage,
+                        false,
+                    );
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    creation.view.error = Some(format!(
+                        "Workspace retained; launch not started: {error}. Adopt and Start explicitly"
                     ))
-                    .is_ok()
-                {
-                    save_pending += 1;
-                    state.metadata_pending = true;
-                } else {
-                    metadata_failed = true;
-                    state.metadata_pending = true;
-                    state.error = Some("Lifecycle metadata not saved; retry quit".into());
-                    shutdown = false;
                 }
             }
         }
+        session.advance(&storage, adoption.is_some());
+        let settled = archive.target().is_some_and(|checkout| {
+            !setup.reserved(checkout)
+                && !creation.pending_checkout(checkout)
+                && session.entries.iter_mut().all(|(_, owner)| {
+                    let known = owner.observation().checkout_identity;
+                    let relevant = known.as_ref().is_some_and(|c| {
+                        c.common_dir == checkout.common_dir && c.git_dir == checkout.git_dir
+                    }) || registry
+                        .workspaces
+                        .iter()
+                        .filter(|w| {
+                            w.checkout.as_ref().is_some_and(|c| {
+                                c.common_dir == checkout.common_dir && c.git_dir == checkout.git_dir
+                            })
+                        })
+                        .any(|w| {
+                            w.task == owner.task()
+                                || w.legacy_tasks.iter().any(|t| t == owner.task())
+                        });
+                    !relevant || owner.archive_ready(&storage)
+                })
+        });
+        archive.advance(settled, &storage);
+        let removal_eligible = removal
+            .target()
+            .and_then(|c| registry.checkout(c))
+            .is_some_and(|w| {
+                removal_blockers(w, &mut session, &setup, &creation, &archive, &storage).is_empty()
+            });
+        removal.advance(removal_eligible, &storage);
+        let mut state = session.observation();
+        state.subscriber_frame_high_water = subscriber_frame_high_water;
+        state.diff_protocol = 2;
+        state.editor_protocol = 2;
+        state.editor_source = source_result.clone();
+        state.working_diff = diff_result.clone();
+        state.git_jobs_protocol = 1;
+        state.registry_protocol = 1;
+        state.prompt_naming_protocol = 1;
+        state.creation_protocol = 1;
+        state.resume_protocol = 1;
+        state.setup_protocol = 1;
+        state.archive_protocol = 2;
+        state.removal_protocol = 1;
+        state.removal = removal.view.clone();
+        state.setup = setup.view.clone();
+        state.archive = archive.view.clone();
+        creation.view.launches =
+            session.creation_receipts(&creation.view.records, &creation.view.launches);
+        state.creation = creation.view.clone();
+        state.registry_pending = registering || registry_operation.is_some();
+        state.registry = registry.clone();
+        state.error = state
+            .error
+            .or_else(|| registry_error.clone())
+            .or_else(|| setup.view.error.clone())
+            .or_else(|| archive.view.error.clone())
+            .or_else(|| removal.view.error.clone());
+        state.adoption_pending = adoption_pending;
+        state.discovery = discovery_result.clone();
+        state.stopped = session.all_stopped()
+            && quitting
+            && adoption.is_none()
+            && discovery.is_none()
+            && source_job.is_none()
+            && diff_job.is_none()
+            && diff_save.is_none()
+            && registry_operation.is_none()
+            && !archive.busy()
+            && !removal.busy()
+            && !creation.busy()
+            && setup.stopped();
         if state.stopped && controller.is_none() {
             fs::remove_file(&socket)?;
             return Ok(());
-        }
-        if monitor.is_some() || codex_monitor.is_some() {
-            let current = screen.lock().unwrap();
-            if current.output_bytes != state.output_bytes {
-                current.snapshot(&mut state);
-            }
-        }
-        if let Some(monitor) = monitor.as_mut() {
-            state.status = monitor.poll(
-                state.lifecycle == Lifecycle::Running,
-                &state.screen,
-                state.output_bytes,
-            );
-        }
-        if let Some(monitor) = codex_monitor.as_mut() {
-            state.status = monitor.poll(
-                state.lifecycle == Lifecycle::Running,
-                &state.screen,
-                state.output_bytes,
-            );
-        }
-        if let Some(id) = codex_monitor.as_ref().and_then(|m| m.native_session())
-            && state.native_conversation.as_deref() != Some(id)
-            && uuid::Uuid::parse_str(id).is_ok()
-        {
-            let mut saved = state.clone();
-            saved.native_conversation = Some(id.to_owned());
-            if storage
-                .commands
-                .try_send(crate::persistence::Command::Save(
-                    crate::persistence::Snapshot::new(&saved, checkout.as_deref(), &task_identity),
-                ))
-                .is_ok()
-            {
-                state.native_conversation = saved.native_conversation;
-                save_pending += 1;
-                state.metadata_pending = true;
-            }
         }
         // Accept/reject independently of the active client's commands or output.
         for _ in 0..32 {
@@ -735,17 +1461,26 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     incoming.set_nonblocking(true)?;
                     if controller.is_some() {
                         let refusal = Observation {
+                            diff_protocol: 2,
+                            editor_protocol: 2,
+                            git_jobs_protocol: 1,
+                            registry_protocol: 1,
+                            sessions_protocol: 1,
+                            prompt_naming_protocol: 1,
+                            creation_protocol: 1,
+                            resume_protocol: 1,
+                            setup_protocol: 1,
+                            archive_protocol:2,
+                            removal_protocol:1,
                             control_denied: true,
                             error: Some("Another dashboard controls this supervisor; close it before reconnecting".into()),
                             ..Observation::default()
                         };
                         let _ = send_observation(&mut incoming, &refusal);
                     } else {
-                        screen.lock().unwrap().snapshot(&mut state);
                         delivery = Some(Delivery::new(&mut state)?);
-                        state.subscriber_frame_high_water = state
-                            .subscriber_frame_high_water
-                            .max(delivery.as_ref().unwrap().bytes.len());
+                        subscriber_frame_high_water =
+                            subscriber_frame_high_water.max(delivery.as_ref().unwrap().bytes.len());
                         controller = Some(incoming);
                         pending.clear();
                     }
@@ -768,7 +1503,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                 }
                 Err(error) => {
                     if error.kind() == io::ErrorKind::TimedOut {
-                        state.error = Some(error.to_string());
+                        session.report_error(error.to_string());
                     }
                     controller = None;
                     delivery = None;
@@ -781,597 +1516,583 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                 return Ok(());
             }
         }
-        if !(prepared_ready && pending_launch.is_some()) {
-            let Some(stream) = controller.as_mut() else {
-                thread::sleep(Duration::from_millis(5));
+        let Some(stream) = controller.as_mut() else {
+            thread::sleep(Duration::from_millis(5));
+            continue;
+        };
+        let mut incoming = [0; 4096];
+        match stream.read(&mut incoming) {
+            Ok(0) => {
+                controller = None;
+                pending.clear();
                 continue;
-            };
-            let mut incoming = [0; 4096];
-            match stream.read(&mut incoming) {
-                Ok(0) => {
-                    controller = None;
-                    pending.clear();
-                    continue;
-                }
-                Ok(n) => pending.extend_from_slice(&incoming[..n]),
-                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
-                Err(_) => {
-                    controller = None;
-                    pending.clear();
-                    continue;
-                }
             }
-            if pending.len() > MAX_FRAME {
+            Ok(n) => pending.extend_from_slice(&incoming[..n]),
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
+            Err(_) => {
                 controller = None;
                 pending.clear();
                 continue;
             }
         }
-        let continuing = prepared_ready && pending_launch.is_some();
-        let request: Request = if continuing {
-            prepared_ready = false;
-            pending_launch.take().unwrap()
-        } else {
-            let Some(end) = pending.iter().position(|byte| *byte == b'\n') else {
-                thread::sleep(Duration::from_millis(5));
+        if pending.len() > MAX_FRAME {
+            controller = None;
+            pending.clear();
+            continue;
+        }
+        let Some(end) = pending.iter().position(|byte| *byte == b'\n') else {
+            thread::sleep(Duration::from_millis(5));
+            continue;
+        };
+        let bytes: Vec<_> = pending.drain(..=end).collect();
+        let mut request: Request = match serde_json::from_slice(&bytes) {
+            Ok(request) => request,
+            Err(_) => {
+                controller = None;
+                pending.clear();
                 continue;
-            };
-            let bytes: Vec<_> = pending.drain(..=end).collect();
-            match serde_json::from_slice(&bytes) {
-                Ok(request) => request,
-                Err(_) => {
-                    controller = None;
-                    pending.clear();
-                    continue;
-                }
             }
         };
-        let mut deferred = false;
-        if !matches!(request, Request::Screen) && !metadata_failed {
-            state.error = None;
-        }
-        let save_history =
-            matches!(&request, Request::History { index, .. } if *index != state.history_index);
-        let save = save_history
-            || matches!(
-                request,
-                Request::Adopt(_)
-                    | Request::Launch(_)
-                    | Request::LaunchClaude(_)
-                    | Request::Reconcile
-                    | Request::LaunchCodex(_)
-                    | Request::Resume(_)
-                    | Request::Stop
-                    | Request::Shutdown
-            );
-        let resume = matches!(&request, Request::Resume(_));
-        let claude = matches!(&request, Request::LaunchClaude(_))
-            || (resume && state.agent.as_deref() == Some("Claude Code"));
-        let codex = matches!(&request, Request::LaunchCodex(_))
-            || (resume && state.agent.as_deref() == Some("Codex CLI"));
-        let launch_request = match &request {
-            Request::Launch(id)
-            | Request::LaunchClaude(id)
-            | Request::LaunchCodex(id)
-            | Request::Resume(id) => Some(id.clone()),
-            _ => None,
-        };
-        let recorded = match &request {
-            Request::Launch(id)
-            | Request::LaunchClaude(id)
-            | Request::LaunchCodex(id)
-            | Request::Resume(id)
-            | Request::QueryLaunch(id) => launches.get(id).cloned(),
-            _ => None,
-        };
-        let result = (|| -> Result<(), Box<dyn std::error::Error>> {
-            if !continuing
-                && (pending_launch.is_some() || gate_receipt.is_some() || outcome_reply)
-                && launch_request.as_deref() == Some(state.launch_request.as_str())
-            {
-                deferred = true;
-                return Ok(());
-            }
-            if matches!(&request, Request::QueryLaunch(id) if id == &state.launch_request)
-                && (pending_launch.is_some() || gate_receipt.is_some() || outcome_reply)
-            {
-                return Ok(());
-            }
-            if let Some(recorded) = &recorded {
-                state.launch_result = Some(recorded.clone());
-                state.error = recorded.error.clone();
-                return Ok(());
-            }
-            if !continuing && child.is_some() && launch_request.is_some() {
-                return Err("A session already exists; attach to it".into());
-            }
-            if (pending_launch.is_some() || gate_receipt.is_some())
-                && matches!(
-                    request,
-                    Request::Adopt(_)
-                        | Request::Launch(_)
-                        | Request::LaunchClaude(_)
-                        | Request::LaunchCodex(_)
-                        | Request::Resume(_)
-                )
-            {
-                return Err("Launch reconciliation pending; wait for durable outcome".into());
-            }
-            match request {
-                Request::Adopt(bytes) => {
-                    let path =
-                            PathBuf::from(std::ffi::OsString::from_vec(bytes)).canonicalize().map_err(|error| format!("Checkout unavailable: {error}; refresh and choose an existing working checkout"))?;
-                    let output = Command::new("git")
-                        .arg("-C")
-                        .arg(&path)
-                        .args(["rev-parse", "--show-toplevel"])
-                        .output()?;
-                    if !output.status.success() {
-                        return Err("Checkout unavailable or bare; choose an existing working checkout and refresh".into());
-                    }
-                    let mut root = output.stdout;
-                    if root.last() == Some(&b'\n') {
-                        root.pop();
-                    }
-                    let path = PathBuf::from(std::ffi::OsString::from_vec(root)).canonicalize()?;
-                    if (child.is_some() || stopping.is_some() || !eof || capture_done.is_some() || storage.progress.lock().unwrap().pending_bytes > 0) && checkout.as_ref() != Some(&path) {
-                        return Err(
-                            "Stop the existing session before adopting another checkout".into()
-                        );
-                    }
-                    if state.execution.is_some() && child.is_none() && checkout.as_ref() != Some(&path) {
-                        return Err("Interrupted execution is uncertain; inspect history before changing adoption".into());
-                    }
-                    if checkout.as_ref() != Some(&path) {
-                        state.identity = None;
-                        state.session_identity = None;
-                        state.process_exit = None;
-                        state.lifecycle = Lifecycle::Idle;
-                        state.native_conversation = None;
-                        state.agent = None;
-                        task_identity = uuid::Uuid::new_v4().to_string();
-                    }
-                    state.adopted = Some(path.display().to_string());
-                    checkout = Some(path);
-                }
-                Request::Reconcile => {
-                    if child.is_some() || stopping.is_some() { return Err("Session owned by current supervisor; stop it normally".into()); }
-                    if let Some(evidence) = &state.execution { evidence.reconcile()?; }
-                    state.execution = None;
-                    state.reconciled = true;
-                    state.error = Some("Reconciled: no released coding execution survives; history retained. Explicitly resume with v or launch a new conversation with c/x when ready.".into());
-                }
-                Request::QueryLaunch(_) => return Err("Launch request unknown to this supervisor; do not replay uncertain activity after supervisor loss".into()),
-                Request::Launch(request) | Request::LaunchClaude(request) | Request::LaunchCodex(request) | Request::Resume(request) => {
-                    if !continuing && child.is_none() && stopping.is_none() && (!eof || capture_done.is_some() || flush_pending || storage.progress.lock().unwrap().pending_bytes > 0 || metadata_failed || (matches!(state.lifecycle, Lifecycle::Stopped | Lifecycle::Exited | Lifecycle::Failed) && !final_flush)) {
-                        return Err("Previous session history is still pending; repair storage and press y to retry before starting another session".into());
-                    }
-                    if state.execution.is_some() && !continuing && child.is_none() { return Err("Interrupted execution is uncertain; u reconciles process evidence. Verified reboot resolves unknown descendants; no automatic coding restart.".into()); }
-                    if request.is_empty() || request.len() > 128 {
-                        return Err("Launch request must contain 1–128 bytes".into());
-                    }
-                    if launches.len() >= 1024 {
-                        return Err("Launch request capacity reached; retained outcomes are preserved and further launch is blocked".into());
-                    }
-                    state.launch_request = request.clone();
-                    if child.is_some() || stopping.is_some() {
-                        return Err("A session already exists; attach to it".into());
-                    }
-                    let path = checkout.as_ref().ok_or("Adopt a checkout before launch")?;
-                    if !path.is_dir() { return Err("Checkout unavailable: cannot continue in place; h opens retained history. Restore the checkout before explicitly resuming.".into()); }
-                    if resume && (!claude && !codex || state.native_conversation.as_deref().and_then(|id| uuid::Uuid::parse_str(id).ok()).is_none()) {
-                        return Err("Native resume unavailable: no supported saved conversation identity. h opens retained history; c Claude / x Codex explicitly starts a new conversation.".into());
-                    }
-                    if !continuing {
-                        cancelled_launch = false;
-                        state.capture_loss_possible = false;
-                        if !resume { state.native_conversation = None; }
-                        state.execution = Some(crate::recovery::Execution::prepared()?);
-                        state.reconciled = false;
-                        let session = uuid::Uuid::new_v4().to_string();
-                        let identity = crate::events::SessionIdentity { task: task_identity.clone(), session, request: request.clone() };
-                        state.identity = Some(identity.label());
-                        state.session_identity = Some(identity);
-                        state.process_exit = None;
-                        state.launch_result = None;
-                        state.lifecycle = Lifecycle::Interrupted;
-                        storage.commands.try_send(crate::persistence::Command::Prepare(crate::persistence::Snapshot::new(&state, Some(path), &task_identity)))?;
-                        save_pending += 1;
-                        pending_launch = Some(if resume { Request::Resume(request) } else if claude { Request::LaunchClaude(request) } else if codex { Request::LaunchCodex(request) } else { Request::Launch(request) });
-                        deferred = true;
-                        return Ok(());
-                    }
-                    let (rows, cols) = screen.lock().unwrap().parser.screen().size();
-                    let pty = native_pty_system().openpty(PtySize {
-                        rows: rows.get(),
-                        cols: cols.get(),
-                        pixel_width: 0,
-                        pixel_height: 0,
-                    })?;
-                    crate::recovery::crash_barrier(directory, "before-create");
-                    let gate_path = directory.join("launch-gate.sock");
-                    let _ = fs::remove_file(&gate_path);
-                    let gate_listener = UnixListener::bind(&gate_path)?;
-                    gate_listener.set_nonblocking(true)?;
-                    fs::set_permissions(&gate_path, fs::Permissions::from_mode(0o600))?;
-                    let nonce = uuid::Uuid::new_v4().to_string();
-                    let claude_executable = if claude {
-                        std::env::var_os("PATH").and_then(|paths| std::env::split_paths(&paths).find_map(|directory| {
-                            let directory = if directory.is_absolute() { directory } else { path.join(directory) };
-                            let candidate = directory.join("claude");
-                            candidate.is_file().then(|| candidate.canonicalize().ok()).flatten()
-                        }))
-                    } else { None };
-                    let mut command = if claude {
-                        CommandBuilder::new(claude_executable.as_deref().unwrap_or_else(|| Path::new("claude")))
-                    } else if codex {
-                        let mut command = CommandBuilder::new("codex");
-                        if resume {
-                            command.arg("resume");
-                            command.arg(state.native_conversation.as_ref().unwrap());
-                        }
-                        command.arg("--no-daemon");
-                        command
-                    } else {
-                        let mut command = CommandBuilder::new(std::env::current_exe()?);
-                        command.arg("--scripted-child");
-                        command
-                    };
-                    if claude && resume {
-                        command.arg("--resume");
-                        command.arg(state.native_conversation.as_ref().unwrap());
-                    }
-                    if !resume { state.native_conversation = None; }
-                    monitor = None;
-                    codex_monitor = None;
-                    state.status = crate::native_status::Status::default();
-                    if codex {
-                        match crate::codex_status::Monitor::start(directory) {
-                            Ok(mut status_monitor) => {
-                                if resume { status_monitor.expect_session(state.native_conversation.as_ref().unwrap()); }
-                                if status_monitor.configure(&mut command).is_ok() { codex_monitor = Some(status_monitor); }
-                                else { state.status.reason = "Codex status monitor unavailable".into(); }
-                            }
-                            Err(_) => state.status.reason = "Codex status monitor unavailable".into(),
-                        }
-                    } else {
-                        match crate::native_status::Monitor::start(directory, !claude, if resume { state.native_conversation.as_deref() } else { None }) {
-
-                            Ok(mut status_monitor) => {
-                                status_monitor.native_executable(claude_executable.as_deref());
-                                status_monitor.configure(&mut command, resume);
-                                if claude { state.native_conversation = Some(status_monitor.native_session().to_owned()); }
-                                monitor = Some(status_monitor);
-                            }
-                            Err(_) => {
-                                state.status.reason = "status monitor unavailable".into();
-                                if claude && !resume {
-                                    let id = uuid::Uuid::new_v4().to_string();
-                                    command.arg("--session-id");
-                                    command.arg(&id);
-                                    state.native_conversation = Some(id);
-                                }
-                            },
-                        }
-
-                    }
-                    #[cfg(debug_assertions)]
-                    if !claude && !codex { command.env("RAT_PROOF_STORAGE_DIR", directory); }
-                    command.env("TERM", "xterm-256color");
-                    command.cwd(path);
-                    crate::recovery::wrap(&mut command, &gate_path, &nonce)?;
-                    let launched = pty.slave.spawn_command(command).map_err(|error| {
-                        if claude {
-                            format!("Claude Code launch failed: {error}. Install claude on PATH, run claude auth login in your usual terminal, then explicitly retry c; adopted checkout retained")
-                        } else if codex {
-                            format!("Codex CLI launch failed: {error}. Install codex on PATH, run codex login in your usual terminal, then explicitly retry x; adopted checkout retained")
-                        } else {
-                            format!("Fixture launch failed: {error}; retry l")
-                        }
-                    })?;
-                    crate::recovery::crash_barrier(directory, "after-create");
-                    state.agent = Some(
-                        if claude {
-                            "Claude Code"
-                        } else if codex {
-                            "Codex CLI"
-                        } else {
-                            "Scripted PTY"
-                        }
-                        .into(),
-                    );
-                    drop(pty.slave);
-                    let process_group = launched
-                        .process_id()
-                        .ok_or("Missing managed process identity")?
-                        .try_into()?;
-                    state.execution.as_mut().ok_or("Missing durable intent")?.identify(process_group)?;
-                    owned_scope = Some(crate::child_scope::Scope::new(process_group)?);
-                    let (release, authorized) = mpsc::sync_channel(1);
-                    let (receipt, result) = mpsc::sync_channel(1);
-                    gate_release = Some(release);
-                    gate_receipt = Some(result);
-                    let proof_receipt_pause = directory.join("proof-launch-receipt");
-                    thread::spawn(move || {
-                        let result = (|| -> io::Result<crate::recovery::Receipt> {
-                            let deadline = std::time::Instant::now() + Duration::from_secs(2);
-                            let mut stream = loop {
-                                match gate_listener.accept() {
-                                    Ok((stream, _)) => break stream,
-                                    Err(error) if error.kind() == io::ErrorKind::WouldBlock && std::time::Instant::now() < deadline => thread::sleep(Duration::from_millis(5)),
-                                    Err(error) => return Err(error),
-                                }
-                            };
-                            // macOS accepted sockets inherit nonblocking status.
-                            stream.set_nonblocking(false)?;
-                            stream.set_read_timeout(Some(Duration::from_secs(5)))?;
-                            let mut actual = vec![0; nonce.len()];
-                            stream.read_exact(&mut actual)?;
-                            if actual != nonce.as_bytes() { return Err(io::Error::other("Launch gate nonce mismatch")); }
-                            authorized.recv().map_err(|_| io::Error::other("Launch authorization lost"))?;
-                            stream.write_all(&[1])?;
-                            let mut error = String::new();
-                            stream.take(4096).read_to_string(&mut error)?;
-                            if !error.is_empty() { return Ok(crate::recovery::Receipt::ExecFailed(error)); }
-                            Ok(crate::recovery::Receipt::Executed)
-                        })().unwrap_or_else(|e| crate::recovery::Receipt::Unknown(e.to_string()));
-                        let _ = fs::remove_file(gate_path);
-                        #[cfg(debug_assertions)]
-                        while proof_receipt_pause.exists() { thread::sleep(Duration::from_millis(10)); }
-                        let _ = proof_receipt_pause;
-                        let _ = receipt.send(result);
-                    });
-                    storage.commands.try_send(crate::persistence::Command::Authorize(crate::persistence::Snapshot::new(&state, Some(path), &task_identity)))?;
-                    save_pending += 1;
-                    deferred = true;
-                    let mut sink = pty.master.take_writer()?;
-                    let (input, writes) = mpsc::sync_channel::<Vec<u8>>(32);
-                    let errors = write_errors.clone();
-                    thread::spawn(move || {
-                        while let Ok(bytes) = writes.recv() {
-                            if let Err(error) = sink.write_all(&bytes) {
-                                let _ = errors.try_send(error.to_string());
-                                break;
-                            }
-                        }
-                    });
-                    writer = Some(input);
-                    state.lifecycle = Lifecycle::Running;
-                    state.stopped = false;
-                    state.history_index = 0;
-                    history_sealed = false;
-                    capture_started_here = true;
-                    let session = state.session_identity.as_ref().ok_or("Missing prepared identity")?.session.clone();
-                    let capture = storage.output.clone();
-                    let (finished, done) = mpsc::sync_channel(1);
-                    capture_done = Some(done);
-                    eof = false;
-                    final_flush = false;
-                    let mut source = pty.master.try_clone_reader()?;
-                    master = Some(Arc::new(Mutex::new(pty.master)));
-                    let parser = screen.clone();
-                    stop_drain.store(false, Ordering::Release);
-                    let drain = stop_drain.clone();
-                    thread::spawn(move || {
-                        // A macOS PTY leader can await terminal output drain even
-                        // after SIGKILL. Stop alone reserves a finite 1MiB raw tail;
-                        // the single reader preserves byte order and retries it
-                        // before reporting EOF. Exhaustion keeps backpressure and
-                        // bounded lifecycle verification still reports failure.
-                        const STOP_TAIL: usize = 1024 * 1024;
-                        const STOP_BLOCKS: usize = 256;
-                        let mut tail = VecDeque::new();
-                        let mut retained = 0;
-                        let mut bytes = [0; 4096];
-                        while let Ok(n) = source.read(&mut bytes) {
-                            if n == 0 {
-                                break;
-                            }
-                            capture.accept(n);
-                            let block = (session.clone(), bytes[..n].to_vec(), std::time::Instant::now());
-                            if tail.is_empty() {
-                                match capture.send(block, Some(&drain)) {
-                                    Ok(Some(block)) => { retained += n; tail.push_back(block); }
-                                    Ok(None) => {}
-                                    Err(()) => break,
-                                }
-                            } else {
-                                retained += n;
-                                tail.push_back(block);
-                            }
-                            if retained >= STOP_TAIL || tail.len() >= STOP_BLOCKS {
-                                let block = tail.pop_front().unwrap();
-                                retained -= block.1.len();
-                                if capture.send(block, None).is_err() { break; }
-                            }
-                            let mut screen = parser.lock().unwrap();
-                            screen.parser.process(&bytes[..n]);
-                            screen.output_bytes = screen.output_bytes.saturating_add(n as u64);
-                        }
-                        for block in tail {
-                            if capture.send(block, None).is_err() { return; }
-                        }
-                        let _ = finished.send(());
-                    });
-                    child = Some(launched);
-                }
-                Request::Input(bytes) => {
-                    if let Some(monitor) = monitor.as_mut() { monitor.input(screen.lock().unwrap().output_bytes, bytes.as_slice() == [3]); }
-                    if let Some(monitor) = codex_monitor.as_mut() { monitor.input(screen.lock().unwrap().output_bytes); }
-                    if bytes.len() > 4096 {
-                        return Err("Input exceeds prototype 4096-byte limit".into());
-                    }
-                    writer
-                        .as_mut()
-                        .ok_or("No session; launch first")?
-                        .try_send(bytes)
-                        .map_err(|e| format!("Native input queue unavailable: {e}; retry"))?;
-                }
-                Request::Key(key) => {
-                    if let Some(monitor) = monitor.as_mut() { monitor.input(screen.lock().unwrap().output_bytes, matches!(key.code, crossterm::event::KeyCode::Char('c' | 'C')) && key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) && !key.modifiers.contains(crossterm::event::KeyModifiers::ALT)); }
-                    if let Some(monitor) = codex_monitor.as_mut() { monitor.input(screen.lock().unwrap().output_bytes); }
-                    let application_cursor =
-                        screen.lock().unwrap().parser.screen().application_cursor();
-                    let bytes = crate::native_input::encode(key, application_cursor)?;
-                    writer
-                        .as_mut()
-                        .ok_or("No session; launch first")?
-                        .try_send(bytes)
-                        .map_err(|e| format!("Native input queue unavailable: {e}; retry"))?;
-                }
-                Request::Paste(text) => {
-                    if let Some(monitor) = monitor.as_mut() { monitor.input(screen.lock().unwrap().output_bytes, false); }
-                    if let Some(monitor) = codex_monitor.as_mut() { monitor.input(screen.lock().unwrap().output_bytes); }
-                    if text.len() > 4084 {
-                        return Err("Paste exceeds 4084-byte limit".into());
-                    }
-                    let bracketed = screen.lock().unwrap().parser.screen().bracketed_paste();
-                    let bytes = if bracketed {
-                        format!("\x1b[200~{text}\x1b[201~").into_bytes()
-                    } else {
-                        text.replace("\r\n", "\r").replace('\n', "\r").into_bytes()
-                    };
-                    writer
-                        .as_mut()
-                        .ok_or("No session; launch first")?
-                        .try_send(bytes)
-                        .map_err(|e| format!("Native input queue unavailable: {e}; retry"))?;
-                }
-                Request::Resize { rows, cols } => {
-                    if rows == 0 || cols == 0 {
-                        return Ok(());
-                    }
-                    let (rows, cols) = (rows.clamp(1, MAX_ROWS), cols.clamp(1, MAX_COLS));
-                    // Serialize geometry changes against output parsing. Resize the PTY
-                    // first; output induced by SIGWINCH cannot enter the old parser size.
-                    let mut screen = screen.lock().unwrap();
-                    if let Some(master) = master.as_ref() {
-                        master.lock().unwrap().resize(PtySize {
-                            rows,
-                            cols,
-                            pixel_width: 0,
-                            pixel_height: 0,
-                        })?;
-                    }
-                    screen
-                        .parser
-                        .set_size(rows.try_into().unwrap(), cols.try_into().unwrap());
-                }
-                Request::History { index, offset } => {
-                    state.history_index = index;
-                    storage.commands.try_send(crate::persistence::Command::History(index, offset)).map_err(|e| format!("History busy: {e}; retry"))?;
-                }
-                Request::Screen => {}
-                Request::Cleanup { page } => {
-                    state.cleanup = None;
-                    storage.commands.try_send(crate::persistence::Command::Cleanup(page)).map_err(|e| format!("Cleanup busy: {e}; retry"))?;
-                }
-                Request::DeleteHistory { id } => {
-                    if state.session_identity.as_ref().map(|identity| identity.session.as_str()) == Some(&id)
-                        && (child.is_some() || stopping.is_some() || !eof || capture_done.is_some() || !final_flush || state.metadata_pending || progress.pending_bytes > 0)
-                    { return Err("Selected history still has active, uncertain or unflushed capture".into()); }
-                    state.cleanup_message = Some(format!("Deleting explicitly selected history {id}; completion pending"));
-                    storage.commands.try_send(crate::persistence::Command::Delete(id)).map_err(|e| format!("Cleanup busy: {e}; retry"))?;
-                }
-                Request::RetryStorage => {
-                    history_sealed = false;
-                    retry_requested = true;
-                    final_flush = false;
-                }
-                Request::Stop | Request::Shutdown => {
-                    if state.storage_wait_millis >= 250 || state.producer_wait_millis > 0 || state.storage_error.is_some() { state.capture_loss_possible = true; }
-                    if pending_launch.is_some() || gate_receipt.is_some() {
-                        let result = LaunchResult { request: state.launch_request.clone(), identity: state.identity.clone(), error: Some("Launch cancelled by Stop; metadata may still be pending".into()) };
-                        launches.insert(result.request.clone(), result.clone());
-                        state.launch_result = Some(result);
-                    }
-                    let cancelled_preparation = pending_launch.is_some() && child.is_none() && gate_receipt.is_none();
-                    cancelled_launch = true;
-                    pending_launch = None;
-                    prepared_ready = false;
-                    if cancelled_preparation { state.execution = None; }
-                    gate_release = None;
-                    if child.is_none() && stopping.is_none() && state.execution.is_some() {
-                        return Err("Interrupted execution remains uncertain; u reconciles evidence, d detaches. A missing native leader may require verified reboot before replacement or confirmed shutdown.".into());
-                    }
-                    shutdown |= matches!(request, Request::Shutdown);
-                    if stopping.is_none() {
-                        if let Some(active) = child.take() {
-                            writer = None;
-                                    state.lifecycle = Lifecycle::Stopping;
-                            stop_drain.store(true, Ordering::Release);
-                            stopping = Some(crate::lifecycle::stop(active, owned_scope.as_ref().unwrap().clone()));
-                        } else {
-                            final_flush = false;
-                        }
-                    }
-                }
-            }
-            Ok(())
-        })();
-        if let Err(error) = result {
-            state.error = Some(error.to_string());
-        }
-        let fresh_launch = launch_request.is_some() && recorded.is_none();
-        if let Some(request) = launch_request
-            && !deferred
-            && recorded.is_none()
-            && request.len() <= 128
-            && !request.is_empty()
-            && launches.len() < 1024
+        if matches!(&request, Request::Session {command, ..} if matches!(**command, Request::Stop))
+            && let Some(job) = &diff_job
         {
-            let result = LaunchResult {
-                request: request.clone(),
-                identity: if state.error.is_none() {
-                    state.identity.clone()
-                } else {
-                    None
-                },
-                error: state.error.clone(),
-            };
-            launches.insert(request, result.clone());
-            state.launch_result = Some(result);
+            job.cancel();
         }
-        if save && !deferred {
-            match storage.commands.try_send(crate::persistence::Command::Save(
-                crate::persistence::Snapshot::new(&state, checkout.as_deref(), &task_identity),
-            )) {
-                Ok(()) => {
-                    save_pending += 1;
-                    state.metadata_pending = true;
-                    if fresh_launch {
-                        outcome_reply = true;
-                    }
+        if matches!(&request, Request::Session {command, ..} if matches!(**command, Request::Stop))
+            && let Some(job) = &source_job
+        {
+            job.cancel();
+        }
+
+        if let Request::Session {
+            target,
+            session: expected,
+            command,
+        } = &mut request
+            && matches!(**command, Request::Stop)
+            && let Some((_, owner)) = session.entries.iter_mut().find(|(id, _)| id == target)
+        {
+            let state = owner.observation();
+            let current = state.session_identity.map(|id| id.session);
+            // Empty-owner Stop may race its setup's original native handoff.
+            // It may follow only that same creation request, never a later chat.
+            if current == *expected
+                || expected.is_none()
+                    && setup.owns_original_launch(owner.task(), &state.launch_request)
+            {
+                if let Some(checkout) = state.checkout_identity {
+                    setup.cancel_checkout(&checkout);
                 }
-                Err(error) => {
-                    metadata_failed = true;
-                    state.metadata_pending = true;
-                    state.error = Some(format!("Metadata not saved: {error}; retry"));
-                    shutdown = false;
-                }
+                *expected = current;
             }
         }
-        screen.lock().unwrap().snapshot(&mut state);
-        if let Some(monitor) = monitor.as_mut() {
-            state.status = monitor.poll(
-                state.lifecycle == Lifecycle::Running,
-                &state.screen,
-                state.output_bytes,
-            );
+
+        match request {
+            Request::EditorSource {
+                request,
+                workspace,
+                path,
+                line,
+            } => {
+                let result = (|| -> Result<(), String> {
+                    if request.len() > 128
+                        || workspace.len() > 256
+                        || path
+                            .as_ref()
+                            .is_some_and(|p| p.len() > 32768 || p.contains(&0))
+                    {
+                        return Err("Invalid source location identity/path".into());
+                    }
+                    if source_job.is_some() {
+                        return Err("Source location worker busy; retry".into());
+                    }
+                    let checkout = registry
+                        .workspaces
+                        .iter()
+                        .find(|w| w.id == workspace)
+                        .and_then(|w| w.checkout.clone())
+                        .ok_or("No retained checkout identity; adopt an existing checkout first")?;
+                    source_job = Some(
+                        crate::editor::SourceJob::start(
+                            checkout,
+                            request.clone(),
+                            workspace.clone(),
+                            path,
+                            line,
+                        )
+                        .map_err(|e| e.to_string())?,
+                    );
+                    source_result = None;
+                    Ok(())
+                })();
+                if let Err(error) = result {
+                    source_result = Some(crate::editor::SourceResponse {
+                        request,
+                        workspace,
+                        result: Err(error),
+                    });
+                }
+            }
+            Request::InspectWorking {
+                whole,
+                editor,
+                base,
+                request,
+                workspace,
+                selected,
+            } => {
+                let result = (|| -> Result<(), String> {
+                    if base
+                        .as_ref()
+                        .is_some_and(|base| base.len() > 32768 || base.contains(&0))
+                        || request.len() > 128
+                        || workspace.len() > 256
+                        || selected
+                            .as_ref()
+                            .is_some_and(|path| path.len() > 32768 || path.contains(&0))
+                    {
+                        return Err("Invalid or oversized comparison identity/path".into());
+                    }
+                    if diff_job.is_some() || diff_save.is_some() {
+                        return Err("Comparison job busy; retry refresh".into());
+                    }
+                    let known = registry
+                        .workspaces
+                        .iter()
+                        .find(|known| known.id == workspace)
+                        .ok_or("Workspace unavailable; refresh registry")?;
+                    let checkout = known.checkout.as_ref().ok_or("Checkout identity unavailable; explicitly adopt an existing checkout first")?;
+                    diff_job = Some(
+                        crate::working_diff::Job::start_comparison(
+                            checkout.clone(),
+                            workspace.clone(),
+                            request.clone(),
+                            selected,
+                            crate::working_diff::ComparisonOptions {
+                                whole,
+                                editor,
+                                retained: registry.comparison_bases.get(&workspace).cloned(),
+                                selected_ref: base,
+                            },
+                        )
+                        .map_err(|error| error.to_string())?,
+                    );
+                    diff_result = None;
+                    Ok(())
+                })();
+                if let Err(error) = result {
+                    diff_result = Some(crate::working_diff::Response {
+                        workspace,
+                        request,
+                        result: Err(error),
+                    });
+                }
+            }
+            Request::Discover {
+                request,
+                repository,
+            } => {
+                let result = (|| -> Result<(), Box<dyn std::error::Error>> {
+                    if repository.len() > 32768 {
+                        return Err("Repository path exceeds 32768 bytes".into());
+                    }
+                    let repository = PathBuf::from(std::ffi::OsString::from_vec(repository));
+                    if discovery.is_none() {
+                        discovery = Some(crate::git::GitWorker::start(repository.clone())?);
+                    }
+                    if let Err(error) = discovery
+                        .as_ref()
+                        .unwrap()
+                        .refresh_for(request, repository.clone())
+                    {
+                        discovery_result = Some(crate::git::Discovery {
+                            request,
+                            repository: path_bytes(&repository),
+                            result: Err(error),
+                        });
+                        return Ok(());
+                    }
+                    pending_discovery = Some((request, repository));
+                    discovery_result = None;
+                    Ok(())
+                })();
+                if let Err(error) = result {
+                    session.report_error(error.to_string());
+                }
+            }
+            Request::RenameWorkspace { workspace, name } => {
+                registry_error = None;
+                if registry_operation.is_some() || adoption.is_some() {
+                    registry_error =
+                        Some("Workspace operation pending; wait before renaming".into());
+                } else {
+                    let operation = uuid::Uuid::new_v4();
+                    match storage
+                        .commands
+                        .try_send(crate::persistence::Command::Rename(
+                            operation, workspace, name,
+                        )) {
+                        Ok(()) => registry_operation = Some(operation),
+                        Err(error) => {
+                            registry_error =
+                                Some(format!("Workspace name not saved: {error}; retry"))
+                        }
+                    }
+                }
+            }
+            Request::PreviewRemoval { workspace, request } => {
+                if let Some(known) = registry.workspaces.iter().find(|w| w.id == workspace) {
+                    let blockers = removal_blockers(
+                        known,
+                        &mut session,
+                        &setup,
+                        &creation,
+                        &archive,
+                        &storage,
+                    );
+                    removal.preview(known, &request, blockers);
+                } else {
+                    removal.view.error =
+                        Some("Workspace unavailable; refresh before removal".into());
+                }
+            }
+            Request::ConfirmRemoval {
+                workspace,
+                request,
+                head,
+                reference,
+                local_ack,
+            } => {
+                if let Some(known) = registry.workspaces.iter().find(|w| w.id == workspace) {
+                    let blockers = removal_blockers(
+                        known,
+                        &mut session,
+                        &setup,
+                        &creation,
+                        &archive,
+                        &storage,
+                    );
+                    removal.confirm(
+                        crate::removal::Confirmation {
+                            workspace,
+                            request,
+                            head,
+                            reference,
+                            local_ack,
+                        },
+                        blockers,
+                        &storage,
+                    );
+                    if let Some(checkout) = removal.target().cloned() {
+                        session.archive_reservations.push(checkout);
+                    }
+                } else {
+                    removal.view.error = Some("Workspace unavailable; removal refused".into());
+                }
+            }
+            Request::ReconcileRemoval { workspace, request } => {
+                removal.reconcile(&workspace, &request)
+            }
+            Request::Archive {
+                workspace,
+                request,
+                branch_policy,
+            } => {
+                if let Some(known) = registry.workspaces.iter().find(|w| w.id == workspace) {
+                    if !removal.ready()
+                        || known.checkout.as_ref().is_some_and(|c| removal.blocks(c))
+                    {
+                        archive.view.error=Some("Folder removal owns this checkout; reconcile its receipt before archive".into());
+                    } else {
+                        if let Some(policy) = branch_policy {
+                            let target = match policy {
+                                crate::archive::BranchPolicy::Keep => None,
+                                crate::archive::BranchPolicy::Delete(target) => Some(target),
+                            };
+                            archive.begin_policy(known, &request, Some(target), &storage);
+                        } else {
+                            archive.begin(known, &request, &storage);
+                        }
+                        if let Some(checkout) = archive.target().cloned() {
+                            // Freeze admission before Stop, including lookup completions.
+                            session.archive_reservations.push(checkout.clone());
+                            setup.cancel_checkout(&checkout);
+                            creation.cancel_checkout(&checkout);
+                            for (_, owner) in &mut session.entries {
+                                let state = owner.observation();
+                                if state.checkout_identity.as_ref().is_some_and(|c| {
+                                    c.common_dir == checkout.common_dir
+                                        && c.git_dir == checkout.git_dir
+                                }) || known.task == owner.task()
+                                    || known.legacy_tasks.iter().any(|task| task == owner.task())
+                                {
+                                    owner.handle(Request::Stop, &storage, false);
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    archive.view.error =
+                        Some("Workspace unavailable; refresh before archive".into());
+                }
+            }
+            Request::CancelArchive { workspace, request } => {
+                archive.cancel_request(&workspace, &request)
+            }
+            Request::Unarchive { workspace, request } => {
+                if registry
+                    .workspaces
+                    .iter()
+                    .find(|w| w.id == workspace)
+                    .and_then(|w| w.checkout.as_ref())
+                    .is_some_and(|c| removal.blocks(c))
+                    || !removal.ready()
+                {
+                    archive.view.error =
+                        Some("Folder removal owns this checkout; reconcile before Return".into());
+                } else {
+                    archive.restore(&workspace, &request, &storage);
+                }
+            }
+            Request::ConfigureSetup { project, command } => {
+                let operation = uuid::Uuid::new_v4();
+                if registry_operation.is_some() || creation.busy() {
+                    registry_error = Some("Project configuration or workspace creation pending; retry configuration after it settles".into());
+                } else if let Err(e) = crate::setup::validate_command(&command) {
+                    registry_error = Some(e);
+                } else {
+                    match storage
+                        .commands
+                        .try_send(crate::persistence::Command::ConfigureSetup(
+                            operation, project, command,
+                        )) {
+                        Ok(()) => registry_operation = Some(operation),
+                        Err(e) => {
+                            registry_error = Some(format!("Setup configuration not saved: {e}"))
+                        }
+                    }
+                }
+            }
+            Request::RecoverSetup {
+                attempt,
+                retry,
+                informed,
+            } => {
+                let blocked = setup
+                    .view
+                    .records
+                    .iter()
+                    .find(|r| r.attempt == attempt)
+                    .and_then(|r| r.creation.checkout.as_ref())
+                    .is_some_and(|c| {
+                        session
+                            .archive_reservations
+                            .iter()
+                            .any(|r| r.common_dir == c.common_dir && r.git_dir == c.git_dir)
+                    });
+                if blocked || !removal.ready() || !archive.ready() {
+                    setup.view.error = Some("Archive/removal owns this checkout or recovery is loading; setup admission is frozen".into());
+                } else {
+                    setup.recover(&attempt, retry, informed, &storage)
+                }
+            }
+            Request::CancelCreation {
+                request,
+                native_session,
+            } => {
+                setup.cancel(Some(&request));
+                session.cancel_creation_launch(&request, native_session.as_deref(), &storage);
+                creation.handle(
+                    Request::CancelCreation {
+                        request,
+                        native_session,
+                    },
+                    &registry,
+                    &storage,
+                    directory,
+                );
+            }
+            request @ (Request::PreviewCreation { .. }
+            | Request::CreateWorkspace(_)
+            | Request::RecoverCreation { .. }) => {
+                let configured = matches!(&request,Request::CreateWorkspace(intent) if registry.projects.iter().any(|p|p.id==intent.project && p.setup_command.is_some()));
+                let repeated = matches!(&request,Request::CreateWorkspace(intent) if creation.view.records.iter().any(|r|r.intent.request==intent.request));
+                if matches!(request, Request::CreateWorkspace(_))
+                    && !repeated
+                    && (registry_operation.is_some()
+                        || setup.admission_busy()
+                        || configured
+                            && (!setup.capacity()
+                                || session.entries.iter().filter(|(_, o)| o.reserved()).count()
+                                    + session.setup_reservations.len()
+                                    >= 32))
+                {
+                    creation.view.error=Some("Project setup is still pending; workspace creation waits for setup outcome".into());
+                } else {
+                    creation.handle(request, &registry, &storage, directory);
+                }
+            }
+            Request::Register(bytes) => {
+                registry_error = None;
+                let result = (|| -> Result<(), Box<dyn std::error::Error>> {
+                    if bytes.len() > 32768 {
+                        return Err("Repository path exceeds 32768 bytes".into());
+                    }
+                    if adoption.is_some() || registry_operation.is_some() {
+                        return Err("Project operation pending; wait or Stop to cancel".into());
+                    }
+                    adoption = Some(crate::git::AdoptionJob::start(PathBuf::from(
+                        std::ffi::OsString::from_vec(bytes),
+                    ))?);
+                    registering = true;
+                    adoption_pending = true;
+                    session.clear_error();
+                    Ok(())
+                })();
+                if let Err(error) = result {
+                    registry_error = Some(error.to_string());
+                }
+            }
+            Request::Adopt(bytes) => {
+                registry_error = None;
+                let result = (|| -> Result<(), Box<dyn std::error::Error>> {
+                    if bytes.len() > 32768 {
+                        return Err("Checkout path exceeds 32768 bytes".into());
+                    }
+                    if adoption.is_some() || registry_operation.is_some() {
+                        return Err("Adoption already pending; wait or Stop to cancel".into());
+                    }
+                    adoption = Some(crate::git::AdoptionJob::start(PathBuf::from(
+                        std::ffi::OsString::from_vec(bytes),
+                    ))?);
+                    adoption_pending = true;
+                    session.clear_error();
+                    Ok(())
+                })();
+                if let Err(error) = result {
+                    session.report_error(error.to_string());
+                }
+            }
+            Request::RetryStorage => {
+                removal.retry_storage(&storage);
+                setup.retry_storage(&storage);
+                creation.retry_storage(&storage);
+                session.handle(Request::RetryStorage, &storage, adoption.is_some());
+            }
+            Request::Stop | Request::Shutdown => {
+                archive.cancel();
+                removal.cancel();
+                setup.cancel(None);
+                creation.cancel();
+                if let Some(job) = &source_job {
+                    job.cancel();
+                }
+                if let Some(job) = &diff_job {
+                    job.cancel();
+                }
+                if let Some(job) = &adoption {
+                    job.cancel();
+                }
+                adoption_pending = false;
+                registering = false;
+                if let Some(worker) = &discovery {
+                    worker.cancel();
+                }
+                if let Some((request, repository)) = pending_discovery.take() {
+                    discovery_result = Some(crate::git::Discovery {
+                        request,
+                        repository: path_bytes(&repository),
+                        result: Err("Git discovery cancelled by Stop".into()),
+                    });
+                }
+                quitting |= matches!(request, Request::Shutdown);
+                session.handle(request, &storage, adoption.is_some());
+            }
+            request @ Request::ResumeSelected { .. } => {
+                let Request::ResumeSelected { workspace, .. } = &request else {
+                    unreachable!()
+                };
+                if let Some(workspace) = registry.workspaces.iter().find(|w| &w.id == workspace) {
+                    let matching = |owner: &agent_session::AgentSession| {
+                        owner.task() == workspace.task
+                            || workspace
+                                .legacy_tasks
+                                .iter()
+                                .any(|task| task == owner.task())
+                    };
+                    let occupied = session
+                        .entries
+                        .iter()
+                        .position(|(_, owner)| matching(owner) && owner.reserved());
+                    if let Some(index) = occupied.or_else(|| {
+                        session
+                            .entries
+                            .iter()
+                            .position(|(_, owner)| matching(owner))
+                    }) {
+                        session.selected = index;
+                        session.handle(request, &storage, adoption.is_some());
+                    } else {
+                        session.report_error("Workspace has no runtime owner; adopt its retained checkout before explicit resume".into());
+                    }
+                } else {
+                    session.report_error(
+                        "Selected workspace unavailable; retained history is unchanged".into(),
+                    );
+                }
+            }
+            request => session.handle(request, &storage, adoption.is_some()),
         }
-        if !continuing && controller.is_some() {
-            state.metadata_pending = save_pending > 0
-                || metadata_failed
-                || pending_launch.is_some()
-                || gate_receipt.is_some()
-                || outcome_reply;
+        let mut state = session.observation();
+        state.subscriber_frame_high_water = subscriber_frame_high_water;
+        state.diff_protocol = 2;
+        state.editor_protocol = 2;
+        state.editor_source = source_result.clone();
+        state.working_diff = diff_result.clone();
+        state.git_jobs_protocol = 1;
+        state.registry_protocol = 1;
+        state.prompt_naming_protocol = 1;
+        state.creation_protocol = 1;
+        state.resume_protocol = 1;
+        state.setup_protocol = 1;
+        state.archive_protocol = 2;
+        state.removal_protocol = 1;
+        state.removal = removal.view.clone();
+        state.setup = setup.view.clone();
+        state.archive = archive.view.clone();
+        creation.view.launches =
+            session.creation_receipts(&creation.view.records, &creation.view.launches);
+        state.creation = creation.view.clone();
+        state.registry_pending = registering || registry_operation.is_some();
+        state.registry = registry.clone();
+        state.error = state
+            .error
+            .or_else(|| registry_error.clone())
+            .or_else(|| setup.view.error.clone())
+            .or_else(|| archive.view.error.clone())
+            .or_else(|| removal.view.error.clone());
+        state.adoption_pending = adoption_pending;
+        state.discovery = discovery_result.clone();
+        state.stopped = session.all_stopped()
+            && quitting
+            && adoption.is_none()
+            && discovery.is_none()
+            && source_job.is_none()
+            && diff_job.is_none()
+            && diff_save.is_none()
+            && registry_operation.is_none()
+            && !archive.busy()
+            && !removal.busy()
+            && !creation.busy()
+            && setup.stopped();
+        if controller.is_some() {
             delivery = Some(Delivery::new(&mut state)?);
-            state.subscriber_frame_high_water = state
-                .subscriber_frame_high_water
-                .max(delivery.as_ref().unwrap().bytes.len());
+            subscriber_frame_high_water =
+                subscriber_frame_high_water.max(delivery.as_ref().unwrap().bytes.len());
         }
     }
 }
+
 pub fn scripted_child() -> io::Result<()> {
     crossterm::terminal::enable_raw_mode()?;
     struct RawGuard;
@@ -1651,11 +2372,14 @@ pub fn scripted_child() -> io::Result<()> {
                         let micros = write.elapsed().as_micros();
                         max_write_micros = max_write_micros.max(micros);
                         if let Some(ledger) = ledger.as_mut() {
-                            writeln!(
-                                ledger,
-                                "{}",
+                            // Format the complete bounded receipt before touching
+                            // the file: formatting Value directly into File emits
+                            // many writes that Stop can interrupt inside the JSON.
+                            let receipt = format!(
+                                "{}\n",
                                 serde_json::json!({"record":number,"bytes":record.len(),"write_us":micros,"elapsed_us":since.elapsed().as_micros()})
-                            )?;
+                            );
+                            ledger.write_all(receipt.as_bytes())?;
                         }
                     }
                     writeln!(
@@ -1822,4 +2546,17 @@ pub fn scripted_descendant() -> io::Result<()> {
     loop {
         thread::sleep(Duration::from_secs(60));
     }
+}
+
+fn launch_setup_fault(directory: &Path, boundary: &str) -> io::Result<()> {
+    #[cfg(debug_assertions)]
+    if fs::read_to_string(directory.join("proof-launch-setup"))
+        .is_ok_and(|value| value.trim() == boundary)
+    {
+        return Err(io::Error::other(format!(
+            "Injected launch setup failure: {boundary}"
+        )));
+    }
+    let _ = (directory, boundary);
+    Ok(())
 }

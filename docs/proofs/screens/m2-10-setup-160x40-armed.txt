@@ -1,0 +1,40 @@
+┌ Reviews ───────────────────────────────────────────┐┌ Creation receipt · original operation ─────────────────────────────────────────────────────────────────┐
+│Unavailable · milestone 1                           ││Setup Failed · Setup exit status: 3; owned execution cleaned                                            │
+└────────────────────────────────────────────────────┘│Continue will start Claude (Create and start still armed)                                               │
+┌ Agent terminal · Worktrees ────────────────────────┐│T Retry · Y Continue without setup · I reconcile/informed Retry (may repeat external effects)           │
+│Repository: /private/tmp/.tmp9kfvUg/checkout with   ││                                                                                                        │
+└────────────────────────────────────────────────────┘│Bounded combined output tail; 0 discarded bytes (not conversation history):                             │
+┌ Project / worktrees (0) ───────────────────────────┐│configuration failed                                                                                    │
+│                                                    ││Project: checkout with spaces                                                                           │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+└────────────────────────────────────────────────────┘│                                                                                                        │
+┌ Selection ─────────────────────────────────────────┐│                                                                                                        │
+│No worktree selected.                               ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+└────────────────────────────────────────────────────┘└────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌ Workspace creation ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│Setup Failed: Setup exit status: 3; owned execution cleaned · Continue STARTS coding · T Retry · Y Continue · I informed reconcile/retry · Z cancel           │
+│History: metadata committed · durable bytes 0                                                                                                                 │
+│Evidence: unavailable ·                                                                                                                                       │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+q quit/stop s stop h history Enter attach x new Codex v resume / find S text B chats N create O receipt U setup E LIVE f diff w workspaces d detach             

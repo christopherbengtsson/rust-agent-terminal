@@ -1,0 +1,24 @@
+ 
+ 
+› Remember this conversation-only token: x12-violet-6f2c. Reply exactly STORED. Do not use tools,
+  write files, or repeat the token.
+ 
+ 
+• STORED
+ 
+  Worked for 3s • 01:05                                                                             
+ 
+ 
+› What exact conversation-only token did I ask you to remember earlier? Reply with that token only.
+  Do not use tools or read files.
+ 
+ 
+• x12-violet-6f2c
+ 
+  Worked for 2s • 01:15                                                                             
+ 
+ 
+› Ask Codex to do anything
+ 
+  GPT-6.1-Sol medium · /private/tmp/r12n2/checkout · Store conversation-only token
+  ← for agents · ? for shortcuts

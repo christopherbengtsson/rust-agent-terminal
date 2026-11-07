@@ -1,0 +1,18 @@
+┌ Idle · Session unlaunched · Focus: dashboard ────────────┐
+│Remove workspace folder · setup fixture prompt            │
+│Preview: Preview only; folder retained. Confirm the exact │
+│HEAD and recovery reference.                              │
+│Folder /private/tmp/.tmpg8pddf/workspace-3775b438         │
+│HEAD 4ce78cd697c0c623cf78ad9bcff38791f4d0f259             │
+│Branch refs/heads/workspace/3775b438                      │
+│Recovery ref                                              │
+│refs/rat/removal/04ff6ed1-de61-4618-919c-9bb30b934b0a/8340│
+│b3fb-d08e-4846-9a93-41cc825a2af0                          │
+│Saved code, branches, archive refs and chats stay.        │
+│In-place resume needs a checkout.                         │
+└──────────────────────────────────────────────────────────┘
+┌ Status · semantic status: unknown ·  ────────────────────┐
+│Adopted: /private/tmp/.tmpg8pddf/workspace-3775b438 ·     │
+└──────────────────────────────────────────────────────────┘
+y remove · Space local ack · g reconcile · n preview        
+r retry · j/k scroll · Esc dismiss · q quit · d detach      

@@ -1,0 +1,45 @@
+{
+  "source": "59fed09a8c13505b68d93dd10e5612419a3d08d5",
+  "product_sha256": "b50530e0e859eb23fd7c61d4442d5fc8dd47c11aaffe39615897be76df460faf",
+  "user_report": "awake",
+  "scope": "Actual user-performed macOS sleep/wake; not reboot evidence",
+  "os_power_events": [
+    "2026-11-07 09:49:43 +0100 Sleep               \tEntering Sleep state due to 'Software Sleep pid=397':TCPKeepAlive=active Using AC (Charge:100%) 18 secs   ",
+    "2026-11-07 09:50:01 +0100 DarkWake            \tDarkWake from Deep Idle [CDNP] : due to smc.sysState.Wake(0x70070000) wifibt SMC.OutboxNotEmpty nub-spmi-a0.0x3F/ Using AC (Charge:100%) 25 secs   ",
+    "2026-11-07 09:50:26 +0100 Wake                \tDarkWake to FullWake from Deep Idle [CDNVA] : due to HID Activity Using AC (Charge:100%)           "
+  ],
+  "same_boot": true,
+  "same_two_native_managed_process_start_identities": true,
+  "state_checks": {
+    "binary_unchanged": true,
+    "source_commit_object_present": true,
+    "projects_unchanged": true,
+    "workspaces_unchanged": true,
+    "membership_unchanged": true,
+    "code_and_recovery_refs_unchanged": true,
+    "all_code_file_contents_verified": true,
+    "no_new_managed_segments": true,
+    "no_unexpected_live_checkout_processes": true,
+    "original_session_native_ids_preserved": true,
+    "original_committed_prefixes_preserved": true,
+    "public_registry_identities_preserved": true,
+    "public_latest_segments_restored": true,
+    "public_selected_native_id_preserved": true
+  },
+  "expected_reboot_verifier_false_checks": [
+    "actual_boot_uuid_changed",
+    "actual_boottime_changed",
+    "no_automatic_running_coding_observed"
+  ],
+  "expected_false_explanation": "Boot did not change and the two explicitly prepared conversations remain Running. These are not sleep/wake failures or a reboot pass.",
+  "pre_reboot_checkpoint": "actual-after-wake-immediate-pre-reboot-01.json",
+  "private_artifact_sha256": {
+    "actual-post-wake-observation-01.json": "462d5744292b95bdfb97b9e6c46d6a43d6466ea5033e8a4b28c192ffe827b711",
+    "actual-post-wake-state-verification-01.json": "56a1b4782b170c88fd994124f61c3f37da37da4aa279c7d9fc56286d27f57b27",
+    "actual-post-wake-pmset-01.log": "971320ba28391f831e1808df28e0a7eeb2637124d800686095cac83c4bc27cf3",
+    "actual-after-wake-immediate-pre-reboot-01.json": "576c391c2e9b587e6abe90c96ac4dba3a7f183d41b3133aff4d0c5d5714776a3"
+  },
+  "reboot_performed": false,
+  "reboot_gate": "Open; explicit user arrangement still required",
+  "both_kernel_executable_and_full_argv_unchanged": true
+}

@@ -1,0 +1,40 @@
+┌ Reviews ───────────────────────────────────────────┐┌ Working · Workspace 9f41a734 ──────────────────────────────────────────────────────────────────────────┐
+│Unavailable · milestone 1                           ││Workspace 9f41a734-738d-4546-a7fe-418d94b54f3f                                                          │
+└────────────────────────────────────────────────────┘│Checkout /private/tmp/.tmpnaQOpP/checkout with spaces                                                   │
+┌ Agent terminal · Worktrees ────────────────────────┐│Request f9a56c6c-bc54-43a5-a32a-a3a685abb012                                                            │
+│Repository: /private/tmp/.tmpnaQOpP/checkout with   ││Snapshot; not live · 1794002147364 · r refresh                                                          │
+└────────────────────────────────────────────────────┘│Files (3) · j/k                  Content · line 1 · column 1                                            │
+┌ Project / worktrees (1) ───────────────────────────┐│  alpha                          New file (not in index)                                                │
+│> └ main  /private/tmp/.tmpnaQOpP/checkout with spac││    new file                     agent changes while inspecting                                         │
+│    └ adopted · c/x start · C/X prompt · R rename   ││> beta                                                                                                  │
+│                                                    ││    new file                                                                                            │
+│                                                    ││  zeta                                                                                                  │
+│                                                    ││    staged + unstaged                                                                                   │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+└────────────────────────────────────────────────────┘│                                                                                                        │
+┌ Selection ─────────────────────────────────────────┐│                                                                                                        │
+│Path: /private/tmp/.tmpnaQOpP/checkout with spaces  ││                                                                                                        │
+│Branch: main  HEAD:                                 ││                                                                                                        │
+│e3a9691b809829303a40e0952edce49a8b30cf09            ││                                                                                                        │
+│                                                    ││                                                                                                        │
+└────────────────────────────────────────────────────┘└────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌ Status · semantic status: unknown ·  ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│Adopted: /private/tmp/.tmpnaQOpP/checkout with spaces · ready: c Claude / x Codex / l fixture                                                                 │
+│History: metadata committed · durable bytes 0                                                                                                                 │
+│Evidence: unavailable ·                                                                                                                                       │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+Working: j/k file · arrows scroll · PgUp/PgDn · r refresh · f/Esc back · s stop · q quit · d detach                                                             

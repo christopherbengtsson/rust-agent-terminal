@@ -1,0 +1,24 @@
+
+ ▐▛███▛█   Claude Code v2.1.319
+▝▜██████▀  Haiku 5.5 with medium effort · API Usage Billing
+ ▝▝   ▝▝   /private/tmp/r12n2/checkout
+
+
+❯ Remember this conversation-only token: c12-copper-92a1. Reply exactly STORED. Do not use tools,
+  write files, or repeat the token.
+
+⏺ STORED
+
+✻ Worked for 1s · done 1:06 AM
+
+
+
+
+
+
+
+                                                                                ◐ medium · /effort
+────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents

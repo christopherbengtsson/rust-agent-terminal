@@ -22,7 +22,7 @@ workspace's worktree. In user-facing explanations, a chat is the conversation
 within that session.
 
 **Working diff**:
-A comparison showing a task's current uncommitted changes, distinguishing staged,
+A comparison showing a workspace's current uncommitted changes, distinguishing staged,
 unstaged, and new files.
 
 **Archive checkpoint**:
@@ -30,9 +30,10 @@ A local commit saving a workspace's unfinished code changes when it is archived.
 It remains a recovery point independently of the visible branch name, not a claim
 that the work is complete or pushed remotely.
 
-**Whole-task comparison**:
-A comparison showing a task branch's changes relative to its base, including
-committed and current working changes.
+**Whole workspace comparison**:
+A comparison showing a workspace branch's changes relative to its base, including
+committed and current working changes. Earlier requirements call this the
+whole-task comparison.
 
 **Input focus**:
 Whether keyboard and paste input control dashboard navigation or the attached

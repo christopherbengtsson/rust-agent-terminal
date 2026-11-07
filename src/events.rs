@@ -4,6 +4,11 @@ use serde::{Deserialize, Serialize};
 use crate::git::Worktree;
 
 pub enum Event {
+    DiscoveryCompleted {
+        request: u64,
+        repository: std::path::PathBuf,
+        result: Result<Vec<Worktree>, String>,
+    },
     WorktreesLoaded(Result<Vec<Worktree>, String>),
 }
 
@@ -43,25 +48,142 @@ pub enum Effect {
     Session(Request),
 }
 
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+pub enum NativeAgent {
+    Claude,
+    Codex,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Request {
+    PreviewRemoval {
+        workspace: String,
+        request: String,
+    },
+    ConfirmRemoval {
+        workspace: String,
+        request: String,
+        head: String,
+        reference: String,
+        local_ack: bool,
+    },
+    ReconcileRemoval {
+        workspace: String,
+        request: String,
+    },
+    Archive {
+        workspace: String,
+        request: String,
+        #[serde(default)]
+        branch_policy: Option<crate::archive::BranchPolicy>,
+    },
+    CancelArchive {
+        workspace: String,
+        request: String,
+    },
+    Unarchive {
+        workspace: String,
+        request: String,
+    },
+    Browse(crate::persistence::search::Query),
+    EditorSource {
+        request: String,
+        workspace: String,
+        path: Option<Vec<u8>>,
+        line: usize,
+    },
+    InspectWorking {
+        #[serde(default)]
+        editor: bool,
+        #[serde(default)]
+        whole: bool,
+        #[serde(default)]
+        base: Option<Vec<u8>>,
+        request: String,
+        workspace: String,
+        selected: Option<Vec<u8>>,
+    },
+    /// Freeze a runtime target when an action is queued. Never resolve it from later selection.
+    Session {
+        target: String,
+        #[serde(default)]
+        session: Option<String>,
+        command: Box<Request>,
+    },
+    PreviewCreation {
+        project: String,
+    },
+    CreateWorkspace(crate::creation::Intent),
+    ConfigureSetup {
+        project: String,
+        command: Option<String>,
+    },
+    RecoverSetup {
+        attempt: String,
+        retry: bool,
+        #[serde(default)]
+        informed: bool,
+    },
+    RecoverCreation {
+        request: String,
+        local: bool,
+    },
+    CancelCreation {
+        request: String,
+        #[serde(default)]
+        native_session: Option<String>,
+    },
+    SelectSession(String),
+    Discover {
+        request: u64,
+        repository: Vec<u8>,
+    },
     Adopt(Vec<u8>),
+    Register(Vec<u8>),
     Launch(String),
     LaunchClaude(String),
     LaunchCodex(String),
+    LaunchNative {
+        request: String,
+        agent: NativeAgent,
+        prompt: Option<String>,
+    },
+    RenameWorkspace {
+        workspace: String,
+        name: String,
+    },
     Resume(String),
+    ResumeSelected {
+        request: String,
+        workspace: String,
+        session: String,
+    },
     QueryLaunch(String),
     Reconcile,
-    History { index: usize, offset: u64 },
+    History {
+        index: usize,
+        offset: u64,
+    },
+    HistorySession {
+        session: String,
+        offset: u64,
+    },
     Input(Vec<u8>),
     Key(crossterm::event::KeyEvent),
     Paste(String),
     Screen,
     Stop,
     RetryStorage,
-    Cleanup { page: usize },
-    DeleteHistory { id: String },
-    Resize { rows: u16, cols: u16 },
+    Cleanup {
+        page: usize,
+    },
+    DeleteHistory {
+        id: String,
+    },
+    Resize {
+        rows: u16,
+        cols: u16,
+    },
     Shutdown,
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -85,6 +207,60 @@ pub struct LaunchResult {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Observation {
     #[serde(default)]
+    pub removal: crate::removal::View,
+    #[serde(default)]
+    pub removal_protocol: u32,
+    #[serde(default)]
+    pub archive: crate::archive::View,
+    #[serde(default)]
+    pub archive_protocol: u32,
+    #[serde(default)]
+    pub setup_protocol: u32,
+    #[serde(default)]
+    pub setup: crate::setup::View,
+    #[serde(default)]
+    pub browse_protocol: u32,
+    #[serde(default)]
+    pub resume_protocol: u32,
+    #[serde(default)]
+    pub history_revision: u64,
+    #[serde(default)]
+    pub browse: Option<crate::persistence::search::Response>,
+    #[serde(default)]
+    pub creation_protocol: u32,
+    #[serde(default)]
+    pub creation: crate::creation::View,
+    #[serde(default)]
+    pub diff_protocol: u32,
+    #[serde(default)]
+    pub editor_protocol: u32,
+    #[serde(default)]
+    pub editor_source: Option<crate::editor::SourceResponse>,
+    #[serde(default)]
+    pub working_diff: Option<crate::working_diff::Response>,
+    #[serde(default)]
+    pub sessions_protocol: u32,
+    #[serde(default)]
+    pub control_target: String,
+    #[serde(default)]
+    pub sessions: Vec<SessionSummary>,
+    #[serde(default)]
+    pub registry_protocol: u32,
+    #[serde(default)]
+    pub prompt_naming_protocol: u32,
+    #[serde(default)]
+    pub registry_pending: bool,
+    #[serde(default)]
+    pub registry: crate::registry::Registry,
+    #[serde(default)]
+    pub git_jobs_protocol: u32,
+    #[serde(default)]
+    pub discovery: Option<crate::git::Discovery>,
+    #[serde(default)]
+    pub adoption_pending: bool,
+    #[serde(default)]
+    pub checkout_identity: Option<crate::git::CheckoutIdentity>,
+    #[serde(default)]
     pub connection_lost: bool,
     #[serde(default)]
     pub capacity: crate::cleanup::Capacity,
@@ -95,10 +271,13 @@ pub struct Observation {
     #[serde(default)]
     pub capture_pending_bytes: usize,
     #[serde(default)]
-    /// Owner-lifetime bytes read from PTY, including the producer block waiting
-    /// for queue space. Baseline at launch before comparing current-session durable bytes.
+    /// Current managed-session capture bytes, including producer blocks waiting
+    /// for queue space. Resets for a new session and remains final after sealing;
+    /// restoration recovers only its committed prefix, not lost process-local queues.
     pub accepted_bytes: u64,
     #[serde(default)]
+    /// Current managed-session raw prefix written to transcript files; it may
+    /// exceed the committed durable prefix during a sync/commit failure.
     pub written_bytes: u64,
     #[serde(default)]
     pub storage_wait_millis: u64,
@@ -125,8 +304,9 @@ pub struct Observation {
     #[serde(default)]
     pub history_index: usize,
     #[serde(default)]
-    /// Durable raw prefix for the current session; output_bytes is owner-lifetime.
-    /// Baseline output_bytes at each launch before comparing these counters.
+    /// Committed raw prefix for the current managed session, directly comparable
+    /// with accepted_bytes/written_bytes without a launch baseline. Only the
+    /// separate in-process screen counter output_bytes needs a launch baseline.
     pub durable_bytes: u64,
     #[serde(default)]
     pub metadata_pending: bool,
@@ -160,7 +340,8 @@ pub struct Observation {
     pub formatted: String,
     pub rows: u16,
     pub cols: u16,
-    /// All bytes through this boundary have been applied exactly once to the screen.
+    /// Bytes applied to this owner's in-process screen across its conversations.
+    /// Reinitialized on owner restoration; baseline at launch for session comparisons.
     pub output_bytes: u64,
     #[serde(skip)]
     pub decoded: Option<vt100::Screen>,
@@ -203,4 +384,17 @@ impl ProcessExit {
             None => format!("exit code {}", self.code),
         }
     }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct SessionSummary {
+    #[serde(default)]
+    pub status: crate::native_status::Status,
+    #[serde(default)]
+    pub reserved: bool,
+    pub target: String,
+    pub task: String,
+    pub session: Option<String>,
+    pub lifecycle: Lifecycle,
+    pub checkout: Option<Vec<u8>>,
 }

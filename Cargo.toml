@@ -18,5 +18,5 @@ uuid = { version = "1.29.0", features = ["v4"] }
 # disabling it keeps the parser's OSC payload at its fixed 1024-byte cap.
 vt100 = { version = "0.18.1", default-features = false }
 
-[dev-dependencies]
+# Private disposable hook directories for guarded branch cleanup.
 tempfile = "3"

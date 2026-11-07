@@ -8,15 +8,79 @@ use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 pub use crate::events::Effect;
 
+pub struct CreateForm {
+    pub intent: crate::creation::Intent,
+    pub field: usize,
+    pub path: String,
+    original_path: Option<(String, Vec<u8>)>,
+    preview_applied: bool,
+}
+#[derive(PartialEq)]
+struct Viewport {
+    owner: String,
+    session: Option<String>,
+    running: bool,
+    dimensions: (u16, u16),
+}
+
+/// Dashboard navigation retained across a deliberate external-editor handoff.
+pub struct EditorContext {
+    history_revision: u64,
+    repository: PathBuf,
+    selected: Option<usize>,
+    workspace_selected: Option<String>,
+    workspaces_open: bool,
+    selected_target: String,
+    session: Option<String>,
+    attached: bool,
+    history_open: bool,
+    history_raw: bool,
+    history_scroll: u16,
+    history_index: usize,
+    history_session: Option<String>,
+    history_offset: u64,
+    history: Option<crate::persistence::HistoryPage>,
+    browser: Option<crate::browser::Browser>,
+}
+
 pub struct App {
+    pub removal_open: Option<(String, String)>,
+    pub removal_scroll: u16,
+    pub removal_local_ack: bool,
+    pub archive_open: Option<String>,
+    pub archive_scroll: u16,
+    pub archive_request: Option<String>,
+    pub archive_submitted: bool,
+    pub archive_delete_target: Option<String>,
+    pub archive_delete: bool,
+    pub show_archived: bool,
+    pub setup_input: Option<(String, String)>,
+    pub browser: Option<crate::browser::Browser>,
+    pub create_form: Option<CreateForm>,
+    pub creation_open: bool,
+    pub creation_selected: Option<String>,
+    pub editor_source_request: Option<(String, String)>,
+    pub editor_ready: Option<crate::editor::Target>,
+    pub editor_message: Option<String>,
+    pub diff: Option<crate::working_diff::View>,
+    pub workspaces_open: bool,
+    pub workspace_selected: Option<String>,
+    pub project_input: Option<String>,
+    prompt_target: Option<(String, Option<String>)>,
+    pub first_prompt: Option<(crate::events::NativeAgent, String)>,
+    pub rename_workspace: Option<(String, String)>,
     pub session: Observation,
+    selected_target: String,
+    selecting_checkout: bool,
     pub attached: bool,
     pub history_open: bool,
+    pub history_raw: bool,
     pub cleanup_open: bool,
     pub cleanup_selected: usize,
     pub cleanup_preview: Option<crate::cleanup::Entry>,
     pub history_scroll: u16,
     history_index: usize,
+    history_session: Option<String>,
     history_offset: u64,
     pub shutdown_pending: bool,
     detached: bool,
@@ -25,24 +89,54 @@ pub struct App {
     pub worktrees: Vec<Worktree>,
     pub selected: Option<usize>,
     pub loading: bool,
+    pub discovery_request: u64,
     pub error: Option<String>,
-    sent_viewport: Option<(u16, u16)>,
-    pending_viewport: Option<(u16, u16)>,
+    sent_viewport: Option<Viewport>,
+    pending_viewport: Option<Viewport>,
 }
 
 impl App {
     pub fn new(repository: PathBuf) -> Self {
         Self {
+            removal_open: None,
+            removal_scroll: 0,
+            removal_local_ack: false,
+            archive_open: None,
+            archive_scroll: 0,
+            archive_request: None,
+            archive_submitted: false,
+            archive_delete_target: None,
+            archive_delete: false,
+            show_archived: false,
+            setup_input: None,
+            browser: None,
+            create_form: None,
+            creation_open: false,
+            creation_selected: None,
+            editor_source_request: None,
+            editor_ready: None,
+            editor_message: None,
+            diff: None,
+            workspaces_open: false,
+            workspace_selected: None,
+            project_input: None,
+            first_prompt: None,
+            prompt_target: None,
+            rename_workspace: None,
             sent_viewport: None,
             pending_viewport: None,
             session: Default::default(),
+            selected_target: String::new(),
+            selecting_checkout: false,
             attached: false,
             history_open: false,
+            history_raw: false,
             cleanup_open: false,
             cleanup_selected: 0,
             cleanup_preview: None,
             history_scroll: 0,
             history_index: 0,
+            history_session: None,
             history_offset: 0,
             shutdown_pending: false,
             detached: false,
@@ -51,18 +145,85 @@ impl App {
             worktrees: Vec::new(),
             selected: None,
             loading: false,
+            discovery_request: uuid::Uuid::new_v4().as_u128() as u64,
             error: None,
+        }
+    }
+
+    pub fn editor_context(&self) -> EditorContext {
+        EditorContext {
+            history_revision: self.session.history_revision,
+            repository: self.repository.clone(),
+            selected: self.selected,
+            workspace_selected: self.workspace_selected.clone(),
+            workspaces_open: self.workspaces_open,
+            selected_target: self.selected_target.clone(),
+            session: self
+                .session
+                .session_identity
+                .as_ref()
+                .map(|id| id.session.clone()),
+            attached: self.attached,
+            history_open: self.history_open,
+            history_raw: self.history_raw,
+            history_scroll: self.history_scroll,
+            history_index: self.history_index,
+            history_session: self.history_session.clone(),
+            history_offset: self.history_offset,
+            history: self.session.history.clone(),
+            browser: self.browser.clone(),
+        }
+    }
+
+    pub fn editor_returned(&mut self, context: EditorContext) {
+        self.attached = context.attached
+            && !self.session.connection_lost
+            && !self.session.control_denied
+            && self.session.lifecycle == crate::events::Lifecycle::Running
+            && self.session.control_target == context.selected_target
+            && self.session.session_identity.as_ref().map(|id| &id.session)
+                == context.session.as_ref();
+        self.repository = context.repository;
+        self.selected = context.selected;
+        self.workspace_selected = context.workspace_selected;
+        self.workspaces_open = context.workspaces_open;
+        self.selected_target = context.selected_target;
+        let history_valid = context.history_revision == self.session.history_revision;
+        self.browser = if history_valid { context.browser } else { None };
+        self.history_open = context.history_open;
+        self.history_raw = context.history_raw;
+        self.history_scroll = context.history_scroll;
+        self.history_index = context.history_index;
+        self.history_session = context.history_session;
+        self.history_offset = context.history_offset;
+        if self.history_open && history_valid {
+            self.session.history = context.history;
         }
     }
 
     /// Ui computes geometry; App decides whether a new usable size needs dispatch.
     pub fn viewport(&mut self, dimensions: Option<(u16, u16)>) -> Option<Effect> {
         let dimensions = dimensions?;
-        if self.sent_viewport == Some(dimensions) {
+        if !self.selected_target.is_empty() && self.selected_target != self.session.control_target {
             return None;
         }
-        self.pending_viewport = Some(dimensions);
-        Some(Effect::Session(Request::Resize {
+        let viewport = Viewport {
+            owner: self.session.control_target.clone(),
+            session: self
+                .session
+                .session_identity
+                .as_ref()
+                .map(|identity| identity.session.clone()),
+            // Creation can finish after a resize updated only its prepared parser.
+            // Reapply that geometry when the actual native PTY becomes running.
+            running: self.session.lifecycle == crate::events::Lifecycle::Running,
+            dimensions,
+        };
+        if self.sent_viewport.as_ref() == Some(&viewport) {
+            return None;
+        }
+        self.pending_viewport = Some(viewport);
+        Some(self.session_effect(Request::Resize {
             rows: dimensions.0,
             cols: dimensions.1,
         }))
@@ -79,16 +240,149 @@ impl App {
     }
 
     fn launch_intent(&mut self, request: fn(String) -> Request) -> Effect {
+        let historical_request = matches!(
+            self.session.lifecycle,
+            crate::session::Lifecycle::Exited
+                | crate::session::Lifecycle::Stopped
+                | crate::session::Lifecycle::Failed
+        ) && self
+            .session
+            .session_identity
+            .as_ref()
+            .is_some_and(|identity| identity.request == self.launch_request);
         if self.session.launch_result.is_some()
             || self.session.lifecycle == crate::session::Lifecycle::Running
+            || historical_request
         {
             self.launch_request = uuid::Uuid::new_v4().to_string();
         }
-        Effect::Session(request(self.launch_request.clone()))
+        self.session_effect(request(self.launch_request.clone()))
+    }
+
+    fn session_effect(&self, request: Request) -> Effect {
+        if self.selected_target.is_empty()
+            || matches!(
+                request,
+                Request::Browse(_)
+                    | Request::Shutdown
+                    | Request::Adopt(_)
+                    | Request::Register(_)
+                    | Request::PreviewCreation { .. }
+                    | Request::CreateWorkspace(_)
+                    | Request::RecoverCreation { .. }
+                    | Request::CancelCreation { .. }
+                    | Request::SelectSession(_)
+                    | Request::Discover { .. }
+                    | Request::InspectWorking { .. }
+                    | Request::EditorSource { .. }
+            )
+        {
+            Effect::Session(request)
+        } else {
+            Effect::Session(Request::Session {
+                target: self.selected_target.clone(),
+                session: self
+                    .session
+                    .session_identity
+                    .as_ref()
+                    .map(|id| id.session.clone()),
+                command: Box::new(request),
+            })
+        }
     }
 
     pub fn observe_session(&mut self, mut observation: Observation) {
+        if let (Some(form), Some(preview)) = (&mut self.create_form, &observation.creation.preview)
+            && !form.preview_applied
+            && preview.project == form.intent.project
+        {
+            if let Some(base) = &preview.default_base {
+                form.intent.base = base.clone();
+            }
+            form.path = crate::creation::path(&preview.managed_root)
+                .join(&form.intent.request)
+                .to_string_lossy()
+                .into_owned();
+            form.original_path = Some((
+                form.path.clone(),
+                crate::session::path_bytes(
+                    &crate::creation::path(&preview.managed_root).join(&form.intent.request),
+                ),
+            ));
+            form.preview_applied = true;
+        }
+        if let Some(response) = observation.editor_source.take()
+            && self.editor_source_request.as_ref()
+                == Some(&(response.request.clone(), response.workspace.clone()))
+        {
+            self.editor_source_request = None;
+            match response.result {
+                Ok((path, line)) => {
+                    use std::os::unix::ffi::OsStringExt;
+                    self.editor_ready = Some(crate::editor::Target::Source {
+                        path: PathBuf::from(std::ffi::OsString::from_vec(path)),
+                        line,
+                    });
+                }
+                Err(error) => self.editor_message = Some(crate::working_diff::printable(&error)),
+            }
+        }
+
+        if let Some(response) = observation.working_diff.take()
+            && let Some(view) = &mut self.diff
+        {
+            let editor_ready = view.editor_request.as_ref() == Some(&response.request)
+                && response.workspace == view.workspace
+                && response.request == view.request;
+            view.observe(response);
+            if editor_ready && !view.loading {
+                view.editor_request = None;
+                if view.error.is_none() {
+                    self.editor_ready = view
+                        .snapshot
+                        .clone()
+                        .map(|snapshot| crate::editor::Target::Comparison(Box::new(snapshot)));
+                }
+            }
+        }
+        if let Some(discovery) = observation.discovery.take() {
+            use std::os::unix::ffi::OsStringExt;
+            self.apply(Event::DiscoveryCompleted {
+                request: discovery.request,
+                repository: PathBuf::from(std::ffi::OsString::from_vec(discovery.repository)),
+                result: discovery.result,
+            });
+        }
+        if !observation.connection_lost
+            && !self.selected_target.is_empty()
+            && !observation.control_target.is_empty()
+            && observation.control_target != self.selected_target
+            && !self.selecting_checkout
+        {
+            return;
+        }
+        if self.selected_target.is_empty() || self.selecting_checkout {
+            self.selected_target = observation.control_target.clone();
+        }
+        if self.selecting_checkout && self.session.creation.pending && !observation.creation.pending
+        {
+            self.selecting_checkout = false;
+        }
+        if self.selecting_checkout
+            && !observation.adoption_pending
+            && (self.session.adoption_pending || observation.error.is_some())
+        {
+            self.selecting_checkout = false;
+        }
         if observation.connection_lost {
+            self.editor_source_request = None;
+            if let Some(view) = &mut self.diff {
+                view.loading = false;
+                view.error = Some(
+                    "Dashboard disconnected; snapshot is stale. Detach and reconnect to refresh."
+                        .into(),
+                );
+            }
             let error = observation.error.take();
             observation = self.session.clone();
             observation.connection_lost = true;
@@ -102,11 +396,12 @@ impl App {
             self.launch_request = observation.launch_request.clone();
         }
         if observation.lifecycle == crate::session::Lifecycle::Running
+            && observation.error.is_none()
             && observation.identity.is_some()
             && (observation.identity != self.session.identity
                 || self.session.lifecycle != crate::session::Lifecycle::Running)
         {
-            self.attached = true;
+            self.attached = self.diff.is_none();
         }
         if observation.stopped
             || (observation.error.is_some()
@@ -117,6 +412,54 @@ impl App {
         if observation.lifecycle != crate::session::Lifecycle::Running {
             observation.status.state = crate::native_status::State::Unknown;
             self.attached = false;
+        }
+        if self.session.registry_pending
+            && !observation.registry_pending
+            && let Some(added) = observation.registry.workspaces.iter().find(|workspace| {
+                !self
+                    .session
+                    .registry
+                    .workspaces
+                    .iter()
+                    .any(|known| known.id == workspace.id)
+            })
+        {
+            self.workspace_selected = Some(added.id.clone());
+        }
+        if self.workspace_selected.is_none()
+            || (self.session.registry.selected.is_some()
+                && self.session.registry.selected != observation.registry.selected)
+        {
+            self.workspace_selected = observation.registry.selected.clone();
+        }
+        if let Some(browser) = &mut self.browser {
+            if observation.history_revision != self.session.history_revision {
+                browser.opened = None;
+                browser.response = None;
+            }
+            browser.observe(observation.browse.as_ref());
+            self.attached = false;
+        }
+        if !self.archive_submitted && self.archive_delete_target.is_none() {
+            self.archive_delete_target = self
+                .archive_open
+                .as_ref()
+                .and_then(|id| observation.registry.workspaces.iter().find(|w| &w.id == id))
+                .and_then(|w| w.checkout.as_ref())
+                .and_then(|c| self.worktrees.iter().find(|t| t.path == c.root))
+                .and_then(|t| t.branch.clone())
+                .map(|b| {
+                    if b.starts_with("refs/") {
+                        b
+                    } else {
+                        format!("refs/heads/{b}")
+                    }
+                });
+        }
+        if self.archive_open.as_ref().is_some_and(|w| {
+            self.session.registry.archived.contains(w) && !observation.registry.archived.contains(w)
+        }) {
+            self.archive_open = None;
         }
         self.session = observation;
     }
@@ -129,6 +472,7 @@ impl App {
         if key.kind == KeyEventKind::Release {
             return None;
         }
+        self.editor_message = None;
         if self.attached {
             // Legacy terminals encode Ctrl-] as 0x1d, which Crossterm names Ctrl-5.
             if key.modifiers == KeyModifiers::CONTROL
@@ -137,7 +481,1029 @@ impl App {
                 self.attached = false;
                 return None;
             }
-            return Some(Effect::Session(Request::Key(key)));
+            return Some(self.session_effect(Request::Key(key)));
+        }
+        if let Some((workspace, request)) = self.removal_open.clone() {
+            match key.code {
+                KeyCode::Esc => self.removal_open = None,
+                KeyCode::Char('j') | KeyCode::Down => {
+                    self.removal_scroll = self.removal_scroll.saturating_add(1)
+                }
+                KeyCode::Char('k') | KeyCode::Up => {
+                    self.removal_scroll = self.removal_scroll.saturating_sub(1)
+                }
+                KeyCode::Char(' ') if key.modifiers.is_empty() => {
+                    self.removal_local_ack = !self.removal_local_ack
+                }
+                KeyCode::Char('q') => {
+                    self.shutdown_pending = true;
+                    return Some(self.session_effect(Request::Shutdown));
+                }
+                KeyCode::Char('d') => {
+                    self.detached = true;
+                    return Some(Effect::Detach);
+                }
+                KeyCode::Char('n') if !self.session.removal.pending => {
+                    let request = uuid::Uuid::new_v4().to_string();
+                    self.removal_open = Some((workspace.clone(), request.clone()));
+                    self.removal_local_ack = false;
+                    self.removal_scroll = 0;
+                    return Some(Effect::Session(Request::PreviewRemoval {
+                        workspace,
+                        request,
+                    }));
+                }
+                KeyCode::Char('r') if key.modifiers.is_empty() => {
+                    return Some(Effect::Session(Request::RetryStorage));
+                }
+                KeyCode::Char('g') if !self.session.removal.pending => {
+                    return Some(Effect::Session(Request::ReconcileRemoval {
+                        workspace,
+                        request,
+                    }));
+                }
+                KeyCode::Char('y')
+                    if key.modifiers.is_empty()
+                        && !self.session.removal.pending
+                        && !self.session.connection_lost
+                        && !self.session.control_denied =>
+                {
+                    let r = self.session.removal.records.iter().find(|r| {
+                        r.workspace == workspace
+                            && r.request == request
+                            && r.phase == crate::removal::Phase::Preview
+                    })?;
+                    if !r.snapshot.blockers.is_empty()
+                        || r.snapshot.local_only && !self.removal_local_ack
+                    {
+                        return None;
+                    }
+                    self.removal_scroll = 0;
+                    return Some(Effect::Session(Request::ConfirmRemoval {
+                        workspace,
+                        request,
+                        head: r.snapshot.head.clone(),
+                        reference: r.snapshot.reference.clone(),
+                        local_ack: self.removal_local_ack,
+                    }));
+                }
+                _ => {}
+            }
+            return None;
+        }
+        if let Some(workspace) = self.archive_open.clone() {
+            match key.code {
+                KeyCode::Esc => {
+                    self.archive_open = None;
+                }
+                KeyCode::Char('j') | KeyCode::Down => {
+                    self.archive_scroll = self.archive_scroll.saturating_add(1)
+                }
+                KeyCode::Char('k') | KeyCode::Up => {
+                    self.archive_scroll = self.archive_scroll.saturating_sub(1)
+                }
+                KeyCode::Char('q') => {
+                    self.shutdown_pending = true;
+                    return Some(self.session_effect(Request::Shutdown));
+                }
+                KeyCode::Char('d') => {
+                    self.detached = true;
+                    return Some(Effect::Detach);
+                }
+                KeyCode::Char('s') | KeyCode::Char('z') => {
+                    return Some(Effect::Session(Request::CancelArchive {
+                        workspace,
+                        request: self.archive_request.clone().unwrap(),
+                    }));
+                }
+                KeyCode::Char('b') if !self.archive_submitted && !self.session.archive.pending => {
+                    if self.archive_delete_target.is_some() {
+                        self.archive_delete = !self.archive_delete;
+                    }
+                }
+                KeyCode::Char('n') if !self.session.archive.pending => {
+                    self.archive_request = Some(uuid::Uuid::new_v4().to_string());
+                    self.archive_submitted = false;
+                }
+                KeyCode::Enter => {
+                    if self.session.registry.archived.contains(&workspace) {
+                        return Some(Effect::Session(Request::Unarchive {
+                            workspace,
+                            request: self.archive_request.clone().unwrap(),
+                        }));
+                    }
+                    self.archive_submitted = true;
+                    return Some(Effect::Session(Request::Archive {
+                        branch_policy: Some(if self.archive_delete {
+                            crate::archive::BranchPolicy::Delete(
+                                self.archive_delete_target.clone().unwrap(),
+                            )
+                        } else {
+                            crate::archive::BranchPolicy::Keep
+                        }),
+                        workspace,
+                        request: self.archive_request.clone().unwrap(),
+                    }));
+                }
+                _ => {}
+            }
+            return None;
+        }
+        if let Some((_, command)) = &mut self.setup_input {
+            match key.code {
+                KeyCode::Esc => self.setup_input = None,
+                KeyCode::Enter => {
+                    let (project, command) = self.setup_input.take().unwrap();
+                    return Some(Effect::Session(Request::ConfigureSetup {
+                        project,
+                        command: (!command.trim().is_empty()).then_some(command),
+                    }));
+                }
+                KeyCode::Backspace => {
+                    command.pop();
+                }
+                KeyCode::Char('u') if key.modifiers == KeyModifiers::CONTROL => command.clear(),
+                KeyCode::Char(c)
+                    if !key.modifiers.intersects(
+                        KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER,
+                    ) && command.len() + c.len_utf8() <= 4096 =>
+                {
+                    command.push(c);
+                }
+                _ => {}
+            }
+            return None;
+        }
+        if let Some(form) = &mut self.create_form {
+            match key.code {
+                KeyCode::Esc => self.create_form = None,
+                KeyCode::Tab => form.field = (form.field + 1) % 5,
+                KeyCode::BackTab => form.field = (form.field + 4) % 5,
+                KeyCode::Left | KeyCode::Right if form.field == 4 => {
+                    form.intent.agent = match form.intent.agent {
+                        crate::events::NativeAgent::Claude => crate::events::NativeAgent::Codex,
+                        crate::events::NativeAgent::Codex => crate::events::NativeAgent::Claude,
+                    }
+                }
+                KeyCode::Enter | KeyCode::Char('s')
+                    if key.code == KeyCode::Enter || key.modifiers == KeyModifiers::CONTROL =>
+                {
+                    let mut form = self.create_form.take().unwrap();
+                    form.intent.start = key.code != KeyCode::Enter;
+                    form.intent.prompt = form.intent.prompt.filter(|p| !p.trim().is_empty());
+                    form.intent.path = form
+                        .original_path
+                        .as_ref()
+                        .filter(|(display, _)| display == &form.path)
+                        .map(|(_, bytes)| bytes.clone())
+                        .unwrap_or_else(|| form.path.as_bytes().to_vec());
+                    if let Err(error) = form.intent.validate() {
+                        self.error = Some(error);
+                        self.create_form = Some(form);
+                        return None;
+                    }
+                    self.selecting_checkout = true;
+                    self.creation_selected = Some(form.intent.request.clone());
+                    return Some(Effect::Session(Request::CreateWorkspace(form.intent)));
+                }
+                code => {
+                    let text = match form.field {
+                        0 => Some(&mut form.intent.base),
+                        1 => Some(&mut form.intent.branch),
+                        2 => Some(&mut form.path),
+                        3 => Some(form.intent.prompt.get_or_insert_with(String::new)),
+                        _ => None,
+                    };
+                    if let Some(text) = text {
+                        match code {
+                            KeyCode::Backspace => {
+                                text.pop();
+                            }
+                            KeyCode::Char('u') if key.modifiers == KeyModifiers::CONTROL => {
+                                text.clear()
+                            }
+                            KeyCode::Char(c)
+                                if !key.modifiers.intersects(
+                                    KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER,
+                                ) && text.len() + c.len_utf8() <= 4084 =>
+                            {
+                                text.push(c)
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            return None;
+        }
+        if self.first_prompt.is_some() || self.rename_workspace.is_some() {
+            match key.code {
+                KeyCode::Esc => {
+                    self.first_prompt = None;
+                    self.prompt_target = None;
+                    self.rename_workspace = None;
+                }
+                KeyCode::Enter => {
+                    if let Some((agent, prompt)) = self.first_prompt.take() {
+                        let Effect::Session(_) = self.launch_intent(Request::Launch) else {
+                            unreachable!()
+                        };
+                        let command = Request::LaunchNative {
+                            request: self.launch_request.clone(),
+                            agent,
+                            prompt: (!prompt.is_empty()).then_some(prompt),
+                        };
+                        let effect = match self.prompt_target.take() {
+                            Some((target, session)) if !target.is_empty() => {
+                                Effect::Session(Request::Session {
+                                    target,
+                                    session,
+                                    command: Box::new(command),
+                                })
+                            }
+                            _ => self.session_effect(command),
+                        };
+                        return Some(effect);
+                    }
+                    if let Some((workspace, name)) = self.rename_workspace.take() {
+                        return Some(Effect::Session(Request::RenameWorkspace {
+                            workspace,
+                            name,
+                        }));
+                    }
+                }
+                KeyCode::Char('u') if key.modifiers == KeyModifiers::CONTROL => {
+                    if let Some((_, text)) = self.first_prompt.as_mut() {
+                        text.clear();
+                    } else if let Some((_, text)) = self.rename_workspace.as_mut() {
+                        text.clear();
+                    }
+                }
+                KeyCode::Backspace => {
+                    if let Some((_, text)) = self.first_prompt.as_mut() {
+                        text.pop();
+                    } else if let Some((_, text)) = self.rename_workspace.as_mut() {
+                        text.pop();
+                    }
+                }
+                KeyCode::Char(c)
+                    if !key.modifiers.intersects(
+                        KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER,
+                    ) =>
+                {
+                    let limit = if self.first_prompt.is_some() {
+                        4084
+                    } else {
+                        240
+                    };
+                    let text = if let Some((_, text)) = self.first_prompt.as_mut() {
+                        text
+                    } else {
+                        &mut self.rename_workspace.as_mut().unwrap().1
+                    };
+                    if text.len() + c.len_utf8() <= limit {
+                        text.push(c);
+                    }
+                }
+                _ => {}
+            }
+            return None;
+        }
+        if let Some(path) = self.project_input.as_mut() {
+            match key.code {
+                KeyCode::Esc => self.project_input = None,
+                KeyCode::Enter => {
+                    let path = self.project_input.take().unwrap();
+                    if path.is_empty() {
+                        self.error = Some("Enter an existing local repository path".into());
+                        return None;
+                    }
+                    self.workspaces_open = true;
+                    return Some(self.session_effect(Request::Register(path.into_bytes())));
+                }
+                KeyCode::Backspace => {
+                    path.pop();
+                }
+                KeyCode::Char(character)
+                    if !key.modifiers.intersects(
+                        KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER,
+                    ) && path.len() < 32768 =>
+                {
+                    path.push(character);
+                }
+                _ => {}
+            }
+            return None;
+        }
+        if let Some(view) = &mut self.diff
+            && let Some(entry) = &mut view.base_entry
+        {
+            match key.code {
+                KeyCode::Esc => view.base_entry = None,
+                KeyCode::Enter => {
+                    view.base_selection = Some(entry.as_bytes().to_vec());
+                    view.base_entry = None;
+                    view.whole = true;
+                    view.snapshot = None;
+                    view.scroll = 0;
+                    return Some(Effect::Session(view.refresh()));
+                }
+                KeyCode::Backspace => {
+                    entry.pop();
+                }
+                KeyCode::Char('u') if key.modifiers == KeyModifiers::CONTROL => entry.clear(),
+                KeyCode::Char(c)
+                    if !key
+                        .modifiers
+                        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+                        && entry.len() + c.len_utf8() <= 32768
+                        && !c.is_control() =>
+                {
+                    entry.push(c)
+                }
+                _ => {}
+            }
+            return None;
+        }
+        if self.browser.is_some() {
+            if key.code == KeyCode::Esc {
+                let browser = self.browser.as_mut().unwrap();
+                if browser.opened.take().is_some() {
+                    return Some(browser.query(0));
+                }
+                let mut query = crate::persistence::search::Query::new(browser.mode, "");
+                query.cancel = true;
+                self.browser = None;
+                return Some(Effect::Session(Request::Browse(query)));
+            }
+            if key.code == KeyCode::Char('v') && self.session.resume_protocol != 1 {
+                self.error = Some("Selected resume requires a compatible supervisor; stop activity with its matching dashboard before upgrading".into());
+                return None;
+            }
+            let effect = self.browser.as_mut().unwrap().key(key);
+            if let Some(Effect::Session(Request::ResumeSelected { request, .. })) = &effect {
+                self.launch_request = request.clone();
+                self.selected_target.clear();
+                self.selecting_checkout = true;
+                self.browser = None;
+                self.history_open = false;
+            }
+            if let Some(Effect::Session(Request::HistorySession { session, offset })) = &effect {
+                self.history_session = Some(session.clone());
+                self.history_offset = *offset;
+                self.history_open = true;
+                self.history_raw = false;
+                self.history_scroll = 0;
+                self.session.history = None;
+                self.browser = None;
+            }
+            return effect;
+        }
+        if key.code == KeyCode::Char('U')
+            && !key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER)
+        {
+            let project = self
+                .workspace_selected
+                .as_ref()
+                .or(self.session.registry.selected.as_ref())
+                .and_then(|id| {
+                    self.session
+                        .registry
+                        .workspaces
+                        .iter()
+                        .find(|w| &w.id == id)
+                })
+                .and_then(|w| w.project.as_ref())
+                .and_then(|id| self.session.registry.projects.iter().find(|p| &p.id == id))
+                .or_else(|| self.session.registry.projects.first());
+            if let Some(project) = project {
+                self.setup_input = Some((
+                    project.id.clone(),
+                    project.setup_command.clone().unwrap_or_default(),
+                ));
+            }
+            return None;
+        }
+        if self.creation_open
+            && self.create_form.is_none()
+            && matches!(key.code, KeyCode::Char('T' | 'I' | 'Y'))
+        {
+            if let Some(record) = self.setup_record() {
+                return Some(Effect::Session(Request::RecoverSetup {
+                    attempt: record.attempt.clone(),
+                    retry: key.code != KeyCode::Char('Y'),
+                    informed: matches!(key.code, KeyCode::Char('I' | 'Y')),
+                }));
+            }
+            return None;
+        }
+        if matches!(key.code, KeyCode::Char('/' | 'S' | 'B'))
+            && (key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT)
+            && !self.history_open
+        {
+            if self.session.browse_protocol < 1 {
+                self.error = Some(
+                    "Retained search requires a current supervisor; stop and restart the dashboard"
+                        .into(),
+                );
+                return None;
+            }
+            let mode = match key.code {
+                KeyCode::Char('/') => crate::persistence::search::Mode::Workspaces,
+                KeyCode::Char('S') => crate::persistence::search::Mode::History,
+                _ => crate::persistence::search::Mode::Sessions,
+            };
+            let workspace =
+                if self.workspaces_open && mode == crate::persistence::search::Mode::Sessions {
+                    self.workspace_selected.clone()
+                } else {
+                    None
+                };
+            let mut browser = crate::browser::Browser::new(mode, workspace);
+            let effect = if mode == crate::persistence::search::Mode::History {
+                None
+            } else {
+                Some(browser.query(0))
+            };
+            self.browser = Some(browser);
+            self.history_open = false;
+            self.cleanup_open = false;
+            return effect;
+        }
+        if self.creation_open
+            && self.create_form.is_none()
+            && matches!(key.code, KeyCode::Char('[' | ']'))
+            && key.modifiers.is_empty()
+        {
+            let records = &self.session.creation.records;
+            if !records.is_empty() {
+                let index = records
+                    .iter()
+                    .position(|r| Some(&r.intent.request) == self.creation_selected.as_ref())
+                    .unwrap_or(records.len() - 1);
+                let index = if key.code == KeyCode::Char(']') {
+                    (index + 1) % records.len()
+                } else {
+                    (index + records.len() - 1) % records.len()
+                };
+                self.creation_selected = Some(records[index].intent.request.clone());
+            }
+            return None;
+        }
+        if self.create_form.is_none() && self.creation_open && key.code == KeyCode::Esc {
+            self.creation_open = false;
+            return None;
+        }
+        if key.code == KeyCode::Char('O')
+            && !key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER)
+        {
+            self.creation_open = !self.creation_open;
+            return None;
+        }
+        if key.code == KeyCode::Char('N')
+            && !key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER)
+        {
+            let workspace = self.session.registry.workspaces.iter().find(|w| {
+                Some(&w.id)
+                    == self
+                        .workspace_selected
+                        .as_ref()
+                        .or(self.session.registry.selected.as_ref())
+            });
+            let project = workspace
+                .and_then(|w| w.project.clone())
+                .or_else(|| self.session.registry.projects.first().map(|p| p.id.clone()));
+            if let Some(project) = project {
+                let request = uuid::Uuid::new_v4().to_string();
+                self.creation_open = true;
+                self.create_form = Some(CreateForm {
+                    intent: crate::creation::Intent {
+                        branch: format!("workspace/{}", &request[..12]),
+                        request,
+                        project: project.clone(),
+                        base: String::new(),
+                        path: Vec::new(),
+                        agent: crate::events::NativeAgent::Claude,
+                        start: false,
+                        prompt: None,
+                    },
+                    field: 0,
+                    path: String::new(),
+                    original_path: None,
+                    preview_applied: false,
+                });
+                return Some(Effect::Session(Request::PreviewCreation { project }));
+            }
+            self.error = Some("Register a project with A before creating a workspace".into());
+            return None;
+        }
+        if matches!(key.code, KeyCode::Char('L' | 'G' | 'Z'))
+            && !key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER)
+        {
+            if key.code == KeyCode::Char('Z') {
+                let request = self
+                    .creation_selected
+                    .clone()
+                    .or_else(|| self.session.creation.active_request.clone())
+                    .or_else(|| self.creation_record().map(|r| r.intent.request.clone()))?;
+                let native_session = self
+                    .session
+                    .creation
+                    .launches
+                    .iter()
+                    .find(|r| r.request == request)
+                    .and_then(|r| r.session.clone());
+                return Some(Effect::Session(Request::CancelCreation {
+                    request,
+                    native_session,
+                }));
+            }
+            self.creation_open = true;
+            if let Some(request) = self
+                .creation_selected
+                .clone()
+                .filter(|id| {
+                    self.session.creation.retry_request.as_ref() == Some(id)
+                        || self
+                            .session
+                            .creation
+                            .records
+                            .iter()
+                            .any(|r| r.intent.request == *id)
+                })
+                .or_else(|| self.session.creation.retry_request.clone())
+                .or_else(|| self.creation_record().map(|r| r.intent.request.clone()))
+            {
+                return Some(Effect::Session(Request::RecoverCreation {
+                    request,
+                    local: key.code == KeyCode::Char('L'),
+                }));
+            }
+        }
+        if key.code == KeyCode::Char('E')
+            && !key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+            && self.project_input.is_none()
+            && self.first_prompt.is_none()
+            && self.rename_workspace.is_none()
+            && !self.diff.as_ref().is_some_and(|v| v.base_entry.is_some())
+        {
+            let workspace = self.session.registry.workspaces.iter().find(|w| {
+                if let Some(view) = &self.diff {
+                    w.id == view.workspace
+                } else if self.workspaces_open {
+                    Some(&w.id) == self.workspace_selected.as_ref()
+                } else {
+                    self.current().is_some_and(|c| {
+                        w.checkout
+                            .as_ref()
+                            .is_some_and(|known| known.root == c.path)
+                    })
+                }
+            });
+            if let Some(workspace) = workspace
+                .filter(|w| w.checkout.is_some())
+                .map(|w| w.id.clone())
+            {
+                self.editor_message = Some("Opening LIVE workspace shared with the active agent; saves change working files".into());
+                return self.source_editor(workspace, None, 1);
+            }
+            self.editor_message =
+                Some("No existing retained workspace checkout selected; adopt it first".into());
+            return None;
+        }
+        if let Some(view) = &mut self.diff {
+            if key.modifiers.is_empty() {
+                match key.code {
+                    KeyCode::Esc | KeyCode::Char('f') => {
+                        self.diff = None;
+                        return None;
+                    }
+                    KeyCode::Char('w') if !view.loading => {
+                        view.whole = !view.whole;
+                        view.snapshot = None;
+                        view.scroll = 0;
+                        view.horizontal = 0;
+                        return Some(Effect::Session(view.refresh()));
+                    }
+                    KeyCode::Char('b') if !view.loading => {
+                        view.base_entry = Some(String::new());
+                        return None;
+                    }
+                    KeyCode::Char('e') if !view.loading => {
+                        if self.session.editor_protocol != 2 {
+                            self.editor_message = Some("Editor comparison requires an upgraded supervisor; detach and upgrade after stopping managed activity".into());
+                            return None;
+                        }
+                        let mut request = view.refresh();
+                        if let Request::InspectWorking { editor, .. } = &mut request {
+                            *editor = true;
+                        }
+                        view.editor_request = Some(view.request.clone());
+                        self.editor_message =
+                            Some("Preparing fresh full comparison for editor…".into());
+                        return Some(Effect::Session(request));
+                    }
+                    KeyCode::Char('o') if !view.loading => {
+                        if let Some(snapshot) = &view.snapshot
+                            && let Some(path) = &snapshot.selected
+                        {
+                            self.editor_message = Some("Opening LIVE source shared with the active agent; saving changes this workspace".into());
+                            let workspace = view.workspace.clone();
+                            let path = path.clone();
+                            let line = snapshot.source_start.map_or_else(
+                                || {
+                                    crate::editor::source_line(
+                                        &snapshot.content,
+                                        view.scroll as usize,
+                                    )
+                                },
+                                |start| (view.scroll as usize).saturating_sub(start) + 1,
+                            );
+                            return self.source_editor(workspace, Some(path), line);
+                        }
+                        self.editor_message =
+                            Some("No source selected; comparison remains inspectable".into());
+                        return None;
+                    }
+                    KeyCode::Char('r') => {
+                        return Some(Effect::Session(view.refresh()));
+                    }
+                    KeyCode::Char('j') => return view.navigate(true).map(Effect::Session),
+                    KeyCode::Char('k') => return view.navigate(false).map(Effect::Session),
+                    KeyCode::Down => {
+                        view.scroll = view.scroll.saturating_add(1);
+                        return None;
+                    }
+                    KeyCode::Up => {
+                        view.scroll = view.scroll.saturating_sub(1);
+                        return None;
+                    }
+                    KeyCode::PageDown => {
+                        view.scroll = view.scroll.saturating_add(8);
+                        return None;
+                    }
+                    KeyCode::PageUp => {
+                        view.scroll = view.scroll.saturating_sub(8);
+                        return None;
+                    }
+                    KeyCode::Right | KeyCode::Char('l') => {
+                        view.horizontal = view.horizontal.saturating_add(8);
+                        return None;
+                    }
+                    KeyCode::Left | KeyCode::Char('h') => {
+                        view.horizontal = view.horizontal.saturating_sub(8);
+                        return None;
+                    }
+                    KeyCode::Home => {
+                        view.scroll = 0;
+                        view.horizontal = 0;
+                        return None;
+                    }
+                    KeyCode::Char('s' | 'q' | 'd' | 'y') => {} // Keep execution/storage controls available.
+                    _ => return None,
+                }
+            } else if key.modifiers != KeyModifiers::CONTROL || key.code != KeyCode::Char('c') {
+                return None;
+            }
+        }
+        if key.modifiers.is_empty() && key.code == KeyCode::Char('f') {
+            if self.session.control_denied {
+                self.error = Some("Comparison unavailable without supervisor control".into());
+                return None;
+            }
+            let workspace = self.session.registry.workspaces.iter().find(|workspace| {
+                if !self.workspaces_open
+                    && let Some(current) = self.current()
+                {
+                    workspace
+                        .checkout
+                        .as_ref()
+                        .is_some_and(|checkout| checkout.root == current.path)
+                } else {
+                    Some(&workspace.id) == self.workspace_selected.as_ref()
+                }
+            });
+            let Some(workspace) = workspace else {
+                self.error = Some("Checkout has no retained workspace yet; wait for adoption metadata or explicitly adopt it before Working inspection".into());
+                return None;
+            };
+            let mut view =
+                crate::working_diff::View::new(workspace.id.clone(), workspace.name.clone());
+            let request = view.refresh();
+            self.diff = Some(view);
+            self.workspaces_open = false;
+            self.history_open = false;
+            self.cleanup_open = false;
+            return Some(Effect::Session(request));
+        }
+        if !key
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER)
+        {
+            if matches!(key.code, KeyCode::Char('C' | 'X')) && !self.workspaces_open {
+                if self.workspace_selected.is_some()
+                    && self.workspace_selected != self.session.registry.selected
+                {
+                    self.error = Some("Adopt the selected workspace before starting".into());
+                    return None;
+                }
+                self.prompt_target = Some((
+                    self.selected_target.clone(),
+                    self.session
+                        .session_identity
+                        .as_ref()
+                        .map(|id| id.session.clone()),
+                ));
+                self.first_prompt = Some((
+                    if key.code == KeyCode::Char('C') {
+                        crate::events::NativeAgent::Claude
+                    } else {
+                        crate::events::NativeAgent::Codex
+                    },
+                    String::new(),
+                ));
+                return None;
+            }
+            if key.code == KeyCode::Char('R') {
+                if let Some(workspace) = self
+                    .session
+                    .registry
+                    .workspaces
+                    .iter()
+                    .find(|workspace| Some(&workspace.id) == self.workspace_selected.as_ref())
+                {
+                    self.rename_workspace = Some((workspace.id.clone(), workspace.name.clone()));
+                }
+                return None;
+            }
+        }
+        if key.code == KeyCode::Char('M')
+            && !key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER)
+        {
+            if let Some(workspace) = self
+                .workspace_selected
+                .as_ref()
+                .or(self.session.registry.selected.as_ref())
+                .cloned()
+            {
+                let old = self.session.removal.records.iter().rev().find(|r| {
+                    r.workspace == workspace && r.phase != crate::removal::Phase::Preview
+                });
+                let request = old
+                    .map(|r| r.request.clone())
+                    .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+                self.removal_open = Some((workspace.clone(), request.clone()));
+                self.removal_scroll = 0;
+                self.removal_local_ack = false;
+                if old.is_none() {
+                    return Some(Effect::Session(Request::PreviewRemoval {
+                        workspace,
+                        request,
+                    }));
+                }
+            }
+            return None;
+        }
+        if key.code == KeyCode::Char('K')
+            && !key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER)
+        {
+            if let Some(workspace) = self
+                .workspace_selected
+                .as_ref()
+                .or(self.session.registry.selected.as_ref())
+                .cloned()
+            {
+                self.archive_request = Some(
+                    self.session
+                        .archive
+                        .records
+                        .iter()
+                        .rev()
+                        .find(|r| {
+                            r.workspace == workspace
+                                && (self.session.registry.archived.contains(&workspace)
+                                    || !matches!(r.phase, crate::archive::Phase::Archived))
+                        })
+                        .map(|r| r.request.clone())
+                        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+                );
+                let known = self
+                    .session
+                    .registry
+                    .workspaces
+                    .iter()
+                    .find(|w| w.id == workspace);
+                self.archive_delete_target = known
+                    .and_then(|w| w.checkout.as_ref())
+                    .and_then(|c| self.worktrees.iter().find(|t| t.path == c.root))
+                    .and_then(|t| t.branch.clone())
+                    .map(|b| {
+                        if b.starts_with("refs/") {
+                            b
+                        } else {
+                            format!("refs/heads/{b}")
+                        }
+                    });
+                self.archive_delete = known
+                    .and_then(|w| w.creation.as_ref())
+                    .is_some_and(|f| f.created_branch);
+                if self.archive_delete && self.archive_delete_target.is_none() {
+                    self.archive_delete_target = known
+                        .and_then(|w| w.creation.as_ref())
+                        .map(|f| format!("refs/heads/{}", f.original_branch));
+                }
+                self.archive_open = Some(workspace);
+                self.archive_submitted = false;
+                self.archive_scroll = 0;
+            } else {
+                self.error = Some("Adopt a workspace before archiving".into());
+            }
+            return None;
+        }
+        if key.code == KeyCode::Char('A')
+            && !key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER)
+        {
+            self.project_input = Some(String::new());
+            self.workspaces_open = true;
+            return None;
+        }
+        if key.modifiers.is_empty() && key.code == KeyCode::Char('w') {
+            self.workspaces_open = !self.workspaces_open;
+            if self.workspace_selected.is_none() {
+                self.workspace_selected = self.session.registry.selected.clone().or_else(|| {
+                    self.session
+                        .registry
+                        .workspaces
+                        .first()
+                        .map(|workspace| workspace.id.clone())
+                });
+            }
+            return None;
+        }
+        if self.workspaces_open && key.modifiers.is_empty() {
+            let workspaces = self
+                .session
+                .registry
+                .workspaces
+                .iter()
+                .filter(|w| self.show_archived || !self.session.registry.archived.contains(&w.id))
+                .collect::<Vec<_>>();
+            let index = workspaces
+                .iter()
+                .position(|workspace| Some(&workspace.id) == self.workspace_selected.as_ref())
+                .unwrap_or(0);
+            match key.code {
+                KeyCode::Char('z') => {
+                    self.show_archived = !self.show_archived;
+                    self.workspace_selected = self
+                        .session
+                        .registry
+                        .workspaces
+                        .iter()
+                        .find(|w| {
+                            self.show_archived || !self.session.registry.archived.contains(&w.id)
+                        })
+                        .map(|w| w.id.clone());
+                }
+                KeyCode::Esc => {
+                    self.workspaces_open = false;
+                }
+                KeyCode::Char('j')
+                | KeyCode::Down
+                | KeyCode::Char('k')
+                | KeyCode::Up
+                | KeyCode::Char(']')
+                | KeyCode::Char('[') => {
+                    let next = match key.code {
+                        KeyCode::Char('j') | KeyCode::Down => {
+                            (index + 1).min(workspaces.len().saturating_sub(1))
+                        }
+                        KeyCode::Char('k') | KeyCode::Up => index.saturating_sub(1),
+                        KeyCode::Char(']') => ((index + 1)..workspaces.len())
+                            .find(|&next| workspaces[next].project != workspaces[index].project)
+                            .unwrap_or(index),
+                        _ => (0..index)
+                            .rev()
+                            .find(|&next| workspaces[next].project != workspaces[index].project)
+                            .unwrap_or(index),
+                    };
+                    self.workspace_selected =
+                        workspaces.get(next).map(|workspace| workspace.id.clone());
+                }
+                KeyCode::Char('h') => {
+                    let Some(session) = workspaces
+                        .get(index)
+                        .and_then(|workspace| workspace.sessions.last())
+                    else {
+                        self.error = Some("No sessions recorded for this workspace".into());
+                        return None;
+                    };
+                    self.history_session = Some(session.clone());
+                    self.history_open = true;
+                    self.workspaces_open = false;
+                    self.history_offset = 0;
+                    self.history_scroll = 0;
+                    self.session.history = None;
+                    return Some(self.session_effect(Request::HistorySession {
+                        session: session.clone(),
+                        offset: 0,
+                    }));
+                }
+                KeyCode::Enter | KeyCode::Char('a') => {
+                    let Some(workspace) = workspaces.get(index) else {
+                        self.error = Some("No retained workspace; A adds a project".into());
+                        return None;
+                    };
+                    let Some(path) = workspace.path.as_ref() else {
+                        self.error = Some("Checkout path unknown for this retained legacy workspace; history remains retained".into());
+                        return None;
+                    };
+                    use std::os::unix::ffi::OsStringExt;
+                    if key.code == KeyCode::Char('a') {
+                        self.selected_target.clear();
+                        self.selecting_checkout = true;
+                        self.sent_viewport = None;
+                        return Some(self.session_effect(Request::Adopt(path.clone())));
+                    }
+                    if let Some(target) = self
+                        .session
+                        .sessions
+                        .iter()
+                        .filter(|entry| entry.task == workspace.task)
+                        .max_by_key(|entry| entry.reserved)
+                        .map(|entry| entry.target.clone())
+                    {
+                        self.selected_target = target.clone();
+                        self.attached = false;
+                        self.sent_viewport = None;
+                        self.workspaces_open = false;
+                        return Some(Effect::Session(Request::SelectSession(target)));
+                    }
+                    let repository = PathBuf::from(std::ffi::OsString::from_vec(path.clone()));
+                    if repository != self.repository {
+                        self.worktrees.clear();
+                        self.selected = None;
+                    }
+                    self.repository = repository;
+                    self.loading = false;
+                    self.workspaces_open = false;
+                    return Some(Effect::Refresh);
+                }
+                KeyCode::Char('q') => {
+                    self.shutdown_pending = true;
+                    return Some(self.session_effect(Request::Shutdown));
+                }
+                KeyCode::Char('d') => {
+                    self.detached = true;
+                    return Some(Effect::Detach);
+                }
+                _ => {}
+            }
+            return None;
+        }
+        if self.history_open
+            && key.modifiers.is_empty()
+            && matches!(key.code, KeyCode::Char('n' | 'p'))
+            && self.history_session.is_some()
+        {
+            let mut browser =
+                crate::browser::Browser::new(crate::persistence::search::Mode::Sessions, None);
+            let effect = browser.query(0);
+            self.browser = Some(browser);
+            self.history_open = false;
+            return Some(effect);
+        }
+        if self.history_open && key.modifiers.is_empty() && key.code == KeyCode::Char('v') {
+            self.history_raw = !self.history_raw;
+            self.history_scroll = 0;
+            return None;
+        }
+        if key.modifiers.is_empty()
+            && matches!(
+                key.code,
+                KeyCode::Char('c' | 'x' | 'l' | 'v') | KeyCode::Enter
+            )
+            && self.workspace_selected.is_some()
+            && self.workspace_selected != self.session.registry.selected
+        {
+            self.error = Some("Selected workspace is not adopted; w then a explicitly adopts it before launch or attachment".into());
+            return None;
         }
         if key.modifiers.is_empty() && key.code == KeyCode::Char('g') {
             self.cleanup_open = true;
@@ -145,7 +1511,7 @@ impl App {
             self.cleanup_selected = 0;
             self.history_open = false;
             self.session.cleanup = None;
-            return Some(Effect::Session(Request::Cleanup { page: 0 }));
+            return Some(self.session_effect(Request::Cleanup { page: 0 }));
         }
         if self.cleanup_open
             && (key.modifiers.is_empty()
@@ -164,7 +1530,9 @@ impl App {
                         self.history_offset = 0;
                         self.history_scroll = 0;
                         self.session.history = None;
-                        return Some(Effect::Session(Request::DeleteHistory { id: preview.id }));
+                        return Some(
+                            self.session_effect(Request::DeleteHistory { id: preview.id }),
+                        );
                     }
                     return None;
                 }
@@ -207,7 +1575,7 @@ impl App {
                     };
                     self.cleanup_selected = 0;
                     self.session.cleanup = None;
-                    return Some(Effect::Session(Request::Cleanup { page: index }));
+                    return Some(self.session_effect(Request::Cleanup { page: index }));
                 }
                 KeyCode::Char('y' | 's' | 'q') => {}
                 _ => return None,
@@ -224,15 +1592,22 @@ impl App {
                     return None;
                 }
                 KeyCode::Char('h') => {
+                    self.history_session = self
+                        .session
+                        .session_identity
+                        .as_ref()
+                        .map(|identity| identity.session.clone());
                     self.history_open = !self.history_open;
                     self.history_index = self.session.history_index;
                     self.history_offset = 0;
                 }
                 KeyCode::Char('n') if self.history_open => {
+                    self.history_session = None;
                     self.history_index += 1;
                     self.history_offset = 0;
                 }
                 KeyCode::Char('p') if self.history_open => {
+                    self.history_session = None;
                     self.history_index = self.history_index.saturating_sub(1);
                     self.history_offset = 0;
                 }
@@ -252,7 +1627,13 @@ impl App {
             }
             if self.history_open && matches!(key.code, KeyCode::Char('h' | 'n' | 'p' | '[' | ']')) {
                 self.history_scroll = 0;
-                return Some(Effect::Session(Request::History {
+                if let Some(session) = &self.history_session {
+                    return Some(self.session_effect(Request::HistorySession {
+                        session: session.clone(),
+                        offset: self.history_offset,
+                    }));
+                }
+                return Some(self.session_effect(Request::History {
                     index: self.history_index,
                     offset: self.history_offset,
                 }));
@@ -268,13 +1649,13 @@ impl App {
                 return Some(Effect::Detach);
             }
             KeyCode::Char('u') if key.modifiers.is_empty() => {
-                return Some(Effect::Session(Request::Reconcile));
+                return Some(self.session_effect(Request::Reconcile));
             }
             KeyCode::Char('y') if key.modifiers.is_empty() => {
-                return Some(Effect::Session(Request::RetryStorage));
+                return Some(self.session_effect(Request::RetryStorage));
             }
             KeyCode::Char('s') if key.modifiers.is_empty() => {
-                return Some(Effect::Session(Request::Stop));
+                return Some(self.session_effect(Request::Stop));
             }
             KeyCode::Char('a') if key.modifiers.is_empty() => {
                 let tree = self.current()?;
@@ -284,9 +1665,11 @@ impl App {
                     );
                     return None;
                 }
-                return Some(Effect::Session(Request::Adopt(crate::session::path_bytes(
-                    &tree.path,
-                ))));
+                let path = crate::session::path_bytes(&tree.path);
+                self.selected_target.clear();
+                self.selecting_checkout = true;
+                self.sent_viewport = None;
+                return Some(self.session_effect(Request::Adopt(path)));
             }
             KeyCode::Char('v') if key.modifiers.is_empty() => {
                 return Some(self.launch_intent(Request::Resume));
@@ -313,28 +1696,162 @@ impl App {
             Some(Action::Refresh) => return Some(Effect::Refresh),
             Some(Action::Quit) => {
                 self.shutdown_pending = true;
-                return Some(Effect::Session(Request::Shutdown));
+                return Some(self.session_effect(Request::Shutdown));
             }
             None => {}
         }
         None
     }
 
+    fn source_editor(
+        &mut self,
+        workspace: String,
+        path: Option<Vec<u8>>,
+        line: usize,
+    ) -> Option<Effect> {
+        if self.session.editor_protocol != 2
+            || self.session.control_denied
+            || self.session.connection_lost
+        {
+            self.editor_message = Some(
+                "Live source location unavailable; reconnect to a compatible local supervisor"
+                    .into(),
+            );
+            return None;
+        }
+        if self.editor_source_request.is_some() {
+            self.editor_message = Some("Source location preparation already pending".into());
+            return None;
+        }
+        let request = uuid::Uuid::new_v4().to_string();
+        self.editor_source_request = Some((request.clone(), workspace.clone()));
+        Some(Effect::Session(Request::EditorSource {
+            request,
+            workspace,
+            path,
+            line,
+        }))
+    }
+
+    pub fn setup_record(&self) -> Option<&crate::setup::Record> {
+        let request = self.creation_record().map(|r| r.intent.request.as_str());
+        self.session
+            .setup
+            .records
+            .iter()
+            .rev()
+            .find(|r| Some(r.creation.intent.request.as_str()) == request)
+    }
+    pub fn creation_record(&self) -> Option<&crate::creation::Record> {
+        if let Some(request) = &self.creation_selected {
+            self.session
+                .creation
+                .records
+                .iter()
+                .find(|r| r.intent.request == *request)
+        } else {
+            self.session.creation.records.last()
+        }
+    }
     pub fn keyboard_help(&self) -> &'static str {
-        if self.attached {
+        if self.setup_input.is_some() {
+            "Project setup: /bin/sh -c command · Enter save · empty disables · Ctrl-U clear · Esc cancel"
+        } else if self.create_form.is_some() {
+            "New workspace: Tab fields · Left/Right agent · Enter Create without starting · Ctrl-S Create and start · Esc cancel"
+        } else if self.diff.is_some() {
+            "f/Esc back · s stop · q quit · e inspect ALL · o edit LIVE file · E LIVE workspace · j/k file · arrows scroll · w Working/Whole · b base · r refresh · d detach"
+        } else if self.first_prompt.is_some() {
+            "First prompt (optional): Enter starts native agent · Esc cancels without launch"
+        } else if self.rename_workspace.is_some() {
+            "Workspace name: Enter saves · Ctrl-U clears · Esc cancels · no folder or conversation changes"
+        } else if self.project_input.is_some() {
+            "Add project: existing local path · Enter register without launch · Esc cancel"
+        } else if self.removal_open.is_some() {
+            "y remove exact preview · Space local ack · g reconcile · r retry storage · n preview · j/k scroll · Esc dismiss"
+        } else if self.archive_open.is_some() {
+            "Enter Stop/save/archive or Unarchive · z cancel archive · Esc dismiss · q quit · d detach"
+        } else if self.workspaces_open {
+            "M remove folder · K archive/return · z show archived · q quit · h latest history · N create · U setup · w/Esc back · j/k select · [/] project · Enter open · a adopt · R rename · A add · E edit LIVE · f diff · d detach"
+        } else if self.attached {
             "Native input · Ctrl-C interrupt · Ctrl-] / Ctrl-5 dashboard (keeps session running)"
         } else if self.cleanup_open {
             "Cleanup: j/k select · n/p page · Enter preview · D confirm selected deletion · Esc cancel/back · g refresh · y capture retry · s stop · q quit"
+        } else if self.history_open {
+            "q quit/stop · s stop · h live · v raw/readable · [/] page · j/k scroll · n/p session · y retry · g cleanup · d detach"
         } else if self.session.lifecycle == crate::session::Lifecycle::Interrupted {
             "u reconcile · v resume · g cleanup · h history · d detach · q quit/stop · j/k select · r refresh"
-        } else if self.history_open {
-            "q quit/stop/retry · s stop · y retry history · g cleanup · h live · n/p session · [/] page · j/k scroll · d detach"
         } else {
-            "q quit/stop · y retry history · v resume · c new Claude · x new Codex · a adopt · Enter attach · g cleanup · h history · s stop · d detach · j/k · r refresh"
+            "q quit/stop s stop h history d detach Enter attach x new Codex v resume M remove K archive / find S text B chats N create U setup E LIVE f diff w spaces"
         }
     }
 
     pub fn paste(&mut self, text: String) -> Option<Effect> {
+        if let Some((_, command)) = &mut self.setup_input {
+            if command.len() + text.len() <= 4096 && !text.contains('\0') {
+                command.push_str(&text);
+            }
+            return None;
+        }
+        if let Some(browser) = &mut self.browser {
+            if browser.text.len() + text.len() <= 256 {
+                browser
+                    .text
+                    .push_str(&crate::persistence::search::visible(&text));
+                return Some(browser.changed());
+            }
+            return None;
+        }
+        if let Some(form) = &mut self.create_form {
+            let dest = match form.field {
+                0 => Some(&mut form.intent.base),
+                1 => Some(&mut form.intent.branch),
+                2 => Some(&mut form.path),
+                3 => Some(form.intent.prompt.get_or_insert_with(String::new)),
+                _ => None,
+            };
+            if let Some(dest) = dest {
+                if dest.len() + text.len() <= 4084 && !text.contains('\0') {
+                    dest.push_str(&text);
+                } else {
+                    self.error = Some(
+                        "Creation input exceeds 4084 bytes or contains NUL; input not changed"
+                            .into(),
+                    );
+                }
+            }
+            return None;
+        }
+
+        if let Some(entry) = self.diff.as_mut().and_then(|view| view.base_entry.as_mut()) {
+            if entry.len() + text.len() <= 32768 && !text.chars().any(char::is_control) {
+                entry.push_str(&text);
+            }
+            return None;
+        }
+        if self.first_prompt.is_some() || self.rename_workspace.is_some() {
+            let limit = if self.first_prompt.is_some() {
+                4084
+            } else {
+                240
+            };
+            let entry = if let Some((_, entry)) = self.first_prompt.as_mut() {
+                entry
+            } else {
+                &mut self.rename_workspace.as_mut().unwrap().1
+            };
+            if entry.len() + text.len() <= limit && !text.contains('\0') {
+                entry.push_str(&text);
+            } else {
+                self.error = Some(format!("Input exceeds {limit}-byte limit or contains NUL"));
+            }
+            return None;
+        }
+        if let Some(path) = self.project_input.as_mut() {
+            if path.len() + text.len() <= 32768 {
+                path.push_str(&text);
+            }
+            return None;
+        }
         if !self.attached {
             return None;
         }
@@ -342,7 +1859,7 @@ impl App {
             self.error = Some("Paste exceeds 4084-byte limit; split it and retry".into());
             return None;
         }
-        Some(Effect::Session(Request::Paste(text)))
+        Some(self.session_effect(Request::Paste(text)))
     }
 
     pub fn begin_refresh(&mut self) -> bool {
@@ -350,26 +1867,39 @@ impl App {
             return false;
         }
         self.loading = true;
+        self.discovery_request = self.discovery_request.wrapping_add(1);
         self.error = None;
         true
     }
 
     pub fn apply(&mut self, event: Event) {
-        match event {
-            Event::WorktreesLoaded(result) => {
-                self.loading = false;
-                match result {
-                    Ok(worktrees) => {
-                        let selected_path = self.current().map(|w| w.path.clone());
-                        self.selected = selected_path
-                            .and_then(|path| worktrees.iter().position(|w| w.path == path))
-                            .or_else(|| (!worktrees.is_empty()).then_some(0));
-                        self.worktrees = worktrees;
-                        self.error = None;
-                    }
-                    Err(error) => self.error = Some(error),
+        let result = match event {
+            Event::DiscoveryCompleted {
+                request,
+                repository,
+                result,
+            } => {
+                if request != self.discovery_request
+                    || repository != self.repository
+                    || !self.loading
+                {
+                    return;
                 }
+                result
             }
+            Event::WorktreesLoaded(result) => result,
+        };
+        self.loading = false;
+        match result {
+            Ok(worktrees) => {
+                let selected_path = self.current().map(|w| w.path.clone());
+                self.selected = selected_path
+                    .and_then(|path| worktrees.iter().position(|w| w.path == path))
+                    .or_else(|| (!worktrees.is_empty()).then_some(0));
+                self.worktrees = worktrees;
+                self.error = None;
+            }
+            Err(error) => self.error = Some(error),
         }
     }
 
@@ -402,6 +1932,527 @@ mod tests {
             path: PathBuf::from(path),
             ..Worktree::default()
         }
+    }
+
+    #[test]
+    fn focused_text_fields_keep_mixed_case_and_search_punctuation_literal() {
+        let text = "ECXRNOU/SBcamelCase";
+        for mode in 0..5 {
+            let mut app = App::new("/project".into());
+            app.session.browse_protocol = 1;
+            match mode {
+                0 => app.project_input = Some(String::new()),
+                1 => app.first_prompt = Some((crate::events::NativeAgent::Claude, String::new())),
+                2 => app.rename_workspace = Some(("workspace".into(), String::new())),
+                3 => {
+                    let mut view =
+                        crate::working_diff::View::new("workspace".into(), "name".into());
+                    view.base_entry = Some(String::new());
+                    app.diff = Some(view);
+                }
+                _ => {
+                    app.browser = Some(crate::browser::Browser::new(
+                        crate::persistence::search::Mode::History,
+                        None,
+                    ));
+                }
+            }
+            for c in text.chars() {
+                let effect = app.input(KeyEvent::new(
+                    KeyCode::Char(c),
+                    if c.is_uppercase() {
+                        KeyModifiers::SHIFT
+                    } else {
+                        KeyModifiers::NONE
+                    },
+                ));
+                assert!(
+                    effect.is_none() || matches!(effect, Some(Effect::Session(Request::Browse(_)))),
+                    "text triggered a product action"
+                );
+            }
+            let actual = match mode {
+                0 => app.project_input.unwrap(),
+                1 => app.first_prompt.unwrap().1,
+                2 => app.rename_workspace.unwrap().1,
+                3 => app.diff.unwrap().base_entry.unwrap(),
+                _ => app.browser.unwrap().text,
+            };
+            assert_eq!(actual, text);
+        }
+    }
+    #[test]
+    fn explicit_resume_freezes_browser_workspace_and_segment() {
+        let mut app = App::new("/project".into());
+        app.session.browse_protocol = 1;
+        app.session.resume_protocol = 1;
+        app.input(KeyEvent::new(KeyCode::Char('B'), KeyModifiers::NONE));
+        let request = app.browser.as_ref().unwrap().request.clone();
+        app.observe_session(Observation {
+            browse_protocol: 1,
+            resume_protocol: 1,
+            browse: Some(crate::persistence::search::Response {
+                request,
+                rows: vec![crate::persistence::search::Row {
+                    key: "older".into(),
+                    workspace: "original-workspace".into(),
+                    session: Some("original-segment".into()),
+                    label: "Claude older".into(),
+                    snippet: String::new(),
+                    passage: None,
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        assert!(
+            matches!(app.input(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE)),
+            Some(Effect::Session(Request::ResumeSelected { workspace, session, .. }))
+            if workspace == "original-workspace" && session == "original-segment")
+        );
+        assert!(!app.attached);
+        app.observe_session(Observation {
+            resume_protocol: 1,
+            control_target: "occupied-owner".into(),
+            identity: Some("running conversation".into()),
+            lifecycle: crate::session::Lifecycle::Running,
+            error: Some("Worktree occupied; attach or explicitly Stop".into()),
+            ..Default::default()
+        });
+        assert_eq!(app.selected_target, "occupied-owner");
+        assert!(
+            !app.attached,
+            "occupied resume offers attachment instead of taking native focus"
+        );
+    }
+    #[test]
+    fn retained_session_selection_survives_reordering_and_never_opens_deleted_neighbour() {
+        let mut app = App::new("/project".into());
+        app.session.browse_protocol = 1;
+        app.input(KeyEvent::new(KeyCode::Char('B'), KeyModifiers::NONE));
+        let request = app.browser.as_ref().unwrap().request.clone();
+        let row = |id: &str| crate::persistence::search::Row {
+            key: id.into(),
+            workspace: "workspace".into(),
+            session: Some(id.into()),
+            label: id.into(),
+            snippet: String::new(),
+            passage: None,
+        };
+        let observation = |rows| Observation {
+            browse_protocol: 1,
+            browse: Some(crate::persistence::search::Response {
+                request: request.clone(),
+                rows,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        app.observe_session(observation(vec![row("first"), row("selected")]));
+        app.input(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        app.observe_session(observation(vec![row("selected"), row("first")]));
+        assert_eq!(
+            app.browser.as_ref().unwrap().selected.as_deref(),
+            Some("selected")
+        );
+        app.observe_session(observation(vec![row("first")]));
+        assert!(
+            app.input(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+                .is_none()
+        );
+        app.observe_session(observation(vec![row("selected"), row("first")]));
+        assert!(
+            matches!(app.input(KeyEvent::new(KeyCode::Enter,KeyModifiers::NONE)),Some(Effect::Session(Request::HistorySession {session,..})) if session=="selected")
+        );
+        assert_eq!(app.history_session.as_deref(), Some("selected"));
+        assert!(!app.attached);
+    }
+    #[test]
+    fn editing_or_switching_search_rejects_previous_query_and_preserves_runtime() {
+        let mut app = App::new("/project".into());
+        app.session.browse_protocol = 1;
+        app.session.control_target = "runtime".into();
+        app.selected_target = "runtime".into();
+        app.input(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
+        let request = app.browser.as_ref().unwrap().request.clone();
+        app.paste("new query".into());
+        app.observe_session(Observation {
+            control_target: "runtime".into(),
+            browse_protocol: 1,
+            browse: Some(crate::persistence::search::Response {
+                request,
+                rows: vec![crate::persistence::search::Row {
+                    key: "stale".into(),
+                    workspace: "wrong".into(),
+                    session: None,
+                    label: "old results".into(),
+                    snippet: String::new(),
+                    passage: None,
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        assert!(
+            app.browser
+                .as_ref()
+                .unwrap()
+                .response
+                .as_ref()
+                .is_none_or(|r| r.rows.is_empty())
+        );
+        assert_eq!(app.selected_target, "runtime");
+        assert!(!app.attached);
+    }
+    #[test]
+    fn editor_return_cannot_restore_search_text_deleted_during_handoff() {
+        let mut app = App::new("/project".into());
+        let mut browser =
+            crate::browser::Browser::new(crate::persistence::search::Mode::History, None);
+        browser.opened = Some(crate::history::ReadablePage {
+            text: "deleted private text".into(),
+            ..Default::default()
+        });
+        app.browser = Some(browser);
+        let context = app.editor_context();
+        app.observe_session(Observation {
+            history_revision: 1,
+            ..Default::default()
+        });
+        app.editor_returned(context);
+        assert!(app.browser.is_none());
+    }
+    #[test]
+    fn editor_return_keeps_selected_history_passage_and_diff_context_after_observation() {
+        let mut app = App::new("/original/project".into());
+        app.selected = Some(2);
+        app.workspace_selected = Some("workspace".into());
+        app.selected_target = "owner".into();
+        app.session.control_target = "owner".into();
+        app.session.lifecycle = crate::events::Lifecycle::Running;
+        app.session.session_identity = Some(crate::events::SessionIdentity {
+            task: "task".into(),
+            session: "session".into(),
+            request: "request".into(),
+        });
+        app.history_open = true;
+        app.history_raw = true;
+        app.history_scroll = 29;
+        app.history_index = 4;
+        app.history_session = Some("historical-session".into());
+        app.history_offset = 16384;
+        app.session.history = Some(crate::persistence::HistoryPage {
+            identity: "retained-history".into(),
+            session: "historical-session".into(),
+            committed: 20000,
+            checkout: "/original/project".into(),
+            lifecycle: crate::events::Lifecycle::Exited,
+            process_exit: None,
+            text: "selected raw passage\\x1b".into(),
+            readable: None,
+            projection_preparing: false,
+            offset: 16384,
+            next: Some(20000),
+        });
+        let mut diff = crate::working_diff::View::new("workspace".into(), "name".into());
+        diff.selected = Some(b"selected-file".to_vec());
+        diff.scroll = 13;
+        diff.horizontal = 24;
+        app.diff = Some(diff);
+        let context = app.editor_context();
+        let mut next = app.session.clone();
+        next.output_bytes = 999;
+        next.screen = "agent kept running".into();
+        next.history.as_mut().unwrap().text = "intervening live observation".into();
+        app.observe_session(next);
+        app.editor_returned(context);
+        assert_eq!(app.repository, PathBuf::from("/original/project"));
+        assert_eq!(app.selected, Some(2));
+        assert_eq!(app.workspace_selected.as_deref(), Some("workspace"));
+        assert_eq!(app.selected_target, "owner");
+        assert!(app.history_open && app.history_raw);
+        assert_eq!(app.history_scroll, 29);
+        assert_eq!(app.history_session.as_deref(), Some("historical-session"));
+        assert_eq!(app.history_index, 4);
+        assert_eq!(app.history_offset, 16384);
+        assert_eq!(
+            app.session.history.as_ref().unwrap().text,
+            "selected raw passage\\x1b"
+        );
+        assert_eq!(app.session.history.as_ref().unwrap().offset, 16384);
+        assert_eq!(
+            app.diff.as_ref().unwrap().selected.as_deref(),
+            Some(b"selected-file".as_slice())
+        );
+        assert_eq!(app.diff.as_ref().unwrap().scroll, 13);
+        assert_eq!(app.diff.as_ref().unwrap().horizontal, 24);
+        assert_eq!(app.session.output_bytes, 999);
+        assert!(!app.attached);
+        app.history_open = false;
+        app.diff = None;
+        app.attached = true;
+        let context = app.editor_context();
+        let same = app.session.clone();
+        app.observe_session(same);
+        app.editor_returned(context);
+        assert!(app.attached);
+        app.attached = true;
+        let context = app.editor_context();
+        let mut ended = app.session.clone();
+        ended.lifecycle = crate::events::Lifecycle::Exited;
+        app.observe_session(ended);
+        app.editor_returned(context);
+        assert!(!app.attached);
+        app.session.lifecycle = crate::events::Lifecycle::Running;
+        app.attached = true;
+        let context = app.editor_context();
+        let mut replaced = app.session.clone();
+        replaced.session_identity.as_mut().unwrap().session = "replacement".into();
+        app.observe_session(replaced);
+        app.editor_returned(context);
+        assert!(!app.attached);
+    }
+
+    #[test]
+    fn first_prompt_freezes_the_conversation_when_its_modal_opens() {
+        let mut app = App::new("repo".into());
+        let identity = |session: &str| crate::events::SessionIdentity {
+            task: "task-a".into(),
+            session: session.into(),
+            request: "request-a".into(),
+        };
+        app.observe_session(Observation {
+            control_target: "owner-a".into(),
+            session_identity: Some(identity("conversation-a")),
+            ..Observation::default()
+        });
+        app.input(KeyEvent::new(KeyCode::Char('C'), KeyModifiers::SHIFT));
+        app.paste("Explicit first prompt".into());
+        app.observe_session(Observation {
+            control_target: "owner-a".into(),
+            session_identity: Some(identity("replacement-conversation")),
+            ..Observation::default()
+        });
+        assert!(
+            matches!(app.input(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)), Some(Effect::Session(Request::Session { target, session: Some(session), command }))
+            if target == "owner-a" && session == "conversation-a" && matches!(*command, Request::LaunchNative { .. }))
+        );
+    }
+
+    #[test]
+    fn workspace_enter_selects_its_running_owner_and_rejects_late_previous_screen() {
+        let mut app = App::new("repo".into());
+        let mut state = Observation {
+            control_target: "owner-a".into(),
+            ..Observation::default()
+        };
+        state.registry.workspaces.push(crate::registry::Workspace {
+            creation: None,
+            id: "workspace-b".into(),
+            task: "task-b".into(),
+            legacy_tasks: vec![],
+            name: "B".into(),
+            project: None,
+            path: Some(b"other".to_vec()),
+            checkout: None,
+            sessions: vec!["conversation-b".into()],
+        });
+        state.sessions.push(crate::events::SessionSummary {
+            target: "owner-b".into(),
+            task: "task-b".into(),
+            session: Some("conversation-b".into()),
+            lifecycle: crate::events::Lifecycle::Running,
+            reserved: true,
+            ..Default::default()
+        });
+        app.observe_session(state);
+        app.input(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE));
+        assert!(
+            matches!(app.input(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)), Some(Effect::Session(Request::SelectSession(target))) if target == "owner-b")
+        );
+        assert!(
+            app.viewport(Some((24, 100))).is_none(),
+            "geometry waits for the selected owner's identity"
+        );
+        app.observe_session(Observation {
+            control_target: "owner-a".into(),
+            screen: "late A".into(),
+            ..Observation::default()
+        });
+        app.observe_session(Observation {
+            control_target: "owner-b".into(),
+            screen: "current B".into(),
+            lifecycle: crate::events::Lifecycle::Running,
+            identity: Some("session-b".into()),
+            ..Observation::default()
+        });
+        assert_eq!(app.session.screen, "current B");
+        assert!(app.attached);
+        assert!(
+            matches!(app.viewport(Some((24,100))), Some(Effect::Session(Request::Session { target, .. })) if target == "owner-b")
+        );
+    }
+
+    #[test]
+    fn explicit_adoption_accepts_new_owner_after_pending_old_owner_reply() {
+        let mut app = App::new("repo".into());
+        app.apply(Event::WorktreesLoaded(Ok(vec![worktree("other")])));
+        app.observe_session(Observation {
+            control_target: "old-owner".into(),
+            ..Observation::default()
+        });
+        assert!(matches!(
+            app.input(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE)),
+            Some(Effect::Session(Request::Adopt(_)))
+        ));
+        app.observe_session(Observation {
+            control_target: "old-owner".into(),
+            adoption_pending: true,
+            ..Observation::default()
+        });
+        assert!(app.viewport(Some((24, 100))).is_some());
+        app.viewport_dispatched(Ok(()));
+        app.observe_session(Observation {
+            control_target: "new-owner".into(),
+            adopted: Some("other".into()),
+            ..Observation::default()
+        });
+        assert_eq!(app.session.control_target, "new-owner");
+        assert_eq!(app.session.adopted.as_deref(), Some("other"));
+        assert!(
+            matches!(app.viewport(Some((24,100))), Some(Effect::Session(Request::Session { target, .. })) if target == "new-owner")
+        );
+        app.viewport_dispatched(Ok(()));
+        assert!(
+            matches!(app.input(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE)), Some(Effect::Session(Request::Session { target, session: None, command })) if target == "new-owner" && matches!(*command, Request::Launch(_)))
+        );
+    }
+
+    #[test]
+    fn viewport_acknowledgement_is_bound_to_conversation_and_execution_readiness() {
+        let mut app = App::new("repo".into());
+        let state = |session: Option<&str>, lifecycle| Observation {
+            control_target: "owner-a".into(),
+            session_identity: session.map(|session| crate::events::SessionIdentity {
+                task: "workspace-a".into(),
+                session: session.into(),
+                request: "launch-a".into(),
+            }),
+            lifecycle,
+            ..Observation::default()
+        };
+        app.observe_session(state(None, crate::events::Lifecycle::Idle));
+        assert!(app.viewport(Some((32, 104))).is_some());
+        app.viewport_dispatched(Ok(()));
+        assert!(app.viewport(Some((32, 104))).is_none());
+        app.observe_session(state(
+            Some("new-conversation"),
+            crate::events::Lifecycle::Interrupted,
+        ));
+        assert!(
+            matches!(app.viewport(Some((32, 104))), Some(Effect::Session(Request::Session { target, session: Some(session), .. })) if target == "owner-a" && session == "new-conversation")
+        );
+        app.viewport_dispatched(Ok(()));
+        app.observe_session(state(
+            Some("new-conversation"),
+            crate::events::Lifecycle::Running,
+        ));
+        assert!(
+            app.viewport(Some((32, 104))).is_some(),
+            "the created PTY must receive the current geometry even if preparation already accepted it"
+        );
+        app.viewport_dispatched(Ok(()));
+        assert!(app.viewport(Some((32, 104))).is_none());
+    }
+
+    #[test]
+    fn first_prompt_requires_explicit_submit_and_can_be_cancelled() {
+        let mut app = App::new(PathBuf::from("/repo"));
+        assert!(
+            app.input(KeyEvent::new(KeyCode::Char('C'), KeyModifiers::SHIFT))
+                .is_none()
+        );
+        assert!(app.paste("Fix the unicode λ search".into()).is_none());
+        assert!(
+            app.input(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+                .is_none()
+        );
+        assert!(app.first_prompt.is_none());
+        assert!(
+            app.input(KeyEvent::new(KeyCode::Char('X'), KeyModifiers::SHIFT))
+                .is_none()
+        );
+        app.paste("Fix the unicode λ search".into());
+        assert!(
+            matches!(app.input(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+            Some(Effect::Session(Request::LaunchNative { agent: crate::events::NativeAgent::Codex, prompt: Some(prompt), .. })) if prompt == "Fix the unicode λ search")
+        );
+    }
+
+    #[test]
+    fn session_actions_freeze_owner_and_conversation_identity() {
+        let mut app = App::new("repo".into());
+        app.observe_session(Observation {
+            control_target: "owner-a".into(),
+            session_identity: Some(crate::events::SessionIdentity {
+                task: "workspace-a".into(),
+                session: "conversation-a".into(),
+                request: "launch-a".into(),
+            }),
+            ..Observation::default()
+        });
+        assert!(
+            matches!(app.viewport(Some((24, 100))), Some(Effect::Session(Request::Session { target, session: Some(session), command }))
+            if target == "owner-a" && session == "conversation-a" && matches!(*command, Request::Resize { rows: 24, cols: 100 }))
+        );
+        assert!(
+            matches!(app.input(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE)), Some(Effect::Session(Request::Session { target, session: Some(session), command }))
+            if target == "owner-a" && session == "conversation-a" && matches!(*command, Request::Stop))
+        );
+    }
+
+    #[test]
+    fn late_projection_cannot_replace_explicitly_selected_runtime() {
+        let mut app = App::new("repo".into());
+        app.observe_session(Observation {
+            control_target: "owner-b".into(),
+            screen: "B".into(),
+            ..Observation::default()
+        });
+        app.observe_session(Observation {
+            control_target: "owner-a".into(),
+            screen: "late A".into(),
+            ..Observation::default()
+        });
+        assert_eq!(app.session.control_target, "owner-b");
+        assert_eq!(app.session.screen, "B");
+    }
+
+    #[test]
+    fn retained_workspace_picker_keeps_missing_selection_and_never_dispatches_launch() {
+        let mut app = App::new(PathBuf::from("repo"));
+        app.session
+            .registry
+            .workspaces
+            .push(crate::registry::Workspace {
+                creation: None,
+                id: "legacy-workspace".into(),
+                legacy_tasks: vec!["opaque task".into()],
+                task: "opaque task".into(),
+                name: "Retained work".into(),
+                project: None,
+                path: None,
+                checkout: None,
+                sessions: vec!["historical-session".into()],
+            });
+        let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        assert!(app.input(key(KeyCode::Char('w'))).is_none());
+        assert!(app.workspaces_open);
+        assert_eq!(app.workspace_selected.as_deref(), Some("legacy-workspace"));
+        assert!(app.input(key(KeyCode::Enter)).is_none());
+        assert!(app.error.as_deref().unwrap().contains("unknown"));
+        assert!(app.input(key(KeyCode::Char('l'))).is_none());
+        assert!(app.session.identity.is_none());
     }
 
     #[test]
@@ -527,6 +2578,97 @@ mod tests {
     }
 
     #[test]
+    fn explicit_launch_after_restored_terminal_segment_uses_a_new_request() {
+        for lifecycle in [
+            crate::events::Lifecycle::Exited,
+            crate::events::Lifecycle::Stopped,
+            crate::events::Lifecycle::Failed,
+        ] {
+            for metadata_pending in [false, true] {
+                for key in ['v', 'c', 'x', 'l'] {
+                    let mut app = App::new("repo".into());
+                    app.observe_session(Observation {
+                        lifecycle,
+                        metadata_pending,
+                        launch_request: "original-launch".into(),
+                        session_identity: Some(crate::events::SessionIdentity {
+                            task: "workspace".into(),
+                            session: "original-segment".into(),
+                            request: "original-launch".into(),
+                        }),
+                        ..Default::default()
+                    });
+                    assert!(app.session.launch_result.is_none());
+                    let request =
+                        match app.input(KeyEvent::new(KeyCode::Char(key), KeyModifiers::NONE)) {
+                            Some(Effect::Session(
+                                Request::Resume(id)
+                                | Request::LaunchClaude(id)
+                                | Request::LaunchCodex(id)
+                                | Request::Launch(id),
+                            )) => id,
+                            _ => panic!("explicit action did not dispatch"),
+                        };
+                    assert_ne!(
+                        request, "original-launch",
+                        "{lifecycle:?}, {metadata_pending}, {key}"
+                    );
+                    let repeated =
+                        match app.input(KeyEvent::new(KeyCode::Char(key), KeyModifiers::NONE)) {
+                            Some(Effect::Session(
+                                Request::Resume(id)
+                                | Request::LaunchClaude(id)
+                                | Request::LaunchCodex(id)
+                                | Request::Launch(id),
+                            )) => id,
+                            _ => panic!("explicit retry did not dispatch"),
+                        };
+                    assert_eq!(
+                        repeated, request,
+                        "unobserved retry preserves its own request"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn unsettled_launch_without_outcome_retains_request_for_retry() {
+        for lifecycle in [
+            crate::events::Lifecycle::Idle,
+            crate::events::Lifecycle::Interrupted,
+            crate::events::Lifecycle::Stopping,
+            crate::events::Lifecycle::StopFailed,
+        ] {
+            for key in ['v', 'c', 'x', 'l'] {
+                let mut app = App::new("repo".into());
+                app.observe_session(Observation {
+                    lifecycle,
+                    metadata_pending: true,
+                    launch_request: "unsettled-launch".into(),
+                    session_identity: Some(crate::events::SessionIdentity {
+                        task: "workspace".into(),
+                        session: "pending-segment".into(),
+                        request: "unsettled-launch".into(),
+                    }),
+                    ..Default::default()
+                });
+                let request = match app.input(KeyEvent::new(KeyCode::Char(key), KeyModifiers::NONE))
+                {
+                    Some(Effect::Session(
+                        Request::Resume(id)
+                        | Request::LaunchClaude(id)
+                        | Request::LaunchCodex(id)
+                        | Request::Launch(id),
+                    )) => id,
+                    _ => panic!("retry did not dispatch"),
+                };
+                assert_eq!(request, "unsettled-launch", "{lifecycle:?}, {key}");
+            }
+        }
+    }
+
+    #[test]
     fn native_resume_requires_its_own_explicit_action() {
         let mut app = App::new("repo".into());
         app.observe_session(Observation {
@@ -632,6 +2774,41 @@ mod tests {
     }
 
     #[test]
+    fn attributed_discovery_rejects_other_projects_and_late_requests() {
+        let mut app = App::new(PathBuf::from("project-a"));
+        app.apply(Event::WorktreesLoaded(Ok(vec![worktree("retained")])));
+        app.begin_refresh();
+        let request = app.discovery_request;
+        app.apply(Event::DiscoveryCompleted {
+            request,
+            repository: PathBuf::from("project-b"),
+            result: Ok(vec![worktree("other")]),
+        });
+        assert_eq!(app.current().unwrap().path, PathBuf::from("retained"));
+        assert!(app.loading);
+        app.apply(Event::DiscoveryCompleted {
+            request: request.wrapping_sub(1),
+            repository: app.repository.clone(),
+            result: Ok(vec![worktree("old")]),
+        });
+        assert!(app.loading);
+        app.apply(Event::DiscoveryCompleted {
+            request,
+            repository: app.repository.clone(),
+            result: Err("timed out".into()),
+        });
+        assert!(!app.loading);
+        assert_eq!(app.current().unwrap().path, PathBuf::from("retained"));
+        assert_eq!(app.error.as_deref(), Some("timed out"));
+        app.apply(Event::DiscoveryCompleted {
+            request,
+            repository: app.repository.clone(),
+            result: Ok(vec![worktree("late")]),
+        });
+        assert_eq!(app.current().unwrap().path, PathBuf::from("retained"));
+    }
+
+    #[test]
     fn refresh_preserves_selected_path_and_failure_preserves_data() {
         let mut app = App::new(PathBuf::from("repo"));
         app.apply(Event::WorktreesLoaded(Ok(vec![
@@ -722,5 +2899,277 @@ mod tests {
         assert_eq!(app.selected, Some(0));
         app.apply(Event::WorktreesLoaded(Ok(vec![])));
         assert_eq!(app.selected, None);
+    }
+    #[test]
+    fn independent_creation_form_has_explicit_start_choices_and_preserves_suggested_path_bytes() {
+        for start in [false, true] {
+            let mut app = App::new("repo".into());
+            app.session
+                .registry
+                .projects
+                .push(crate::registry::Project {
+                    setup_command: None,
+                    id: "project".into(),
+                    name: "My project".into(),
+                    common_dir: b"/repo/.git".to_vec(),
+                });
+            assert!(matches!(
+                app.input(KeyEvent::new(KeyCode::Char('N'), KeyModifiers::NONE)),
+                Some(Effect::Session(Request::PreviewCreation { .. }))
+            ));
+            let mut observation = app.session.clone();
+            observation.creation.preview = Some(crate::creation::Preview {
+                project: "project".into(),
+                default_base: Some("origin/main".into()),
+                managed_root: b"/external/managed-\xff".to_vec(),
+                ..Default::default()
+            });
+            app.observe_session(observation);
+            let request = app.create_form.as_ref().unwrap().intent.request.clone();
+            let action = app.input(if start {
+                KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL)
+            } else {
+                KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)
+            });
+            let Some(Effect::Session(Request::CreateWorkspace(intent))) = action else {
+                panic!("explicit creation request expected")
+            };
+            assert_eq!(intent.start, start);
+            assert_eq!(intent.base, "origin/main");
+            assert_eq!(intent.request, request);
+            assert!(intent.prompt.is_none());
+            assert_eq!(
+                intent.path,
+                [b"/external/managed-\xff/".as_slice(), request.as_bytes()].concat()
+            );
+        }
+    }
+    #[test]
+    fn workspace_creation_keeps_pasted_first_prompt_as_supplied() {
+        let mut app = App::new("repo".into());
+        app.session
+            .registry
+            .projects
+            .push(crate::registry::Project {
+                setup_command: None,
+                id: "project".into(),
+                name: "Project".into(),
+                common_dir: vec![],
+            });
+        app.input(KeyEvent::new(KeyCode::Char('N'), KeyModifiers::NONE));
+        for _ in 0..3 {
+            app.input(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        }
+        app.paste("Fix unicode λ\nKeep the index unchanged".into());
+        assert_eq!(
+            app.create_form.as_ref().unwrap().intent.prompt.as_deref(),
+            Some("Fix unicode λ\nKeep the index unchanged")
+        );
+    }
+    #[test]
+    fn creation_fields_consume_mixed_case_before_editor_and_other_modal_shortcuts() {
+        for field in 0..4 {
+            let mut app = App::new("repo".into());
+            app.session.editor_protocol = 2;
+            app.session
+                .registry
+                .projects
+                .push(crate::registry::Project {
+                    setup_command: None,
+                    id: "project".into(),
+                    name: "Project".into(),
+                    common_dir: vec![],
+                });
+            app.input(KeyEvent::new(KeyCode::Char('N'), KeyModifiers::NONE));
+            let request = app.create_form.as_ref().unwrap().intent.request.clone();
+            for _ in 0..field {
+                app.input(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+            }
+            app.input(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+            for c in "ECXRNcamelCase".chars() {
+                assert!(
+                    app.input(KeyEvent::new(
+                        KeyCode::Char(c),
+                        if c.is_uppercase() {
+                            KeyModifiers::SHIFT
+                        } else {
+                            KeyModifiers::NONE
+                        }
+                    ))
+                    .is_none()
+                );
+            }
+            let form = app.create_form.as_ref().unwrap();
+            let text = match field {
+                0 => form.intent.base.as_str(),
+                1 => form.intent.branch.as_str(),
+                2 => form.path.as_str(),
+                _ => form.intent.prompt.as_deref().unwrap(),
+            };
+            assert_eq!(text, "ECXRNcamelCase");
+            assert_eq!(form.intent.request, request);
+            assert!(
+                app.first_prompt.is_none()
+                    && app.rename_workspace.is_none()
+                    && app.editor_source_request.is_none()
+                    && app.editor_ready.is_none()
+                    && app.editor_message.is_none()
+            );
+        }
+    }
+    #[test]
+    fn setup_command_consumes_shortcuts_paths_and_mixed_case_as_literal_text() {
+        let mut app = App::new("repo".into());
+        app.setup_input = Some(("project".into(), String::new()));
+        let command = "ECXRNOU/SBcamelCase='x'; echo \"$PWD\"";
+        for c in command.chars() {
+            assert!(
+                app.input(KeyEvent::new(
+                    KeyCode::Char(c),
+                    if c.is_ascii_uppercase() {
+                        KeyModifiers::SHIFT
+                    } else {
+                        KeyModifiers::NONE
+                    }
+                ))
+                .is_none()
+            );
+        }
+        assert_eq!(app.setup_input.as_ref().unwrap().1, command);
+        assert!(
+            app.create_form.is_none()
+                && app.first_prompt.is_none()
+                && app.rename_workspace.is_none()
+                && app.editor_source_request.is_none()
+        );
+        assert!(
+            matches!(app.input(KeyEvent::new(KeyCode::Enter,KeyModifiers::NONE)),Some(Effect::Session(Request::ConfigureSetup{project,command:Some(saved)})) if project=="project" && saved==command)
+        );
+    }
+    #[test]
+    fn archive_policy_defaults_follow_provenance_and_keyboard_choice_names_exact_branch() {
+        for created in [true, false] {
+            let mut app = App::new("/project".into());
+            let checkout = crate::git::CheckoutIdentity {
+                root: "/project/work".into(),
+                git_dir: "/project/.git/worktrees/work".into(),
+                common_dir: "/project/.git".into(),
+            };
+            app.session
+                .registry
+                .workspaces
+                .push(crate::registry::Workspace {
+                    creation: created.then(|| crate::creation::Facts {
+                        setup: None,
+                        request: "creation".into(),
+                        original_base_ref: "refs/heads/main".into(),
+                        original_base_commit: "base".into(),
+                        original_branch: "work".into(),
+                        created_branch: true,
+                    }),
+                    id: "workspace".into(),
+                    task: "task".into(),
+                    legacy_tasks: vec![],
+                    name: "Work".into(),
+                    project: None,
+                    path: None,
+                    checkout: Some(checkout),
+                    sessions: vec![],
+                });
+            app.session.registry.selected = Some("workspace".into());
+            app.worktrees.push(Worktree {
+                path: "/project/work".into(),
+                branch: Some("work".into()),
+                ..Default::default()
+            });
+            app.input(KeyEvent::new(KeyCode::Char('K'), KeyModifiers::NONE));
+            assert_eq!(app.archive_delete, created);
+            app.input(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE));
+            assert_eq!(app.archive_delete, !created);
+            let effect = app.input(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+            match effect {
+                Some(Effect::Session(Request::Archive {
+                    branch_policy: Some(crate::archive::BranchPolicy::Delete(target)),
+                    ..
+                })) if !created => assert_eq!(target, "refs/heads/work"),
+                Some(Effect::Session(Request::Archive {
+                    branch_policy: Some(crate::archive::BranchPolicy::Keep),
+                    ..
+                })) if created => {}
+                _ => panic!("Unexpected archive choice"),
+            }
+            app.input(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE));
+            assert_eq!(
+                app.archive_delete, !created,
+                "submitted policy is immutable until a new snapshot"
+            );
+        }
+    }
+    #[test]
+    fn folder_removal_requires_preview_and_freezes_workspace_before_confirmation() {
+        let mut app = App::new("repo".into());
+        app.session.registry.selected = Some("original-workspace".into());
+        assert!(
+            matches!(app.input(KeyEvent::new(KeyCode::Char('M'),KeyModifiers::NONE)),
+            Some(Effect::Session(Request::PreviewRemoval { workspace, .. })) if workspace=="original-workspace")
+        );
+        app.session.registry.selected = Some("other-workspace".into());
+        assert!(
+            app.input(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+                .is_none(),
+            "Enter without the exact preview cannot remove a folder"
+        );
+    }
+    #[test]
+    fn folder_removal_confirmation_is_exact_and_requires_plain_key_and_local_ack() {
+        let mut app = App::new("repo".into());
+        let anchor = || crate::removal_git::Anchor {
+            device: 1,
+            inode: 2,
+        };
+        let snapshot = crate::removal_git::Snapshot {
+            checkout: crate::git::CheckoutIdentity {
+                root: "/workspace".into(),
+                git_dir: "/repo/.git/worktrees/workspace".into(),
+                common_dir: "/repo/.git".into(),
+            },
+            head: "exact-previewed-head".into(),
+            branch: None,
+            reference: "exact-previewed-ref".into(),
+            local_only: true,
+            warning: "local only".into(),
+            blockers: vec![],
+            root_anchor: anchor(),
+            git_anchor: anchor(),
+            common_anchor: anchor(),
+            dotgit_anchor: anchor(),
+            registration_anchor: anchor(),
+            remote_evidence: String::new(),
+        };
+        app.session.removal.records.push(crate::removal::Record {
+            workspace: "original".into(),
+            request: "preview".into(),
+            snapshot,
+            phase: crate::removal::Phase::Preview,
+            message: String::new(),
+        });
+        app.removal_open = Some(("original".into(), "preview".into()));
+        assert!(matches!(
+            app.input(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE)),
+            Some(Effect::Session(Request::RetryStorage))
+        ));
+        app.session.registry.selected = Some("replacement-selection".into());
+        assert!(
+            app.input(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE))
+                .is_none()
+        );
+        app.input(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
+        assert!(
+            app.input(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL))
+                .is_none()
+        );
+        assert!(
+            matches!(app.input(KeyEvent::new(KeyCode::Char('y'),KeyModifiers::NONE)),Some(Effect::Session(Request::ConfirmRemoval{workspace,request,head,reference,local_ack:true})) if workspace=="original" && request=="preview" && head=="exact-previewed-head" && reference=="exact-previewed-ref")
+        );
     }
 }

@@ -3,7 +3,7 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::Line,
-    widgets::{Block, List, ListItem, ListState, Paragraph, Wrap},
+    widgets::{Block, Clear, List, ListItem, ListState, Paragraph, Wrap},
 };
 
 use crate::app::App;
@@ -65,10 +65,29 @@ impl Ui {
             reviews,
         );
         let focus = if app.attached { "session" } else { "dashboard" };
-        let title = if app.cleanup_open {
+        let title = if let Some(browser) = &app.browser {
+            format!(" {:?} · retained work · reading only ", browser.mode)
+        } else if let Some(view) = &app.diff {
+            format!(
+                " {} · {} ",
+                if view.whole {
+                    "Whole workspace"
+                } else {
+                    "Working"
+                },
+                crate::working_diff::printable(&view.name)
+            )
+        } else if app.cleanup_open {
             " History cleanup · oldest sealed stopped sessions first ".to_owned()
         } else if app.history_open {
-            " Retained history · controls escaped · n/p session · [/] page ".to_owned()
+            format!(
+                " Retained history · {} · v raw/readable · [/] page ",
+                if app.history_raw {
+                    "escaped raw"
+                } else {
+                    "readable"
+                }
+            )
         } else if frame.area().width < 80 || frame.area().height < 22 {
             let tag = app
                 .session
@@ -77,7 +96,12 @@ impl Ui {
                 .map(|identity| identity.session.chars().take(8).collect::<String>())
                 .unwrap_or_else(|| "unlaunched".into());
             format!(
-                " {} {tag} · Focus: {focus} ",
+                " {} · {} {tag} · Focus: {focus} ",
+                if app.session.connection_lost {
+                    "unknown".to_owned()
+                } else {
+                    format!("{:?}", app.session.lifecycle)
+                },
                 app.session.agent.as_deref().unwrap_or("Session")
             )
         } else {
@@ -99,7 +123,250 @@ impl Ui {
             session,
         );
         let viewport = Self::session_viewport(frame.area());
-        if app.cleanup_open {
+        if let Some((workspace, request)) = &app.removal_open {
+            let name = app
+                .session
+                .registry
+                .workspaces
+                .iter()
+                .find(|w| &w.id == workspace)
+                .map_or("Workspace", |w| w.name.as_str());
+            let mut text = format!("Remove workspace folder · {}\n", visible(name));
+            if let Some(r) = app
+                .session
+                .removal
+                .records
+                .iter()
+                .find(|r| &r.workspace == workspace && &r.request == request)
+            {
+                text.push_str(&format!(
+                    "{:?}: {}\nFolder {}\nHEAD {}\nBranch {}\nRecovery ref {}\n",
+                    r.phase,
+                    visible(&r.message),
+                    visible(&r.snapshot.checkout.root.display().to_string()),
+                    r.snapshot.head,
+                    r.snapshot.branch.as_deref().unwrap_or("detached HEAD"),
+                    r.snapshot.reference
+                ));
+                text.push_str("Saved code, branches, archive refs and chats stay. In-place resume needs a checkout.\n");
+                if !r.snapshot.warning.is_empty() {
+                    text.push_str(&format!("{}\n", visible(&r.snapshot.warning)));
+                }
+                if r.phase == crate::removal::Phase::Preview {
+                    if r.snapshot.local_only {
+                        text.push_str(&format!(
+                            "[{}] Space: I acknowledge code is saved only locally, NOT pushed\n",
+                            if app.removal_local_ack { "x" } else { " " }
+                        ));
+                    }
+                    for blocker in &r.snapshot.blockers {
+                        text.push_str(&format!("BLOCKED: {}\n", visible(blocker)));
+                    }
+                    if r.snapshot.blockers.is_empty() {
+                        text.push_str("y: Confirm removal of this exact HEAD/folder; repeat safety checks before Git removal\n");
+                    } else {
+                        text.push_str(
+                            "Resolve blockers, then n: new preview. No folder will be removed.\n",
+                        );
+                    }
+                } else {
+                    text.push_str("g: Read-only reconciliation; never replays deletion\n");
+                }
+            } else {
+                text.push_str("Loading removal preview; folder retained.\n");
+            }
+            if !app.session.removal.ready {
+                text.push_str("Loading removal recovery receipts; wait before a new preview.\n");
+            }
+            if app.session.removal.pending {
+                text.push_str("Worker/receipt pending; wait for durable result.\n");
+            }
+            if let Some(error) = &app.session.removal.error {
+                text.push_str(&format!("{}\n", visible(error)));
+            }
+            text.push_str(&format!("Request {request}\nn new preview · r retry storage · Esc dismiss · j/k scroll · q quit/stop · d detach"));
+            frame.render_widget(
+                Paragraph::new(text)
+                    .wrap(Wrap { trim: false })
+                    .scroll((app.removal_scroll, 0)),
+                viewport,
+            );
+        } else if let Some(workspace) = &app.archive_open {
+            let archived = app.session.registry.archived.contains(workspace);
+            let name = app
+                .session
+                .registry
+                .workspaces
+                .iter()
+                .find(|w| &w.id == workspace)
+                .map_or("Workspace", |w| w.name.as_str());
+            let record = app.session.archive.records.iter().rev().find(|r| {
+                &r.workspace == workspace
+                    && (archived || Some(&r.request) == app.archive_request.as_ref())
+            });
+            let mut text = format!(
+                "{}\n{}\n",
+                visible(name),
+                if archived {
+                    "Archived · Enter: Restore branch and return (coding stays stopped)"
+                } else if app.archive_submitted {
+                    "Waiting for confirmed Stop, cleanup and saved history"
+                } else {
+                    "Enter: Stop, save and archive"
+                }
+            );
+            if !archived {
+                text.push_str(&format!(
+                    "Delete local branch on archive: {} · b toggle\nTarget: {}\n",
+                    if app.archive_delete { "on" } else { "off" },
+                    app.archive_delete_target
+                        .as_deref()
+                        .unwrap_or("unavailable; refresh discovery before selecting")
+                ));
+            }
+            if app.session.archive.pending {
+                text.push_str(&format!("{}\n", visible(&app.session.archive.status)));
+            }
+            if let Some(e) = &app.session.archive.error {
+                text.push_str(&format!("{}\n", visible(e)));
+            }
+            if let Some(r) = record {
+                if !r.branch_message.is_empty() {
+                    text.push_str(&format!("{}\n", visible(&r.branch_message)));
+                }
+                if let Some(saved) = &r.saved {
+                    text.push_str(&format!("{} {}\nsaved locally, not pushed.\nTracked + new nonignored files saved.\n{} ignored paths excluded; folder retained.\nStaged-only content: separate recovery tree.\nHEAD {}\n",if r.before.as_ref()==Some(saved){"Clean HEAD retained"}else{"Archive checkpoint"},saved.chars().take(12).collect::<String>(),r.excluded.len(),saved));
+                } else {
+                    text.push_str(&format!("{:?}: {}\n", r.phase, visible(&r.message)));
+                }
+                for path in &r.excluded {
+                    text.push_str(&format!(
+                        "Excluded: {}\n",
+                        visible(&String::from_utf8_lossy(path))
+                    ));
+                }
+                text.push_str(&format!(
+                    "Recovery ref {}\nStaged tree {}-index\n{}\n",
+                    r.reference,
+                    r.reference,
+                    visible(&r.message)
+                ));
+            } else {
+                text.push_str("Tracked + new nonignored files become a local Archive checkpoint, not pushed. Ignored files remain in the folder, excluded from saving. Chats and folder stay. Original staged content has a separate recovery tree.\n");
+            }
+            text.push_str(&format!(
+                "Request {}\n",
+                app.archive_request.as_deref().unwrap_or("none")
+            ));
+            text.push_str("\nEnter confirms/retries same request · z cancels archive · n new snapshot\nEsc dismisses (operation continues) · j/k scroll · q quit/stop · d detach");
+            frame.render_widget(
+                Paragraph::new(text)
+                    .wrap(Wrap { trim: false })
+                    .scroll((app.archive_scroll, 0)),
+                viewport,
+            );
+        } else if let Some(browser) = &app.browser {
+            draw_browser(frame, viewport, browser);
+        } else if let Some(view) = &app.diff {
+            draw_working_diff(frame, viewport, view);
+        } else if app.workspaces_open || app.project_input.is_some() {
+            let items = app
+                .session
+                .registry
+                .workspaces
+                .iter()
+                .filter(|w| app.show_archived || !app.session.registry.archived.contains(&w.id))
+                .map(|workspace| {
+                    let project = workspace
+                        .project
+                        .as_ref()
+                        .and_then(|id| {
+                            app.session
+                                .registry
+                                .projects
+                                .iter()
+                                .find(|project| &project.id == id)
+                        })
+                        .map_or("Unknown project (legacy)", |project| project.name.as_str());
+                    let path = workspace
+                        .path
+                        .as_ref()
+                        .map(|path| {
+                            use std::os::unix::ffi::OsStrExt;
+                            std::path::Path::new(std::ffi::OsStr::from_bytes(path))
+                                .display()
+                                .to_string()
+                        })
+                        .unwrap_or_else(|| "checkout unknown · retained legacy history".into());
+                    let runtime = app
+                        .session
+                        .sessions
+                        .iter()
+                        .filter(|entry| entry.task == workspace.task)
+                        .max_by_key(|entry| entry.reserved);
+                    let context = if app.session.registry.archived.contains(&workspace.id) {
+                        "Archived · K return".into()
+                    } else if let Some(setup) = app
+                        .session
+                        .setup
+                        .records
+                        .iter()
+                        .rev()
+                        .find(|r| r.creation.intent.request == workspace.task)
+                    {
+                        format!(
+                            "Setup {:?} · {} sessions",
+                            setup.phase,
+                            workspace.sessions.len()
+                        )
+                    } else {
+                        runtime.map_or_else(
+                            || format!("{} sessions", workspace.sessions.len()),
+                            |runtime| {
+                                format!(
+                                    "{:?} · {} · {} sessions",
+                                    runtime.lifecycle,
+                                    runtime.status.state.label(),
+                                    workspace.sessions.len()
+                                )
+                            },
+                        )
+                    };
+                    ListItem::new(vec![
+                        Line::from(format!(
+                            "{} / {}",
+                            visible(project),
+                            visible(&workspace.name)
+                        )),
+                        Line::from(format!("{} · {}", context, visible(&path))),
+                    ])
+                })
+                .collect::<Vec<_>>();
+            let selected = app
+                .session
+                .registry
+                .workspaces
+                .iter()
+                .filter(|w| app.show_archived || !app.session.registry.archived.contains(&w.id))
+                .position(|workspace| Some(&workspace.id) == app.workspace_selected.as_ref());
+            let mut selection = ListState::default().with_selected(selected);
+            let title = if let Some(path) = &app.project_input {
+                format!(" Add project: {}_ ", visible(path))
+            } else if app.session.registry_pending {
+                " Registering project… ".into()
+            } else {
+                " Projects / retained workspaces · A add · j/k select · Enter open · K archive/return · z archived "
+                    .into()
+            };
+            frame.render_stateful_widget(
+                List::new(items)
+                    .block(Block::bordered().title(title))
+                    .highlight_symbol("> ")
+                    .highlight_style(Style::default().fg(Color::Cyan)),
+                session,
+                &mut selection,
+            );
+        } else if app.cleanup_open {
             let mut text = String::new();
             if let Some(preview) = &app.cleanup_preview {
                 text.push_str(&format!("Confirm selected history deletion\n{}\nCheckout: {}\nDelete only this managed transcript segment ({} allocated bytes).\nPreserve checkout files, task working changes, native conversation records, metadata/request outcomes and other sessions.\nSpace recovery is not guaranteed. D deletes this UUID; Esc cancels.\n", visible(&preview.identity), visible(&preview.checkout), preview.bytes.map_or("unknown".into(), |bytes| bytes.to_string())));
@@ -161,7 +428,15 @@ impl Ui {
                                 visible(&outcome.reason())
                             )),
                         page.offset,
-                        page.text
+                        if app.history_raw {
+                            page.text.as_str()
+                        } else if let Some(readable) = &page.readable {
+                            readable.text.as_str()
+                        } else if page.projection_preparing {
+                            "Preparing readable history in bounded background steps…"
+                        } else {
+                            "Readable projection unavailable; v shows escaped raw bytes"
+                        }
                     )
                 })
                 .unwrap_or_else(|| "Loading retained history…".into());
@@ -175,7 +450,7 @@ impl Ui {
             draw_screen(frame, viewport, screen, app.attached);
         } else {
             frame.render_widget(
-                Paragraph::new("Adopt (a), then c Claude Code / x Codex CLI / l scripted fixture."),
+                Paragraph::new("Adopt (a), then c Claude / x Codex; C/X supplies an optional first prompt. R renames the workspace."),
                 viewport,
             );
         }
@@ -197,6 +472,12 @@ impl Ui {
             .iter()
             .map(|worktree| {
                 let mut flags = String::new();
+                if app.session.registry.workspaces.iter().any(|w| {
+                    app.session.registry.archived.contains(&w.id)
+                        && w.checkout.as_ref().is_some_and(|c| c.root == worktree.path)
+                }) {
+                    flags.push_str(" [archived]");
+                }
                 if worktree.locked.is_some() {
                     flags.push_str(" [locked]");
                 }
@@ -215,7 +496,7 @@ impl Ui {
                     lines.push(Line::from(if app.session.identity.is_some() {
                         format!("  └ managed session · {}", app.session.status.state.label())
                     } else {
-                        "  └ adopted · c Claude / x Codex / l fixture".into()
+                        "  └ adopted · c/x start · C/X prompt · R rename".into()
                     }));
                 }
                 ListItem::new(lines)
@@ -423,12 +704,244 @@ impl Ui {
             .wrap(Wrap { trim: false }),
             status,
         );
+        if let Some(form) = &app.create_form {
+            let project = app
+                .session
+                .registry
+                .projects
+                .iter()
+                .find(|p| p.id == form.intent.project)
+                .map(|p| p.name.as_str())
+                .unwrap_or("Unavailable");
+            let fields = [
+                format!("Base: {}", form.intent.base),
+                format!("Branch: {}", form.intent.branch),
+                format!("Folder: {}", form.path),
+                format!(
+                    "First prompt (optional): {}",
+                    form.intent.prompt.as_deref().unwrap_or_default()
+                ),
+                format!("Agent: {:?} (Left/Right changes)", form.intent.agent),
+            ];
+            let mut text = format!("Project: {project}\n");
+            for (i, field) in fields.iter().enumerate() {
+                text.push_str(&format!(
+                    "{} {}\n",
+                    if i == form.field { ">" } else { " " },
+                    visible(field)
+                ));
+            }
+            if let Some(preview) = &app.session.creation.preview {
+                text.push_str(&format!("Available bases: {}\n", preview.bases.join(", ")));
+                if preview.default_base.is_none() {
+                    text.push_str("Choose an explicit base; no unambiguous remote default.\n");
+                }
+                if let Some(error) = &preview.error {
+                    text.push_str(&visible(error));
+                }
+            }
+            text.push_str("\nEnter: Create without starting\nCtrl-S: Create and start (supplied prompt sent once)\nTab: next field · Ctrl-U: clear · Esc: cancel");
+            frame.render_widget(Clear, session);
+            frame.render_widget(
+                Paragraph::new(text)
+                    .block(Block::bordered().title(" New independent workspace "))
+                    .wrap(Wrap { trim: false }),
+                session,
+            );
+        } else if let Some((_, text)) = &app.first_prompt {
+            frame.render_widget(Clear, session);
+            frame.render_widget(
+                Paragraph::new(visible(text))
+                    .block(
+                        Block::bordered()
+                            .title(" First prompt · Enter starts · Esc cancels · optional "),
+                    )
+                    .wrap(Wrap { trim: false }),
+                session,
+            );
+        } else if let Some((_, text)) = &app.rename_workspace {
+            frame.render_widget(Clear, session);
+            frame.render_widget(
+                Paragraph::new(visible(text))
+                    .block(Block::bordered().title(
+                        " Workspace name (local) · Enter saves · Ctrl-U clears · Esc cancels ",
+                    ))
+                    .wrap(Wrap { trim: false }),
+                session,
+            );
+        }
+        if let Some((_, command)) = &app.setup_input {
+            frame.render_widget(Clear, session);
+            frame.render_widget(Paragraph::new(format!("Optional project setup shell command (/bin/sh -c)\nRuns once in each NEW workspace before requested coding.\nEnter saves; empty disables; Esc cancels.\n\n{}",visible(command))).block(Block::bordered().title(" Project setup ")).wrap(Wrap{trim:false}),session);
+        }
+        if app.creation_open
+            && app.create_form.is_none()
+            && app.first_prompt.is_none()
+            && app.rename_workspace.is_none()
+            && app.setup_input.is_none()
+        {
+            let text = if let Some(record) = app.creation_record() {
+                let project = app
+                    .session
+                    .registry
+                    .projects
+                    .iter()
+                    .find(|p| p.id == record.intent.project)
+                    .map(|p| p.name.as_str())
+                    .unwrap_or(&record.intent.project);
+                let launch = app
+                    .session
+                    .creation
+                    .launches
+                    .iter()
+                    .find(|r| r.request == record.intent.request);
+                let launch = if record.launch_cancelled {
+                    launch.map(|r|format!("Original launch intent cancelled; original process {:?}",r.lifecycle)).unwrap_or_else(||"Original launch intent cancelled; later conversations remain independent".into())
+                } else if let Some(receipt) = launch {
+                    if let Some(result) = &receipt.result {
+                        result
+                            .error
+                            .as_ref()
+                            .map(|e| format!("Native launch failed: {}", visible(e)))
+                            .unwrap_or_else(|| {
+                                if receipt.lifecycle == crate::events::Lifecycle::Running {
+                                    "Native agent started; attach through its workspace".into()
+                                } else {
+                                    format!(
+                                        "Native launch confirmed; process {:?}; history retained",
+                                        receipt.lifecycle
+                                    )
+                                }
+                            })
+                    } else if receipt.pending {
+                        "Native launch awaiting durable result".into()
+                    } else {
+                        receipt
+                            .error
+                            .as_ref()
+                            .map(|e| format!("Launch unavailable: {}", visible(e)))
+                            .unwrap_or_else(|| {
+                                "No confirmed native launch result; query original operation".into()
+                            })
+                    }
+                } else if !record.intent.start {
+                    "Created without starting".into()
+                } else {
+                    "No confirmed native launch; explicit Start required after recovery".into()
+                };
+                let action = if record.phase != crate::creation::Phase::LocalChoice
+                    || record.commit.is_none()
+                {
+                    "Local fallback unavailable for this phase".into()
+                } else if record.intent.start && !record.launch_cancelled {
+                    format!("L: Create locally and start {:?}", record.intent.agent)
+                } else {
+                    "L: Create locally without starting".into()
+                };
+                let setup=app.setup_record().map(|r| {
+                    let continuation=if app.session.setup.armed_launches.contains(&record.intent.request) {format!("Continue will start {:?} (Create and start still armed)",record.intent.agent)}else{"Continue keeps coding stopped; explicit Start required".into()};
+                    format!("Setup {:?}{} · {}\n{}\nT Retry · Y Continue without setup · I reconcile/informed Retry (may repeat external effects)\n{}\nBounded combined output tail; {} discarded bytes (not conversation history):\n{}\n",r.phase,if app.session.setup.pending {" (pending durable result/cleanup)"}else{""},visible(&r.message),continuation,app.session.setup.error.as_deref().map(visible).unwrap_or_default(),r.discarded,visible(&r.output))
+                }).unwrap_or_default();
+                format!(
+                    "{setup}Project: {}\nPhase: {:?}\nBase: {}\nCommit: {}\nBranch: {}\nFolder: {}\n{}\n\n{}\n\n{}\nG: Query/recover creation without starting\n[/]: receipts · Z: cancel · Esc: return",
+                    visible(project),
+                    record.phase,
+                    visible(record.base_ref.as_deref().unwrap_or(&record.intent.base)),
+                    record.commit.as_deref().unwrap_or("not yet selected"),
+                    visible(&record.intent.branch),
+                    visible(
+                        &crate::creation::path(&record.intent.path)
+                            .display()
+                            .to_string()
+                    ),
+                    launch,
+                    visible(&record.message),
+                    action
+                )
+            } else {
+                app.session
+                    .creation
+                    .error
+                    .clone()
+                    .unwrap_or_else(|| "Creation receipt pending · Z cancels · Esc returns".into())
+            };
+            frame.render_widget(Clear, session);
+            frame.render_widget(
+                Paragraph::new(text)
+                    .block(Block::bordered().title(" Creation receipt · original operation "))
+                    .wrap(Wrap { trim: false }),
+                session,
+            );
+        }
+        if app.create_form.is_none()
+            && app.setup_input.is_none()
+            && (app.creation_open
+                || app.session.setup.pending
+                || app.setup_record().is_some_and(|r| {
+                    matches!(
+                        r.phase,
+                        crate::setup::Phase::Failed | crate::setup::Phase::Uncertain
+                    )
+                })
+                || app.session.creation.pending
+                || app.session.creation.error.is_some()
+                || app
+                    .session
+                    .creation
+                    .records
+                    .last()
+                    .is_some_and(|r| !matches!(r.phase, crate::creation::Phase::Created)))
+        {
+            let message=app.setup_record().map(|r|format!("Setup {:?}: {} · {} · T Retry · Y Continue · I informed reconcile/retry · Z cancel",r.phase,visible(&r.message),if app.session.setup.armed_launches.contains(&r.creation.intent.request) {"Continue STARTS coding"}else{"Continue keeps coding STOPPED"})).or_else(||app.session.setup.error.clone()).or_else(||app.session.creation.error.clone()).or_else(||app.creation_record().map(|r|format!("{:?}: {} · branch {} · folder {} · base {} · commit {} · L local fallback · G recover · Z cancel · Esc dismiss",r.phase,r.message,r.intent.branch,crate::creation::path(&r.intent.path).display(),r.base_ref.as_deref().unwrap_or("pending"),r.commit.as_deref().unwrap_or("pending")))).unwrap_or_else(||"Workspace creation in progress · Z cancel".into());
+            frame.render_widget(
+                Paragraph::new(visible(&message))
+                    .block(Block::bordered().title(" Workspace creation "))
+                    .wrap(Wrap { trim: false }),
+                status,
+            );
+        }
         let compact_help;
-        let help_text = if app.cleanup_open
+        let help_text = if app.browser.is_some() && frame.area().width < 80 {
+            "Enter search/open · ↑/↓ select · Esc back\nTab mode · n next · Ctrl-R refresh · / edit"
+        } else if app.browser.is_some() {
+            "Enter search/open · ↑/↓ select · Tab mode · Esc back · n next · Ctrl-R refresh · / edit"
+        } else if app.create_form.is_some() {
+            "Tab fields · Left/Right agent · Enter Create without starting\nCtrl-S Create and start · Ctrl-U clear · Esc cancel"
+        } else if app.creation_open {
+            "T Retry setup · Y Continue (launch effect in receipt) · I informed reconcile/retry\nL local creation · G recover · [/] receipt · Z cancel creation · Esc return · q quit"
+        } else if app.diff.is_some()
+            && !app.attached
+            && (frame.area().width < 80 || frame.area().height < 22)
+        {
+            "w Working/Whole · e inspect ALL · o LIVE · j/k file\nb base · r refresh · f/Esc back · s stop · q quit"
+        } else if app.removal_open.is_some() {
+            "y remove · Space local ack · g reconcile · n preview\nr retry · j/k scroll · Esc dismiss · q quit · d detach"
+        } else if app.archive_open.is_some() {
+            "Enter confirm/retry · z cancel · Esc dismiss\nj/k scroll · q quit/stop · d detach"
+        } else if app.first_prompt.is_some() || app.rename_workspace.is_some() {
+            app.keyboard_help()
+        } else if !app.attached
+            && app.project_input.is_some()
+            && (frame.area().width < 80 || frame.area().height < 22)
+        {
+            "Existing local repository path · Enter register
+Esc cancel · registration never starts an agent"
+        } else if !app.attached
+            && app.workspaces_open
+            && (frame.area().width < 80 || frame.area().height < 22)
+        {
+            "K archive/return · z show archived · j/k select
+A add · N create · w/Esc back · d detach · q quit"
+        } else if app.cleanup_open
             && !app.attached
             && (frame.area().width < 80 || frame.area().height < 22)
         {
             "j/k select · n/p page · Enter preview · D delete\nEsc cancel · g refresh · y retry · s stop · q quit"
+        } else if app.history_open
+            && !app.attached
+            && (frame.area().width < 80 || frame.area().height < 22)
+        {
+            "h live · v raw/readable · [/] page · j/k scroll\nq quit · s stop · y retry · g cleanup · d detach"
         } else if !app.attached
             && app.session.lifecycle == crate::session::Lifecycle::Interrupted
             && (frame.area().width < 80 || frame.area().height < 22)
@@ -448,21 +961,246 @@ impl Ui {
                 &compact_help
             } else {
                 compact_help = format!(
-                    "a adopt · c/x new Claude/Codex · v resume · Enter attach\ng cleanup · q quit/stop · d detach · Process: {} · status: {}",
-                    if app.session.connection_lost {
-                        format!("unknown (last seen {:?})", app.session.lifecycle)
+                    "q quit s stop h history S text / find B chats {}\nM remove K archive N create w spaces f diff E LIVE d detach",
+                    if app.session.lifecycle == crate::session::Lifecycle::Running {
+                        "Enter attach"
                     } else {
-                        format!("{:?}", app.session.lifecycle)
-                    },
-                    app.session.status.state.label()
+                        "v resume"
+                    }
                 );
                 &compact_help
             }
         } else {
             app.keyboard_help()
         };
-        frame.render_widget(Paragraph::new(help_text), help);
+        frame.render_widget(
+            Paragraph::new(app.editor_message.as_deref().unwrap_or(help_text)),
+            help,
+        );
     }
+}
+
+fn draw_browser(frame: &mut Frame, area: Rect, browser: &crate::browser::Browser) {
+    if let Some(page) = &browser.opened {
+        let text = format!(
+            "Committed passage v{} · raw {}–{} / {}\n{}",
+            page.version, page.raw_start, page.raw_end, page.committed, page.text
+        );
+        frame.render_widget(
+            Paragraph::new(text)
+                .wrap(Wrap { trim: false })
+                .scroll((browser.scroll, 0)),
+            area,
+        );
+        return;
+    }
+    let [query, notice, rows] = Layout::vertical([
+        Constraint::Length(2),
+        Constraint::Length(2),
+        Constraint::Min(1),
+    ])
+    .areas(area);
+    frame.render_widget(
+        Paragraph::new(format!(
+            "{}{}{}",
+            if browser.mode == crate::persistence::search::Mode::History {
+                "History: exact words (all, case-insensitive)\n".into()
+            } else {
+                format!("{:?}: ", browser.mode)
+            },
+            crate::persistence::search::visible(&browser.text),
+            if browser.editing { "_" } else { "" }
+        )),
+        query,
+    );
+    let message = if browser.editing {
+        "Enter searches · ↓ selects results"
+    } else {
+        browser.response.as_ref().map_or(
+        "Enter searches · ↓ selects results",
+        |response| {
+            if let Some(error) = &response.error {
+                error.as_str()
+            } else if browser.selected.as_ref().is_some_and(|selected|!response.rows.iter().any(|row| &row.key==selected)) {
+                "Selected session/passage unavailable; choose another row or refresh."
+            } else if response.preparing {
+                "Searching in bounded background steps…"
+            } else if response.rows.is_empty() {
+                "No results. Index catches up to committed output; Ctrl-R refreshes."
+            } else {
+                "Enter reads · v resumes selected original tool/native ID · Ctrl-R refreshes · Stop must settle occupied checkout"
+            }
+        },
+    )
+    };
+    frame.render_widget(Paragraph::new(message).wrap(Wrap { trim: false }), notice);
+    if let Some(response) = &browser.response {
+        let selected = response
+            .rows
+            .iter()
+            .position(|r| Some(&r.key) == browser.selected.as_ref());
+        let items = response.rows.iter().map(|row| {
+            let width = rows.width.saturating_sub(3).max(1) as usize;
+            let mut lines = Vec::new();
+            let text = if row.snippet.is_empty() {
+                row.label.clone()
+            } else {
+                format!("{}\n{}", row.snippet, row.label)
+            };
+            for line in text.lines() {
+                let chars = line.chars().collect::<Vec<_>>();
+                for chunk in chars.chunks(width) {
+                    lines.push(chunk.iter().collect::<String>());
+                }
+            }
+            ListItem::new(lines.join("\n"))
+        });
+        frame.render_stateful_widget(
+            List::new(items)
+                .highlight_symbol("> ")
+                .highlight_style(Style::default().fg(Color::Cyan)),
+            rows,
+            &mut ListState::default().with_selected(selected),
+        );
+    }
+}
+
+fn draw_working_diff(frame: &mut Frame, area: Rect, view: &crate::working_diff::View) {
+    let compact = area.width < 70 || area.height < 18;
+    let snapshot = view.snapshot.as_ref();
+    let freshness = if view.loading {
+        "Refreshing; previous snapshot"
+    } else if view.error.is_some() {
+        "Refresh failed; previous snapshot"
+    } else {
+        "Snapshot; not live"
+    };
+    let request = snapshot.map_or(view.request.as_str(), |snapshot| snapshot.request.as_str());
+    let checkout = snapshot
+        .map(|snapshot| crate::working_diff::printable(&snapshot.checkout.root.to_string_lossy()))
+        .unwrap_or_else(|| "resolving…".into());
+    let identity = format!(
+        "Workspace {}\nCheckout {}\nRequest {}\n{}{}",
+        crate::working_diff::printable(&view.workspace),
+        checkout,
+        request,
+        freshness,
+        snapshot
+            .map(|snapshot| format!(
+                " · {}{}",
+                snapshot.captured_millis,
+                if snapshot.changed_during_capture {
+                    " · changed during capture; refresh"
+                } else {
+                    " · r refresh"
+                }
+            ))
+            .unwrap_or_default()
+    );
+    let [identity_area, error_area, body] = Layout::vertical([
+        Constraint::Length(4),
+        Constraint::Length(if view.base_entry.is_some() {
+            3
+        } else if view.error.is_some() {
+            if snapshot.is_none() { 6 } else { 3 }
+        } else {
+            0
+        }),
+        Constraint::Min(1),
+    ])
+    .areas(area);
+    frame.render_widget(Paragraph::new(identity), identity_area);
+    if let Some(entry) = &view.base_entry {
+        frame.render_widget(Paragraph::new(format!("Local base (full refs/heads/… or refs/remotes/…):\n{}▏\nEnter saves and compares · Esc cancels · Ctrl-U clears", crate::working_diff::printable(entry))).wrap(Wrap { trim: false }), error_area);
+    } else if let Some(error) = &view.error {
+        frame.render_widget(
+            Paragraph::new(error.as_str())
+                .style(Style::default().fg(Color::Yellow))
+                .wrap(Wrap { trim: false }),
+            error_area,
+        );
+    }
+    let Some(snapshot) = snapshot else {
+        frame.render_widget(
+            Paragraph::new(if view.loading {
+                "Loading comparison…"
+            } else {
+                "Comparison unavailable; r retries. Esc returns."
+            }),
+            body,
+        );
+        return;
+    };
+    let (files_area, content_area) = if compact {
+        let [files, content] = Layout::vertical([
+            Constraint::Length(if snapshot.files.is_empty() { 0 } else { 3 }),
+            Constraint::Min(1),
+        ])
+        .areas(body);
+        (files, content)
+    } else {
+        let [files, content] =
+            Layout::horizontal([Constraint::Percentage(32), Constraint::Min(1)]).areas(body);
+        (files, content)
+    };
+    let items = snapshot
+        .files
+        .iter()
+        .map(|file| {
+            ListItem::new(vec![
+                Line::from(file.label()),
+                Line::from(format!("  {}", file.state)),
+            ])
+        })
+        .collect::<Vec<_>>();
+    let selected = snapshot
+        .files
+        .iter()
+        .position(|file| Some(&file.path) == view.selected.as_ref());
+    let mut state = ListState::default().with_selected(selected);
+    let title = if snapshot.omitted > 0 {
+        format!("Files: {} omitted; status limit", snapshot.omitted)
+    } else {
+        format!("Files ({}) · j/k", snapshot.files.len())
+    };
+    frame.render_stateful_widget(
+        List::new(items)
+            .block(Block::default().title(title))
+            .highlight_symbol("> ")
+            .highlight_style(Style::default().fg(Color::Cyan)),
+        files_area,
+        &mut state,
+    );
+    let content = if view.selected == snapshot.selected {
+        snapshot.content.as_str()
+    } else {
+        "Loading selected file; previous patch withheld."
+    };
+    let lines = content
+        .lines()
+        .map(|line| {
+            let color = if line.starts_with('+') {
+                Color::Green
+            } else if line.starts_with('-') {
+                Color::LightRed
+            } else if line.starts_with("@@") {
+                Color::Cyan
+            } else {
+                Color::Gray
+            };
+            Line::styled(line, Style::default().fg(color))
+        })
+        .collect::<Vec<_>>();
+    frame.render_widget(
+        Paragraph::new(lines)
+            .scroll((view.scroll, view.horizontal))
+            .block(Block::default().title(format!(
+                "Content · line {} · column {}",
+                view.scroll as usize + 1,
+                view.horizontal as usize + 1
+            ))),
+        content_area,
+    );
 }
 
 fn color(color: vt100::Color) -> Color {
@@ -537,6 +1275,338 @@ fn visible(text: &str) -> String {
 mod tests {
     use super::*;
     use ratatui::{Terminal, backend::TestBackend};
+
+    #[test]
+    fn dashboard_help_keeps_history_stop_quit_and_native_actions_visible_without_resizing() {
+        for (cols, rows, dimensions) in [(160, 40, (32, 104)), (60, 18, (11, 58))] {
+            for lifecycle in [
+                crate::events::Lifecycle::Stopped,
+                crate::events::Lifecycle::Running,
+            ] {
+                let mut app = App::new("repo".into());
+                app.session.lifecycle = lifecycle;
+                let mut terminal = Terminal::new(TestBackend::new(cols, rows)).unwrap();
+                terminal
+                    .draw(|frame| Ui::default().draw(frame, &app))
+                    .unwrap();
+                let area = Rect::new(0, 0, cols, rows);
+                assert_eq!(Ui::session_dimensions(area), Some(dimensions));
+                let help = Ui::layout(area).3;
+                let buffer = terminal.backend().buffer();
+                let footer = (help.y..help.bottom())
+                    .map(|row| {
+                        (help.x..help.right())
+                            .map(|col| {
+                                buffer.content
+                                    [usize::from(row) * usize::from(cols) + usize::from(col)]
+                                .symbol()
+                            })
+                            .collect::<String>()
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                for action in ["h history", "s stop", "q quit", "d detach", "E "] {
+                    assert!(
+                        footer.contains(action),
+                        "{cols}x{rows}: {action} missing: {footer}"
+                    );
+                }
+                let continuation = if lifecycle == crate::events::Lifecycle::Running {
+                    "Enter attach"
+                } else {
+                    "v resume"
+                };
+                assert!(
+                    footer.contains(continuation),
+                    "{cols}x{rows}: {continuation} missing: {footer}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn history_help_describes_raw_toggle_instead_of_native_resume() {
+        for (cols, rows) in [(160, 40), (60, 18)] {
+            let mut app = App::new("repo".into());
+            app.history_open = true;
+            app.session.lifecycle = crate::events::Lifecycle::Interrupted;
+            let mut terminal = Terminal::new(TestBackend::new(cols, rows)).unwrap();
+            terminal
+                .draw(|frame| Ui::default().draw(frame, &app))
+                .unwrap();
+            let help = Ui::layout(Rect::new(0, 0, cols, rows)).3;
+            let buffer = terminal.backend().buffer();
+            let footer = (help.y..help.bottom())
+                .map(|row| {
+                    (help.x..help.right())
+                        .map(|col| {
+                            buffer.content[usize::from(row) * usize::from(cols) + usize::from(col)]
+                                .symbol()
+                        })
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            for action in ["h live", "v raw/readable", "q quit", "s stop"] {
+                assert!(
+                    footer.contains(action),
+                    "{cols}x{rows}: {action} missing: {footer}"
+                );
+            }
+            assert!(
+                !footer.contains("v resume"),
+                "history toggle never resumes native execution: {footer}"
+            );
+        }
+    }
+
+    #[test]
+    fn readable_history_and_explicit_raw_toggle_render_without_launching_resume() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let mut app = App::new("missing-checkout".into());
+        app.history_open = true;
+        app.session.history = Some(crate::persistence::HistoryPage {
+            text: "RAW\\u{1b}[32mAnswer".into(),
+            readable: Some(crate::history::ReadablePage {
+                text: "Prompt café\nAnswer\ncommand output\n".into(),
+                version: 1,
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        for (cols, rows) in [(160, 40), (60, 18)] {
+            for raw in [false, true] {
+                app.history_raw = raw;
+                let mut terminal = Terminal::new(TestBackend::new(cols, rows)).unwrap();
+                terminal
+                    .draw(|frame| Ui::default().draw(frame, &app))
+                    .unwrap();
+                let text = terminal
+                    .backend()
+                    .buffer()
+                    .content
+                    .iter()
+                    .map(|cell| cell.symbol())
+                    .collect::<String>();
+                assert!(
+                    text.contains(if raw {
+                        "RAW\\u{1b}[32mAnswer"
+                    } else {
+                        "Prompt café"
+                    }),
+                    "{text}"
+                );
+                if let Some(directory) = std::env::var_os("RAT_HISTORY_EVIDENCE") {
+                    std::fs::create_dir_all(&directory).unwrap();
+                    std::fs::write(
+                        std::path::PathBuf::from(directory)
+                            .join(format!("08-history-{cols}-{raw}.txt")),
+                        &text,
+                    )
+                    .unwrap();
+                }
+            }
+        }
+        let effect = app.input(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE));
+        assert!(
+            effect.is_none(),
+            "history v must never request native resume"
+        );
+        assert!(!app.history_raw);
+        assert!(
+            app.error.is_none(),
+            "history toggle fell through into resume: {:?}",
+            app.error
+        );
+    }
+
+    #[test]
+    fn workspace_picker_preserves_independent_lifecycle_and_semantic_status() {
+        let mut app = App::new("repo".into());
+        app.workspaces_open = true;
+        for (task, attention) in [
+            ("A", crate::native_status::State::Approval),
+            ("B", crate::native_status::State::Unknown),
+        ] {
+            app.session
+                .registry
+                .workspaces
+                .push(crate::registry::Workspace {
+                    creation: None,
+                    id: task.into(),
+                    task: task.into(),
+                    legacy_tasks: vec![],
+                    name: task.into(),
+                    project: None,
+                    path: Some(task.as_bytes().to_vec()),
+                    checkout: None,
+                    sessions: vec![task.into()],
+                });
+            app.session.sessions.push(crate::events::SessionSummary {
+                target: task.into(),
+                task: task.into(),
+                lifecycle: crate::events::Lifecycle::Running,
+                reserved: true,
+                status: crate::native_status::Status {
+                    state: attention,
+                    ..Default::default()
+                },
+                ..Default::default()
+            });
+        }
+        for (cols, rows) in [(160, 40), (60, 18)] {
+            let mut terminal = Terminal::new(TestBackend::new(cols, rows)).unwrap();
+            terminal
+                .draw(|frame| Ui::default().draw(frame, &app))
+                .unwrap();
+            let text = terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect::<String>();
+            assert!(text.contains("Running · approval needed"), "{text}");
+            assert!(text.contains("Running · unknown"), "{text}");
+        }
+    }
+
+    #[test]
+    fn selected_native_resume_identity_and_action_render_at_both_sizes() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let mut app = App::new("/proof".into());
+        app.session.browse_protocol = 1;
+        app.input(KeyEvent::new(KeyCode::Char('B'), KeyModifiers::NONE));
+        let request = app.browser.as_ref().unwrap().request.clone();
+        app.observe_session(crate::events::Observation {
+            browse_protocol: 1,
+            resume_protocol: 1,
+            browse: Some(crate::persistence::search::Response {
+                request,
+                rows: vec![crate::persistence::search::Row {
+                    key: "selected".into(),
+                    workspace: "workspace".into(),
+                    session: Some("segment".into()),
+                    label:
+                        "Claude Code · segment selected · native original-id · workspace retained"
+                            .into(),
+                    snippet: String::new(),
+                    passage: None,
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        for (cols, rows) in [(160, 40), (60, 18)] {
+            let mut terminal = Terminal::new(TestBackend::new(cols, rows)).unwrap();
+            terminal
+                .draw(|frame| Ui::default().draw(frame, &app))
+                .unwrap();
+            let text = terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect::<String>();
+            assert!(text.contains("Claude Code"), "{text}");
+            assert!(text.contains("original-id"), "{text}");
+            assert!(text.contains("v resumes selected"), "{text}");
+        }
+    }
+
+    #[test]
+    fn retained_history_search_keeps_exact_word_rules_and_native_resume_visible() {
+        use crate::persistence::search::{Mode, Response, Row};
+        for editing in [true, false] {
+            let mut app = App::new("/proof".into());
+            let mut browser = crate::browser::Browser::new(Mode::History, None);
+            browser.text = "keyboardneedle11".into();
+            browser.editing = editing;
+            browser.selected = Some("passage".into());
+            browser.response = Some(Response {
+                rows: vec![Row {
+                    key: "passage".into(),
+                    workspace: "workspace".into(),
+                    session: Some("original-segment".into()),
+                    label: "original tool/native identity retained".into(),
+                    snippet: "keyboardneedle11".into(),
+                    passage: None,
+                }],
+                ..Default::default()
+            });
+            app.browser = Some(browser);
+            for (cols, rows) in [(160, 40), (60, 18)] {
+                let mut terminal = Terminal::new(TestBackend::new(cols, rows)).unwrap();
+                terminal
+                    .draw(|frame| Ui::default().draw(frame, &app))
+                    .unwrap();
+                let text: String = terminal
+                    .backend()
+                    .buffer()
+                    .content
+                    .iter()
+                    .map(|cell| cell.symbol())
+                    .collect();
+                assert!(text.contains("History:"), "{text}");
+                assert!(text.contains("exact words"), "{text}");
+                assert!(text.contains("keyboardneedle11"), "{text}");
+                if !editing {
+                    assert!(text.contains("v resumes selected"), "{text}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn retained_workspace_selection_is_visible_in_normal_and_small_terminals() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let mut app = App::new("repo".into());
+        app.session.registry.workspaces = (0..20)
+            .map(|index| crate::registry::Workspace {
+                creation: None,
+                id: format!("workspace-{index}"),
+                task: format!("task-{index}"),
+                legacy_tasks: vec![format!("task-{index}")],
+                name: format!("retained-{index}"),
+                project: None,
+                path: None,
+                checkout: None,
+                sessions: vec!["retained-session".into()],
+            })
+            .collect();
+        app.input(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE));
+        for _ in 0..19 {
+            app.input(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        }
+        for (cols, rows) in [(160, 40), (60, 18)] {
+            let mut terminal = Terminal::new(TestBackend::new(cols, rows)).unwrap();
+            terminal
+                .draw(|frame| Ui::default().draw(frame, &app))
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            let text = buffer
+                .content
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect::<String>();
+            assert!(
+                text.contains("> Unknown project (legacy) / retained-19"),
+                "{text}"
+            );
+            assert!(text.contains("checkout unknown"));
+            assert!(text.contains("j/k select"));
+            if cols == 160 {
+                assert!(text.contains("Reviews"));
+                assert!(text.contains("Unavailable"));
+            }
+            if let Some(directory) = std::env::var_os("RAT_REGISTRY_EVIDENCE") {
+                std::fs::create_dir_all(&directory).unwrap();
+                let cells = buffer.content.iter().enumerate().map(|(index,cell)| serde_json::json!({"row":index / cols as usize,"col":index % cols as usize,"text":cell.symbol(),"fg":format!("{:?}",cell.fg),"bg":format!("{:?}",cell.bg),"bold":cell.modifier.contains(Modifier::BOLD),"wide":false})).collect::<Vec<_>>();
+                std::fs::write(std::path::Path::new(&directory).join(format!("05-registry-testbackend-{cols}.json")),serde_json::to_vec_pretty(&serde_json::json!({"source":"Ratatui TestBackend supporting render; not a real PTY or terminal screenshot","cols":cols,"rows":rows,"cells":cells,"hide_cursor":true})).unwrap()).unwrap();
+            }
+        }
+    }
 
     #[test]
     fn cleanup_renders_unknown_age_physical_size_preview_and_low_space_recovery_controls() {
@@ -820,5 +1890,61 @@ mod tests {
         assert!(text.contains("not a git repository"));
         terminal.backend_mut().resize(12, 4);
         terminal.draw(|frame| ui.draw(frame, &app)).unwrap();
+    }
+    #[test]
+    fn new_workspace_form_exposes_both_creation_actions_at_normal_and_small_sizes() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let mut app = App::new("repo".into());
+        app.session
+            .registry
+            .projects
+            .push(crate::registry::Project {
+                setup_command: None,
+                id: "project".into(),
+                name: "Example".into(),
+                common_dir: b"/repo/.git".to_vec(),
+            });
+        app.input(KeyEvent::new(KeyCode::Char('N'), KeyModifiers::NONE));
+        for (cols, rows) in [(160, 40), (60, 18)] {
+            let mut terminal = Terminal::new(TestBackend::new(cols, rows)).unwrap();
+            terminal
+                .draw(|frame| Ui::default().draw(frame, &app))
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            let text = (0..rows)
+                .map(|y| {
+                    (0..cols)
+                        .map(|x| buffer[(x, y)].symbol())
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(text.contains("Create without starting"), "{text}");
+            assert!(text.contains("Create and start"), "{text}");
+        }
+    }
+    #[test]
+    fn local_fallback_preview_shows_exact_commit_before_the_explicit_choice() {
+        let mut app = App::new("repo".into());
+        app.creation_open = true;
+        let commit = "1234567890123456789012345678901234567890";
+        app.session.creation.records.push(serde_json::from_value(serde_json::json!({"intent":{"request":"request","project":"project","base":"origin/main","branch":"workspace/new","path":b"/managed/workspace".to_vec(),"agent":"Codex","start":true,"prompt":null},"repository":[],"common_dir":[],"phase":"LocalChoice","base_ref":"refs/remotes/origin/main","commit":commit,"message":"Latest code could not be obtained from configured remote. ".repeat(8),"checkout":null})).unwrap());
+        for (cols, rows) in [(160, 40), (60, 18)] {
+            let mut terminal = Terminal::new(TestBackend::new(cols, rows)).unwrap();
+            terminal
+                .draw(|frame| Ui::default().draw(frame, &app))
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            let text = (0..rows)
+                .map(|y| {
+                    (0..cols)
+                        .map(|x| buffer[(x, y)].symbol())
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(text.contains(commit), "{text}");
+            assert!(text.contains("LocalChoice"), "{text}");
+        }
     }
 }

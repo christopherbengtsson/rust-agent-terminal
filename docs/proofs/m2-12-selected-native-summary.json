@@ -1,0 +1,305 @@
+{
+  "date": "2026-11-07",
+  "platform": "macOS 26.2 (25C56), arm64",
+  "native_pty": {
+    "rows": 24,
+    "cols": 100,
+    "TERM": "xterm-256color"
+  },
+  "original_run": {
+    "owner": 54748,
+    "binary": "/private/tmp/rat-ticket12/target/debug/agent-terminal",
+    "sha256": "e64cd254b27d968e134f2f7bdb8f544d1f1b1beade8d3911f089d242e7c3ac49",
+    "source": "7160a80355d0291b8e1aaef4c70e2bc889828843"
+  },
+  "resume_run": {
+    "owner": 45561,
+    "binary": "/private/tmp/rat-ticket12/target/debug/agent-terminal",
+    "sha256": "998f9265aa77356022a7292cdea8d24ecd5fcf167c2104573d84985f095ca205",
+    "source": "39dfd0d73fddb36d43a0c7d7638a915a09df6010"
+  },
+  "tools": {
+    "claude": {
+      "path": "/Users/christopherbengtsson/.local/bin/claude",
+      "binary": "/Users/christopherbengtsson/.local/share/claude/versions/2.1.319",
+      "version": "2.1.319 (Claude Code)",
+      "sha256": "1f53587e92dee8e089fa349188a4cda64fa34ace6e7b0ca2ee278ddaa3cc2ebd"
+    },
+    "codex": {
+      "path": "/Users/christopherbengtsson/.local/bin/codex",
+      "binary": "/Users/christopherbengtsson/.codex/packages/standalone/releases/0.167.0-aarch64-apple-darwin/bin/codex",
+      "version": "codex-cli 0.167.0",
+      "sha256": "030316ecfbb41f4e7946e584b0063ef333b7a36cd312ba349f2f6869e39b62cc"
+    }
+  },
+  "workspace": "/private/tmp/r12n2/checkout",
+  "state": "/private/tmp/r12n2/state",
+  "resume_order": [
+    "codex-b",
+    "claude-a",
+    "codex-d",
+    "claude-c"
+  ],
+  "cases": [
+    {
+      "name": "claude-a",
+      "agent": "Claude Code",
+      "original": {
+        "identity": {
+          "task": "0713e1b7-14bc-4141-a2fc-86d9b46c341d",
+          "session": "3b66e827-f6d1-4adc-94fc-b631326b0496",
+          "request": "actual-claude-1794009813799552000"
+        },
+        "native": "e203da71-3dd8-4c9a-9361-7577fb0423ba",
+        "pid": 56244
+      },
+      "selected": {
+        "identity": {
+          "task": "0713e1b7-14bc-4141-a2fc-86d9b46c341d",
+          "session": "698b035b-bee3-4ffd-a156-584c57ae1887",
+          "request": "actual-resume-claude-a-stored-1794010546334107000"
+        },
+        "native": "e203da71-3dd8-4c9a-9361-7577fb0423ba",
+        "pid": 53695,
+        "argv_ps": "  PID  PPID  PGID STARTED                      COMMAND\n53695 45561 53695 Sat Nov  7 01:15:46 2026     /Users/christopherbengtsson/.local/share/claude/versions/2.1.319 --resume e203da71-3dd8-4c9a-9361-7577fb0423ba --settings /tmp/rat-501-22cb6d1eda27/status-settings.json\n",
+        "observed_cwd_lsof": "p53695\nfcwd\nn/private/tmp/r12n2/checkout\n"
+      },
+      "before_prompt_status": {
+        "state": "Unknown",
+        "evidence": "native session started",
+        "reason": "evidence stale",
+        "recent": [
+          "SessionStart::"
+        ]
+      },
+      "after_recall_status": {
+        "state": "Unknown",
+        "evidence": "response stop observed (continuation unconfirmed)",
+        "reason": "evidence stale",
+        "recent": [
+          "SessionStart::",
+          "UserPromptSubmit::",
+          "Stop::"
+        ]
+      },
+      "exit": {
+        "lifecycle": "Exited",
+        "execution": null,
+        "process_exit": {
+          "code": 0,
+          "signal": null
+        },
+        "metadata_pending": false
+      }
+    },
+    {
+      "name": "codex-b",
+      "agent": "Codex CLI",
+      "original": {
+        "identity": {
+          "task": "0713e1b7-14bc-4141-a2fc-86d9b46c341d",
+          "session": "3d81161d-9d1f-41e1-b9ea-4602a0dafe21",
+          "request": "actual-codex-1794009860169931000"
+        },
+        "native": "01a1b352-b21a-7e42-b697-c045abcaa225",
+        "pid": 64333
+      },
+      "selected": {
+        "identity": {
+          "task": "0713e1b7-14bc-4141-a2fc-86d9b46c341d",
+          "session": "db81e739-30d8-4000-a370-55a86eba01e5",
+          "request": "actual-resume-codex-b-stored-1794010494489398000"
+        },
+        "native": "01a1b352-b21a-7e42-b697-c045abcaa225",
+        "pid": 45607,
+        "argv_ps": "  PID  PPID  PGID STARTED                      COMMAND\n45607 45561 45607 Sat Nov  7 01:14:54 2026     codex resume 01a1b352-b21a-7e42-b697-c045abcaa225 --no-daemon -c hooks.SessionStart=[{hooks=[{type=\"command\",command=\"'/private/tmp/rat-ticket12/target/debug/agent-terminal' --codex-status-hook '/tmp/rat-501-22cb6d1eda27/codex-status.sock' '<monitor-token>'\",timeout=1}]}] -c hooks.PreModelRequest=[{hooks=[{type=\"command\",command=\"'/private/tmp/rat-ticket12/target/debug/agent-terminal' --codex-status-hook '/tmp/rat-501-22cb6d1eda27/codex-status.sock' '<monitor-token>'\",timeout=1}]}] -c hooks.PostModelRequest=[{hooks=[{type=\"command\",command=\"'/private/tmp/rat-ticket12/target/debug/agent-terminal' --codex-status-hook '/tmp/rat-501-22cb6d1eda27/codex-status.sock' '<monitor-token>'\",timeout=1}]}] -c hooks.UserPromptSubmit=[{hooks=[{type=\"command\",command=\"'/private/tmp/rat-ticket12/target/debug/agent-terminal' --codex-status-hook '/tmp/rat-501-22cb6d1eda27/codex-status.sock' '<monitor-token>'\",timeout=1}]}] -c hooks.PreToolUse=[{hooks=[{type=\"command\",command=\"'/private/tmp/rat-ticket12/target/debug/agent-terminal' --codex-status-hook '/tmp/rat-501-22cb6d1eda27/codex-status.sock' '<monitor-token>'\",timeout=1}]}] -c hooks.PermissionRequest=[{hooks=[{type=\"command\",command=\"'/private/tmp/rat-ticket12/target/debug/agent-terminal' --codex-status-hook '/tmp/rat-501-22cb6d1eda27/codex-status.sock' '<monitor-token>'\",timeout=1}]}] -c hooks.PostToolUse=[{hooks=[{type=\"command\",command=\"'/private/tmp/rat-ticket12/target/debug/agent-terminal' --codex-status-hook '/tmp/rat-501-22cb6d1eda27/codex-status.sock' '<monitor-token>'\",timeout=1}]}] -c hooks.Stop=[{hooks=[{type=\"command\",command=\"'/private/tmp/rat-ticket12/target/debug/agent-terminal' --codex-status-hook '/tmp/rat-501-22cb6d1eda27/codex-status.sock' '<monitor-token>'\",timeout=1}]}] -c hooks.Interrupt=[{hooks=[{type=\"command\",command=\"'/private/tmp/rat-ticket12/target/debug/agent-terminal' --codex-status-hook '/tmp/rat-501-22cb6d1eda27/codex-status.sock' '<monitor-token>'\",timeout=1}]}] -c hooks.SessionEnd=[{hooks=[{type=\"command\",command=\"'/private/tmp/rat-ticket12/target/debug/agent-terminal' --codex-status-hook '/tmp/rat-501-22cb6d1eda27/codex-status.sock' '<monitor-token>'\",timeout=1}]}]\n",
+        "observed_cwd_lsof": ""
+      },
+      "before_prompt_status": {
+        "state": "Unknown",
+        "evidence": null,
+        "reason": "Codex evidence unavailable",
+        "recent": []
+      },
+      "after_recall_status": {
+        "state": "Completed",
+        "evidence": "current-turn Stop + new Codex 0.167.0 done marker and idle composer",
+        "reason": "Codex 0.167.0 completion evidence; expires within 30s",
+        "recent": [
+          "SessionStart:::",
+          "UserPromptSubmit:01a1b35b-fe00-7d13-933a-9e7c16cbd3c8::",
+          "PreModelRequest:01a1b35b-fe00-7d13-933a-9e7c16cbd3c8::",
+          "PostModelRequest:01a1b35b-fe00-7d13-933a-9e7c16cbd3c8::",
+          "Stop:01a1b35b-fe00-7d13-933a-9e7c16cbd3c8::"
+        ]
+      },
+      "exit": {
+        "lifecycle": "Exited",
+        "execution": null,
+        "process_exit": {
+          "code": 0,
+          "signal": null
+        },
+        "metadata_pending": false
+      }
+    },
+    {
+      "name": "claude-c",
+      "agent": "Claude Code",
+      "original": {
+        "identity": {
+          "task": "0713e1b7-14bc-4141-a2fc-86d9b46c341d",
+          "session": "004a769d-714d-40da-a264-b78e25d3c327",
+          "request": "actual-claude-1794009965219302000"
+        },
+        "native": "cab48ef1-3e6d-4cbf-830a-ca10d201ba61",
+        "pid": 82496
+      },
+      "selected": {
+        "identity": {
+          "task": "0713e1b7-14bc-4141-a2fc-86d9b46c341d",
+          "session": "9d5a3a39-7174-4369-8b5a-56545b57db95",
+          "request": "actual-resume-claude-c-stored-1794010638639349000"
+        },
+        "native": "cab48ef1-3e6d-4cbf-830a-ca10d201ba61",
+        "pid": 66694,
+        "argv_ps": "  PID  PPID  PGID STARTED                      COMMAND\n66694 45561 66694 Sat Nov  7 01:17:18 2026     /Users/christopherbengtsson/.local/share/claude/versions/2.1.319 --resume cab48ef1-3e6d-4cbf-830a-ca10d201ba61 --settings /tmp/rat-501-22cb6d1eda27/status-settings.json\n",
+        "observed_cwd_lsof": "p66694\nfcwd\nn/private/tmp/r12n2/checkout\n\np66694\nfcwd\nn/private/tmp/r12n2/checkout\n"
+      },
+      "before_prompt_status": {
+        "state": "Unknown",
+        "evidence": "native session started",
+        "reason": "evidence stale",
+        "recent": [
+          "SessionStart::"
+        ]
+      },
+      "after_recall_status": {
+        "state": "Unknown",
+        "evidence": "response stop observed (continuation unconfirmed)",
+        "reason": "evidence stale",
+        "recent": [
+          "SessionStart::",
+          "UserPromptSubmit::",
+          "Stop::"
+        ]
+      },
+      "exit": {
+        "lifecycle": "Exited",
+        "execution": null,
+        "process_exit": {
+          "code": 0,
+          "signal": null
+        },
+        "metadata_pending": false
+      }
+    },
+    {
+      "name": "codex-d",
+      "agent": "Codex CLI",
+      "original": {
+        "identity": {
+          "task": "0713e1b7-14bc-4141-a2fc-86d9b46c341d",
+          "session": "803bcc52-894b-49b0-b987-375a56ca9a61",
+          "request": "actual-codex-1794010014860402000"
+        },
+        "native": "01a1b354-7c93-7fb3-802a-3bd3b3ba281f",
+        "pid": 91344
+      },
+      "selected": {
+        "identity": {
+          "task": "0713e1b7-14bc-4141-a2fc-86d9b46c341d",
+          "session": "f6e6670e-f268-4181-9046-4f9b05bd72a1",
+          "request": "actual-resume-codex-d-stored-1794010595549298000"
+        },
+        "native": "01a1b354-7c93-7fb3-802a-3bd3b3ba281f",
+        "pid": 60473,
+        "argv_ps": "  PID  PPID  PGID STARTED                      COMMAND\n60473 45561 60473 Sat Nov  7 01:16:35 2026     codex resume 01a1b354-7c93-7fb3-802a-3bd3b3ba281f --no-daemon -c hooks.SessionStart=[{hooks=[{type=\"command\",command=\"'/private/tmp/rat-ticket12/target/debug/agent-terminal' --codex-status-hook '/tmp/rat-501-22cb6d1eda27/codex-status.sock' '<monitor-token>'\",timeout=1}]}] -c hooks.PreModelRequest=[{hooks=[{type=\"command\",command=\"'/private/tmp/rat-ticket12/target/debug/agent-terminal' --codex-status-hook '/tmp/rat-501-22cb6d1eda27/codex-status.sock' '<monitor-token>'\",timeout=1}]}] -c hooks.PostModelRequest=[{hooks=[{type=\"command\",command=\"'/private/tmp/rat-ticket12/target/debug/agent-terminal' --codex-status-hook '/tmp/rat-501-22cb6d1eda27/codex-status.sock' '<monitor-token>'\",timeout=1}]}] -c hooks.UserPromptSubmit=[{hooks=[{type=\"command\",command=\"'/private/tmp/rat-ticket12/target/debug/agent-terminal' --codex-status-hook '/tmp/rat-501-22cb6d1eda27/codex-status.sock' '<monitor-token>'\",timeout=1}]}] -c hooks.PreToolUse=[{hooks=[{type=\"command\",command=\"'/private/tmp/rat-ticket12/target/debug/agent-terminal' --codex-status-hook '/tmp/rat-501-22cb6d1eda27/codex-status.sock' '<monitor-token>'\",timeout=1}]}] -c hooks.PermissionRequest=[{hooks=[{type=\"command\",command=\"'/private/tmp/rat-ticket12/target/debug/agent-terminal' --codex-status-hook '/tmp/rat-501-22cb6d1eda27/codex-status.sock' '<monitor-token>'\",timeout=1}]}] -c hooks.PostToolUse=[{hooks=[{type=\"command\",command=\"'/private/tmp/rat-ticket12/target/debug/agent-terminal' --codex-status-hook '/tmp/rat-501-22cb6d1eda27/codex-status.sock' '<monitor-token>'\",timeout=1}]}] -c hooks.Stop=[{hooks=[{type=\"command\",command=\"'/private/tmp/rat-ticket12/target/debug/agent-terminal' --codex-status-hook '/tmp/rat-501-22cb6d1eda27/codex-status.sock' '<monitor-token>'\",timeout=1}]}] -c hooks.Interrupt=[{hooks=[{type=\"command\",command=\"'/private/tmp/rat-ticket12/target/debug/agent-terminal' --codex-status-hook '/tmp/rat-501-22cb6d1eda27/codex-status.sock' '<monitor-token>'\",timeout=1}]}] -c hooks.SessionEnd=[{hooks=[{type=\"command\",command=\"'/private/tmp/rat-ticket12/target/debug/agent-terminal' --codex-status-hook '/tmp/rat-501-22cb6d1eda27/codex-status.sock' '<monitor-token>'\",timeout=1}]}]\n",
+        "observed_cwd_lsof": "p60473\nfcwd\nn/private/tmp/r12n2/checkout\n\np60473\nfcwd\nn/private/tmp/r12n2/checkout\n\np60473\nfcwd\nn/private/tmp/r12n2/checkout\n"
+      },
+      "before_prompt_status": {
+        "state": "Unknown",
+        "evidence": null,
+        "reason": "Codex evidence unavailable",
+        "recent": []
+      },
+      "after_recall_status": {
+        "state": "Completed",
+        "evidence": "current-turn Stop + new Codex 0.167.0 done marker and idle composer",
+        "reason": "Codex 0.167.0 completion evidence; expires within 30s",
+        "recent": [
+          "SessionStart:::",
+          "UserPromptSubmit:01a1b35d-71e6-72c1-92eb-24cb8464014e::",
+          "PreModelRequest:01a1b35d-71e6-72c1-92eb-24cb8464014e::",
+          "PostModelRequest:01a1b35d-71e6-72c1-92eb-24cb8464014e::",
+          "Stop:01a1b35d-71e6-72c1-92eb-24cb8464014e::"
+        ]
+      },
+      "exit": {
+        "lifecycle": "Exited",
+        "execution": null,
+        "process_exit": {
+          "code": 0,
+          "signal": null
+        },
+        "metadata_pending": false
+      }
+    }
+  ],
+  "startup": {
+    "session_identity": {
+      "task": "0713e1b7-14bc-4141-a2fc-86d9b46c341d",
+      "session": "803bcc52-894b-49b0-b987-375a56ca9a61",
+      "request": "actual-codex-1794010014860402000"
+    },
+    "native_conversation": "01a1b354-7c93-7fb3-802a-3bd3b3ba281f",
+    "lifecycle": "Exited",
+    "execution": null,
+    "status": {
+      "state": "Unknown",
+      "evidence": null,
+      "reason": "",
+      "recent": []
+    }
+  },
+  "shutdown": {
+    "stopped": true,
+    "execution": null,
+    "metadata_pending": false,
+    "lifecycle": "Exited"
+  },
+  "git_before": {
+    "head": "f52a44ce969aa9e24d4f4a7e07cc7cc6fff74048\n",
+    "status": "MM tracked\n?? untracked\n",
+    "index": "diff --git a/tracked b/tracked\nindex 90be1f3..19d9cc8 100644\n--- a/tracked\n+++ b/tracked\n@@ -1 +1 @@\n-before\n+staged\n",
+    "worktree": "diff --git a/tracked b/tracked\nindex 19d9cc8..b8d041e 100644\n--- a/tracked\n+++ b/tracked\n@@ -1 +1 @@\n-staged\n+unstaged\n"
+  },
+  "git_after": {
+    "head": "f52a44ce969aa9e24d4f4a7e07cc7cc6fff74048\n",
+    "status": "MM tracked\n?? untracked\n",
+    "index": "diff --git a/tracked b/tracked\nindex 90be1f3..19d9cc8 100644\n--- a/tracked\n+++ b/tracked\n@@ -1 +1 @@\n-before\n+staged\n",
+    "worktree": "diff --git a/tracked b/tracked\nindex 19d9cc8..b8d041e 100644\n--- a/tracked\n+++ b/tracked\n@@ -1 +1 @@\n-staged\n+unstaged\n",
+    "untracked": "untracked\n"
+  },
+  "cleanup": {
+    "observed_owned_pids": [
+      45561,
+      45607,
+      53695,
+      54748,
+      56244,
+      60473,
+      64333,
+      66694,
+      82496,
+      91344
+    ],
+    "after_ps": "  PID  PPID  PGID COMMAND\n",
+    "status": 1,
+    "native_records_removed": false,
+    "native_credentials_copied": false,
+    "git_unchanged": true
+  },
+  "workspace_id": "97775705-12b3-4c9b-a054-2bc8800d869b",
+  "task_identity": "0713e1b7-14bc-4141-a2fc-86d9b46c341d"
+}

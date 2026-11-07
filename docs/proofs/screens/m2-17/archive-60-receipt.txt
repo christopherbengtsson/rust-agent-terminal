@@ -1,0 +1,18 @@
+┌ Idle · Session unlaunched · Focus: dashboard ────────────┐
+│Workspace 9aca9d99                                        │
+│Archived · Enter: Restore branch and return (coding stays │
+│stopped)                                                  │
+│Branch retained; cleanup incomplete: Main/default/base    │
+│branch is protected                                       │
+│Clean HEAD retained 5bb0b39aa5f7                          │
+│saved locally, not pushed.                                │
+│Tracked + new nonignored files saved.                     │
+│0 ignored paths excluded; folder retained.                │
+│Staged-only content: separate recovery tree.              │
+│HEAD 5bb0b39aa5f71925b7d6081ea271afb5167801b2             │
+└──────────────────────────────────────────────────────────┘
+┌ Status · semantic status: unknown ·  ────────────────────┐
+│Adopted: /private/tmp/.tmp3SjDYg/checkout with spaces ·   │
+└──────────────────────────────────────────────────────────┘
+Enter confirm/retry · z cancel · Esc dismiss                
+j/k scroll · q quit/stop · d detach                         

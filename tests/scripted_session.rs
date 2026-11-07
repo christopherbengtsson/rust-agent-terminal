@@ -1,7 +1,7 @@
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+mod support;
 use std::{
     io::{Read, Write},
-    os::unix::net::UnixStream,
     path::PathBuf,
     process::Command,
     time::{Duration, Instant},
@@ -10,16 +10,18 @@ use std::{
 struct Cleanup {
     child: Box<dyn portable_pty::Child + Send + Sync>,
     socket: PathBuf,
+    temp: tempfile::TempDir,
 }
 impl Drop for Cleanup {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
-        if let Ok(mut stream) = UnixStream::connect(&self.socket) {
-            let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
-            let _ = stream.write_all(b"\"Shutdown\"\n");
-            let mut bytes = [0; 1];
-            let _ = stream.read(&mut bytes);
+        if !support::shutdown(&self.socket) {
+            self.temp.disable_cleanup(true);
+            eprintln!(
+                "Fixture shutdown unconfirmed; private state retained at {}",
+                self.temp.path().display()
+            );
         }
     }
 }
@@ -60,6 +62,7 @@ fn dashboard_adopts_launches_and_interacts_without_discovery_mutation() {
     let mut cleanup = Cleanup {
         child: pty.slave.spawn_command(command).unwrap(),
         socket: temp.path().join("state/supervisor.sock"),
+        temp,
     };
     drop(pty.slave);
     let mut reader = pty.master.try_clone_reader().unwrap();
@@ -239,7 +242,7 @@ fn dashboard_adopts_launches_and_interacts_without_discovery_mutation() {
         .stdout;
     assert_eq!(before, after);
     assert!(
-        !temp.path().join("state/supervisor.sock").exists(),
+        !cleanup.socket.exists(),
         "confirmed shutdown removes the isolated endpoint"
     );
 }

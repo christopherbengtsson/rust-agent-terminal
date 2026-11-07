@@ -1,0 +1,39 @@
+{
+  "capture_source": "c8cdcc0b3240e9486405335116c51d1d4830a77e",
+  "post_capture_merge": "9a1dd26f15386729f81e1b6119f0b7c4903e1883",
+  "projection_file_sha256": "35982114fbdd414604a7567e2d3a28fdf9f764638492e921670ad247e4ee8a96",
+  "runs": [
+    {
+      "kind": "claude",
+      "source": "c8cdcc0b3240e9486405335116c51d1d4830a77e",
+      "binary_sha256": "3ab5358ac380ed70b2a56f58e7377784c3b61d954e17440acd2252eff8c92cc4",
+      "native_binary": "/Users/christopherbengtsson/.local/share/claude/versions/2.1.319",
+      "native_sha256": "1f53587e92dee8e089fa349188a4cda64fa34ace6e7b0ca2ee278ddaa3cc2ebd",
+      "native_version": "2.1.319 (Claude Code)",
+      "native_pid": 86233,
+      "owned_processes_gone": true,
+      "terminal_restored_detach": true,
+      "raw_committed": 16501,
+      "passed": true,
+      "session": "b9984a05-7999-45dd-a1cf-c5e38aa26e8d",
+      "committed_sha256": "978451dcfbd72ae9c661f5147292b97acf4af377dd31cc7330955be4b3fd73bb",
+      "corpus": "corpus-claude"
+    },
+    {
+      "kind": "codex",
+      "source": "c8cdcc0b3240e9486405335116c51d1d4830a77e",
+      "binary_sha256": "3ab5358ac380ed70b2a56f58e7377784c3b61d954e17440acd2252eff8c92cc4",
+      "native_binary": "/Users/christopherbengtsson/.codex/packages/standalone/releases/0.167.0-aarch64-apple-darwin/bin/codex",
+      "native_sha256": "030316ecfbb41f4e7946e584b0063ef333b7a36cd312ba349f2f6869e39b62cc",
+      "native_version": "codex-cli 0.167.0",
+      "native_pid": 90508,
+      "owned_processes_gone": true,
+      "terminal_restored_detach": true,
+      "raw_committed": 31718,
+      "passed": true,
+      "session": "1e0c6f01-6f20-4080-9a98-59eb97028975",
+      "committed_sha256": "1b9c3740213c72a8199231466ef6bb64d7d7598531bbda6245727687aeb37426",
+      "corpus": "corpus-codex"
+    }
+  ]
+}

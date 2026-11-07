@@ -1,0 +1,18 @@
+┌ Idle · Session unlaunched · Focus: dashboard ────────────┐
+│Branch refs/heads/workspace/3775b438                      │
+│Recovery ref                                              │
+│refs/rat/removal/04ff6ed1-de61-4618-919c-9bb30b934b0a/8340│
+│b3fb-d08e-4846-9a93-41cc825a2af0                          │
+│Saved code, branches, archive refs and chats stay.        │
+│In-place resume needs a checkout.                         │
+│Current HEAD has no confirmed remote backup; saved code is│
+│retained locally only. Folder removal does not push       │
+│[ ] Space: I acknowledge code is saved only locally, NOT  │
+│pushed                                                    │
+│BLOCKED: Ignored file outside saved commits: ignored —    │
+└──────────────────────────────────────────────────────────┘
+┌ Status · semantic status: unknown ·  ────────────────────┐
+│Adopted: /private/tmp/.tmpg8pddf/workspace-3775b438 ·     │
+└──────────────────────────────────────────────────────────┘
+y remove · Space local ack · g reconcile · n preview        
+r retry · j/k scroll · Esc dismiss · q quit · d detach      

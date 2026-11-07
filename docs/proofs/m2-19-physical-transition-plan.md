@@ -1,0 +1,38 @@
+# Historical ticket 19 physical-transition preparation plan
+
+This original a56 plan is retained for provenance. The later reviewed-source
+preparation used a fresh validated state copy and different unblocked live
+workspaces, preserving the crash reservation. Actual user-performed transitions
+and final outcomes are recorded in [the reboot proof](m2-19-reboot.md); do not
+execute this historical table as a current instruction.
+
+## Original plan (before physical execution)
+
+This is a reviewable future plan, not an executed reboot checkpoint. The delivered native state is cold; no coding or supervisor should be left running for integration checks. Real sleep/wake and physical reboot remain open, and ticket 19 remains unresolved. Only the user's explicit authorization permits a physical reboot. Do not invoke any reboot/sleep command during preparation.
+
+First complete code review, fixes and the final integration checks. The qualified production tree is `33cc9a17fffb6b72b4ede4dc537f377d6be58bd6` and executable SHA-256 is `89382b1a23124461fbec2bd0944e4b012cfb8d7f056990119a6a02a777569154`. If production changes, requalify the affected native/performance behavior and create a new exact source/executable pin; do not silently reuse the old claim. Preserve the existing native root and all failed/successful proofs.
+
+Persistent native root: `/Users/christopherbengtsson/.rat19-proof-a56eee5`. Persistent detached source: `/Users/christopherbengtsson/.rat19-source-a56eee5`. The root's `pin.json`, immutable runner variants and phase manifests identify the exact a56 executable/tool boundary. The six original attributable native identities are in `six-known-native-identities.json`; saved PIDs are historical evidence and grant no signal authority.
+
+After final checks, explicitly start/select the owner using the qualified executable and proof-only `PATH` containing `<root>/tools` (Claude 2.1.318 and Codex 0.167.0). Owner startup alone must restore records without starting native coding. Inspect public state and the retained registry before taking any native action. The following concrete mixed state is proposed across all three projects; exact actions and final managed UUIDs must be freshly recorded, not inferred from this plan:
+
+| Workspace | Stable workspace UUID | Intended pre-transition state | Original native conversation UUID |
+| --- | --- | --- | --- |
+| amber-claude | `803ff645-4dbb-49fc-8fa4-275f108f530a` | Keep removed and archived; do not recreate or resume here | `be6e219c-edbb-4bb2-8ca7-8f79f72879e7` |
+| amber-codex | `2ff443dd-42d0-4738-a0cd-46e326ede1ec` | Keep stopped, checkout and readable history retained | `01a1b3e1-41ae-74e0-952b-8af0aaeb7a84` |
+| violet-claude | `e75305f8-eee4-4a33-b513-2a512a8440a8` | Explicitly archive cleanly, retain folder/ref and history; no coding | `dcfb6eda-f2a9-41fc-ad34-333ba1067577` |
+| violet-codex | `8d276c7e-a829-49b3-a6a0-e50946fa0004` | Explicitly resume the original Codex conversation, verify actual argv and Running identity | `01a1b3e0-24f2-7a41-9c1f-bfa0120d50a6` |
+| cobalt-claude | `1d20b2f9-f547-48ec-bb75-f448d5915132` | Explicitly resume the original Claude conversation, verify actual argv and Running identity | `369c0ea0-d7d4-4a5d-902c-ebadf61381ea` |
+| cobalt-codex | `c086d1f7-4c4b-4a68-8e91-780c81e9b364` | Keep stopped; retain distinct tracked, staged and untracked file witnesses | `01a1b3e0-b2bd-7650-aeef-a3688b9fe6bc` |
+
+Do not auto-run this table. Use explicit keyboard selection and native resume actions, with one active managed owner per canonical checkout. Refuse uncertain same-boot reservations rather than clearing persisted ownership. If an intended owner is conservatively blocked after the real crash proof, keep the blocker visible, choose an unblocked retained owner for the mixed state if available, or leave that case open. Record any such change before asking the user to restart.
+
+Create distinct small file witnesses in the intended stopped checkout and retain their HEAD/index/content hashes. Record the archived/removed registry visibility, recovery commit and staged-tree refs, all original managed/native IDs, exact current Running IDs and current process-start identity, committed transcript prefix hashes and durable receipts. Ensure pending setup/archive/removal operations are settled. Record the current kernel boot UUID and boottime. Native callbacks/status should be reported with their actual supported/Unknown scope.
+
+Use the corrected persistent recovery verifier's `capture` action to create a fresh **pre-transition** checkpoint. It hashes committed transcript prefixes and local code/recovery objects; it never launches coding. Use a fresh output path for every attempt. Bind the verifier executable hash, source object and product hash. Confirm same-boot verification fails its real boot-change checks. Existing closeout checkpoints describe cold preparation only; they are not this later mixed-state checkpoint.
+
+For real sleep/wake, arrange the actual machine transition with the user and record before/after wake observations, preserving same native identities/processes where promised. If it cannot be performed with the user's presence, retain the case open. Do not credit suspend/resume process signals or injected boot identity as this physical case. After any sleep/wake activity, refresh the reboot checkpoint so it records the actual immediate pre-reboot state.
+
+Only after the complete mixed-state checkpoint and exact post-boot steps are reviewable should the user be asked for explicit restart authorization. Following the actual reboot, verify the real kernel boot UUID and boottime changed. First run the recovery verifier read-only; if no owner is running, its explicit `--start-supervisor` action may start the pinned owner only after that real boot change. Preserve `PATH=<root>/tools:$PATH` for consistent native monitor versions. This owner startup must not launch or resume coding. Assert no new managed segments, no automatic Running sessions or checkout processes, unchanged project/workspace membership, retained original native identities, code/index/ignored/untracked witnesses, recovery refs and committed transcript prefixes. Inspect actual restored Interrupted/stopped/archived/removed states and readable history. Only then perform separately selected original-ID native resumes and actual recall checks; each must use a new managed segment and the original native UUID, with no duplicate owner. Never signal a PID read from the checkpoint.
+
+Finally stop all newly owned native/runtime processes through current owned handles/product actions, record cleanup and retain all final logs. Mark C6/ticket 19 resolved only after every required physical case and final check actually passes. Later GitHub/reviewer/notification release gates remain outside this ticket.

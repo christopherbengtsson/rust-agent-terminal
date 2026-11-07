@@ -26,10 +26,20 @@ impl Dashboard {
         path: Option<&std::ffi::OsStr>,
         proof_boot: Option<&str>,
     ) -> Self {
+        Self::open_geometry(repository, state, path, proof_boot, 40, 160)
+    }
+    fn open_geometry(
+        repository: &Path,
+        state: &Path,
+        path: Option<&std::ffi::OsStr>,
+        proof_boot: Option<&str>,
+        rows: u16,
+        cols: u16,
+    ) -> Self {
         let pty = native_pty_system()
             .openpty(PtySize {
-                rows: 40,
-                cols: 160,
+                rows,
+                cols,
                 pixel_width: 0,
                 pixel_height: 0,
             })
@@ -62,7 +72,7 @@ impl Dashboard {
             child,
             writer,
             output,
-            screen: vt100::Parser::new(40.try_into().unwrap(), 160.try_into().unwrap(), 0),
+            screen: vt100::Parser::new(rows.try_into().unwrap(), cols.try_into().unwrap(), 0),
         }
     }
     fn send(&mut self, bytes: &[u8]) {
@@ -267,6 +277,8 @@ impl Drop for Fixture {
                     .to_string_lossy()
                     .starts_with("proof-storage-")
                     || entry.file_name() == "proof-launch-receipt"
+                    || entry.file_name() == "proof-launch-creation"
+                    || entry.file_name() == "proof-launch-setup"
                 {
                     let _ = std::fs::remove_file(entry.path());
                 }
@@ -406,6 +418,9 @@ fn second_dashboard_is_refused_and_dead_controller_releases_same_child() {
         .to_owned();
     let mut second = fixture.open();
     second.wait("Another dashboard controls this supervisor");
+    second.wait("Project / worktrees (1)");
+    second.send(b"r");
+    second.wait("Project / worktrees (1)");
     second.send(b"alq");
     first.send(b"still-owned\r");
     first.wait("received: still-owned");
@@ -526,16 +541,16 @@ fn checkout_aliases_and_repeated_launch_keep_the_existing_child() {
 }
 
 #[test]
-fn unsafe_state_directory_is_explained_without_changing_discovery() {
+fn unsafe_state_directory_is_explained_before_execution_owned_discovery() {
     let fixture = Fixture::new();
     let target = fixture.temp.path().join("target");
     std::fs::create_dir(&target).unwrap();
     std::os::unix::fs::symlink(&target, fixture.state()).unwrap();
     let mut dashboard = fixture.open();
-    dashboard.wait("Project / worktrees (1)");
+    dashboard.wait("Project / worktrees (0)");
     dashboard.wait("Supervisor state must be a user-owned private directory");
     dashboard.send(b"r");
-    dashboard.wait("Project / worktrees (1)");
+    dashboard.wait("Project / worktrees (0)");
     assert!(!target.join("supervisor.sock").exists());
 }
 
@@ -963,7 +978,12 @@ impl Controller {
             object.keys().any(|key| {
                 matches!(
                     key.as_str(),
-                    "Launch" | "LaunchClaude" | "LaunchCodex" | "Resume" | "QueryLaunch"
+                    "Launch"
+                        | "LaunchNative"
+                        | "LaunchClaude"
+                        | "LaunchCodex"
+                        | "Resume"
+                        | "QueryLaunch"
                 )
             })
         });
@@ -1052,6 +1072,9 @@ fn lost_failed_launch_result_is_recovered_without_executing_after_adoption() {
             serde_json::json!({"Adopt":fixture.repository.as_os_str().as_encoded_bytes()}),
         );
         assert!(adopted["error"].is_null());
+        cleanup_wait15(&mut recovered, |state| {
+            state["adoption_pending"] == false && state["metadata_pending"] == false
+        });
         let retry = recovered.request(serde_json::json!({(launch):request}));
         assert_eq!(retry["launch_result"], failed["launch_result"]);
         assert_eq!(retry["error"], "Adopt a checkout before launch");
@@ -1176,6 +1199,7 @@ fn stopped_history_survives_restart_and_missing_checkout_without_launching() {
     restored.send(b"h");
     restored.wait("Retained history");
     restored.wait("received: retained-context-08");
+    restored.send(b"v");
     restored.wait("\\u{1b}[?2004h");
     assert!(
         !restored
@@ -1201,6 +1225,7 @@ fn chronological_history_retains_erased_and_alternate_screen_text_safely() {
     dashboard.send(b"exit\r");
     dashboard.wait("Process: Exited");
     dashboard.send(b"h");
+    dashboard.send(b"v");
     let history = dashboard.wait("erased-response-08");
     assert!(history.contains("alternate-response-08"));
     assert!(history.contains("\\u{1b}[2K"));
@@ -1303,12 +1328,16 @@ fn healthy_output_reports_real_durable_boundaries_within_one_second() {
     dashboard.wait("fixture>");
     dashboard.kill();
     let mut control = Controller::connect(&fixture);
+    // Three finite streams: 200 fourteen-byte records and one nine-byte prompt each.
+    // Real per-record sleeps can outlast the nominal three seconds. Observe the
+    // complete producer before comparing accepted output with its durable prefix.
+    let expected_output = control.greeting["output_bytes"].as_u64().unwrap() + 3 * (200 * 14 + 9);
     control.request(serde_json::json!({"Input":b"stream\rstream\rstream\r".to_vec()}));
     let started = Instant::now();
+    let mut completed = None;
     let mut samples = Vec::new();
     let mut previous_count = 0;
-    let mut last = serde_json::Value::Null;
-    while started.elapsed() < Duration::from_secs(4) {
+    let last = loop {
         let state = control.request(serde_json::json!("Screen"));
         let count = state["durable_flush_count"].as_u64().unwrap();
         if count > previous_count {
@@ -1319,9 +1348,32 @@ fn healthy_output_reports_real_durable_boundaries_within_one_second() {
             ));
             previous_count = count;
         }
-        last = state;
+        let output = state["output_bytes"].as_u64().unwrap();
+        assert!(
+            output <= expected_output,
+            "duplicated fixture output: {state}"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "finite fixture did not complete: expected {expected_output} bytes, observed {state}"
+        );
+        if output == expected_output {
+            let finished = *completed.get_or_insert_with(Instant::now);
+            assert!(
+                finished.elapsed() < Duration::from_secs(1),
+                "complete output did not become durable within one second: {state}"
+            );
+            if state["durable_bytes"].as_u64() == Some(expected_output) {
+                eprintln!(
+                    "complete fixture output: {output} bytes at {:?}; durable catch-up {:?}",
+                    finished.duration_since(started),
+                    finished.elapsed()
+                );
+                break state;
+            }
+        }
         std::thread::sleep(Duration::from_millis(10));
-    }
+    };
     eprintln!(
         "durable samples (completion ms, accepted age ms, file sync + SQLite commit us): {samples:?}"
     );
@@ -1351,7 +1403,20 @@ fn healthy_output_reports_real_durable_boundaries_within_one_second() {
     );
     for (index, commit) in commits.iter().enumerate() {
         assert_eq!(commit["sequence"].as_u64(), Some(index as u64 + 1));
+        assert!(
+            commit["oldest_accepted_micros"].as_u64().unwrap() < 1_000_000,
+            "healthy per-commit accepted age exceeded target: {commit}"
+        );
     }
+    for pair in commits.windows(2) {
+        assert!(
+            pair[1]["completed_micros"].as_u64().unwrap()
+                - pair[0]["completed_micros"].as_u64().unwrap()
+                < 1_000_000,
+            "healthy per-commit interval exceeded target: {pair:?}"
+        );
+    }
+    assert_eq!(last["output_bytes"].as_u64(), Some(expected_output));
     assert_eq!(last["durable_bytes"], last["output_bytes"]);
     control.request(serde_json::json!("Shutdown"));
 }
@@ -1866,6 +1931,55 @@ fn launch_gate_preserves_native_arguments_environment_and_checkout() {
 }
 
 #[test]
+fn adopted_owner_receives_viewport_before_native_process_startup() {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = Fixture::new();
+    let tools = fixture.temp.path().join("tools");
+    std::fs::create_dir(&tools).unwrap();
+    for (name, target) in [("git", "/usr/bin/git"), ("ps", "/bin/ps")] {
+        std::os::unix::fs::symlink(target, tools.join(name)).unwrap();
+    }
+    let startup = fixture.temp.path().join("native-startup-size");
+    let executable = env!("CARGO_BIN_EXE_agent-terminal").replace('\'', "'\\''");
+    let wrapper = tools.join("codex");
+    std::fs::write(
+        &wrapper,
+        format!(
+            "#!/bin/sh\n/bin/stty size > '{}' || exit 1\nexec '{executable}' --scripted-child\n",
+            startup.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let mut dashboard = Dashboard::open_with_path(
+        &fixture.repository,
+        &fixture.state(),
+        Some(tools.as_os_str()),
+    );
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted");
+    dashboard.send(b"x");
+    dashboard.wait("fixture>");
+    assert_eq!(
+        std::fs::read_to_string(startup)
+            .unwrap()
+            .split_whitespace()
+            .collect::<Vec<_>>(),
+        ["32", "104"],
+        "native startup must use the adopted owner's viewport, before any fixture input or later resize"
+    );
+    dashboard.send(&[0x1d]);
+    dashboard.wait("Focus: dashboard");
+    dashboard.send(b"q");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while dashboard.child.try_wait().unwrap().is_none() {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[test]
 fn codex_status_requires_current_attributed_evidence_despite_liveness_and_prose() {
     use std::os::unix::{fs::PermissionsExt, net::UnixDatagram};
     let fixture = Fixture::new();
@@ -1877,9 +1991,13 @@ fn codex_status_requires_current_attributed_evidence_despite_liveness_and_prose(
     // Reuse the shared scripted child through the normal Codex launch boundary.
     let executable = env!("CARGO_BIN_EXE_agent-terminal").replace('\'', "'\\''");
     let wrapper = tools.join("codex");
+    let invocation = fixture.temp.path().join("codex-invocation");
     std::fs::write(
         &wrapper,
-        format!("#!/bin/sh\nexec '{executable}' --scripted-child\n"),
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\nexec '{executable}' --scripted-child\n",
+            invocation.display()
+        ),
     )
     .unwrap();
     std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -1894,17 +2012,30 @@ fn codex_status_requires_current_attributed_evidence_despite_liveness_and_prose(
     dashboard.send(b"x");
     dashboard.wait("fixture>");
     dashboard.wait("Codex evidence unavailable");
-    dashboard.send(b"Conversation interrupted; Worked for 3s; approval needed\r");
+    // The negative status payload is a real paste, not an unpaced key flood.
+    // This fixture echoes input literally, so disable its child-side wrappers.
+    dashboard.send(b"paste-off\r");
+    dashboard.wait("paste plain");
+    dashboard.send(b"\x1b[200~Conversation interrupted; Worked for 3s; approval needed\x1b[201~\r");
     dashboard.wait("received: Conversation interrupted");
+    dashboard.wait("received: Conversation interrupted; Worked for 3s; approval needed");
     assert!(
         dashboard
             .wait("semantic status: unknown")
             .contains("Process: Running")
     );
     let channel = UnixDatagram::unbound().unwrap();
-    channel
-        .send_to(b"{", fixture.state().join("codex-status.sock"))
+    let argv = std::fs::read_to_string(invocation).unwrap();
+    let endpoint = argv
+        .split("--codex-status-hook '")
+        .nth(1)
+        .unwrap()
+        .split('\'')
+        .next()
         .unwrap();
+    assert!(endpoint.starts_with("/tmp/rat-"));
+    assert!(endpoint.len() < 104, "macOS Unix socket pathname must fit");
+    channel.send_to(b"{", endpoint).unwrap();
     dashboard.wait("invalid or unattributed Codex evidence");
     dashboard.send(b"fixture-failed-test\r");
     dashboard.wait("test result: FAILED; agent continues");
@@ -2007,6 +2138,17 @@ os.execv(sys.argv[0]+'.child',[sys.argv[0]+'.child'])
     dashboard.wait("Process: Exited");
     dashboard.send(b"h");
     dashboard.send(b"n");
+    let original_segment = old_identity
+        .as_str()
+        .unwrap()
+        .split("session=")
+        .nth(1)
+        .unwrap()
+        .split_whitespace()
+        .next()
+        .unwrap();
+    dashboard.wait(original_segment);
+    dashboard.send(b"\r");
     dashboard.wait("received: original-readable-context-16");
     dashboard.kill();
     let mut control = Controller::connect(&fixture);
@@ -2078,7 +2220,7 @@ fn unavailable_native_recovery_retains_history_until_explicit_new_conversation()
     dashboard.send(b"exit\r");
     dashboard.wait("Process: Exited");
     dashboard.send(b"v");
-    dashboard.wait("Native resume unavailable: no supported saved conversation identity");
+    dashboard.wait("Native resume unavailable: original tool is unsupported or missing");
     dashboard.send(b"h");
     dashboard.wait("received: independent-history-16");
     dashboard.send(b"h");
@@ -2691,6 +2833,252 @@ fn storage_stalled_prepare_keeps_stop_control_and_never_launches_after_cancel() 
     controller.request(serde_json::json!("Shutdown"));
 }
 
+fn wait_for_completion_injection(fixture: &Fixture) {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let ready = fixture.state().join("proof-storage-completion.ready");
+    while !ready.exists() {
+        assert!(
+            Instant::now() < deadline,
+            "completion injection did not reach the storage boundary"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[test]
+fn mismatched_durable_completions_cannot_create_a_coding_process() {
+    let fixture = Fixture::new();
+    let mut dashboard = fixture.open();
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted");
+    dashboard.kill();
+    let mut controller = Controller::connect(&fixture);
+    let hold = fixture.state().join("proof-storage-completion");
+    std::fs::write(&hold, "prepare").unwrap();
+    controller.request_now(serde_json::json!({"Launch":"attributed-prepare"}));
+    wait_for_completion_injection(&fixture);
+    let pending = controller.request_now(serde_json::json!("Screen"));
+    assert_eq!(
+        pending["metadata_pending"], true,
+        "matching completion is held"
+    );
+    assert_ne!(
+        pending["lifecycle"], "Running",
+        "unmatched successes must not create a process"
+    );
+    assert!(pending["launch_result"].is_null());
+    std::fs::remove_file(hold).unwrap();
+    let launched = controller.request(serde_json::json!({"QueryLaunch":"attributed-prepare"}));
+    assert_eq!(launched["launch_result"]["request"], "attributed-prepare");
+    fixture.assert_one_owner_and_child();
+    controller.request(serde_json::json!("Shutdown"));
+}
+
+#[test]
+fn mismatched_final_capture_completion_cannot_acknowledge_shutdown() {
+    let fixture = Fixture::new();
+    let mut dashboard = fixture.open();
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted");
+    dashboard.kill();
+    let mut controller = Controller::connect(&fixture);
+    controller.request(serde_json::json!({"Launch":"attributed-final"}));
+    let hold = fixture.state().join("proof-storage-completion");
+    std::fs::write(&hold, "flush").unwrap();
+    controller.request(serde_json::json!("Stop"));
+    wait_for_completion_injection(&fixture);
+    controller.request_now(serde_json::json!("Shutdown"));
+    std::thread::sleep(Duration::from_millis(200));
+    let shutdown = controller.request_now(serde_json::json!("Screen"));
+    assert_ne!(
+        shutdown["stopped"], true,
+        "only exact final capture receipt permits shutdown acknowledgement"
+    );
+    std::fs::remove_file(hold).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        let state = controller.request_now(serde_json::json!("Screen"));
+        if state["stopped"] == true {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "final receipt did not settle shutdown: {state}"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[test]
+fn mismatched_result_completions_leave_live_execution_and_result_provisional() {
+    let fixture = Fixture::new();
+    let mut dashboard = fixture.open();
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted");
+    dashboard.kill();
+    let mut controller = Controller::connect(&fixture);
+    let hold = fixture.state().join("proof-storage-completion");
+    std::fs::write(&hold, "result").unwrap();
+    controller.request_now(serde_json::json!({"Launch":"attributed-result"}));
+    wait_for_completion_injection(&fixture);
+    let pending = controller.request_now(serde_json::json!("Screen"));
+    assert_eq!(pending["metadata_pending"], true);
+    assert!(pending["launch_result"].is_null());
+    assert_eq!(pending["lifecycle"], "Running");
+    assert!(
+        pending["error"].is_null(),
+        "unmatched errors cannot overwrite execution facts: {pending}"
+    );
+    fixture.assert_one_owner_and_child();
+    // Native controls belong to the same live owner while the exact result
+    // completion is held. Neither a snapshot nor another metadata save can
+    // acknowledge that provisional result.
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        let screen = controller.request_now(serde_json::json!("Screen"));
+        if screen["screen"].as_str().unwrap().contains("fixture>") {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "native fixture did not become ready: {screen}"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    controller.request_now(serde_json::json!({"Resize":{"rows":19,"cols":73}}));
+    controller.request_now(serde_json::json!({"Input":b"size\r".to_vec()}));
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        let screen = controller.request_now(serde_json::json!("Screen"));
+        assert_eq!(screen["metadata_pending"], true);
+        assert!(screen["launch_result"].is_null());
+        assert_eq!(screen["execution"], pending["execution"]);
+        if screen["screen"].as_str().unwrap().contains("size: 73x19") {
+            assert_eq!(screen["rows"], 19);
+            assert_eq!(screen["cols"], 73);
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "provisional controls stalled: {screen}"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    controller.request_now(serde_json::json!("Stop"));
+    let deadline = Instant::now() + Duration::from_secs(4);
+    loop {
+        let stopped = controller.request_now(serde_json::json!("Screen"));
+        assert_eq!(stopped["metadata_pending"], true);
+        assert!(stopped["launch_result"].is_null());
+        assert_eq!(stopped["session_identity"], pending["session_identity"]);
+        if stopped["lifecycle"] == "Stopped" {
+            assert!(stopped["execution"].is_null());
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "provisional Stop stalled: {stopped}"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    std::fs::remove_file(hold).unwrap();
+    let settled = controller.request(serde_json::json!({"QueryLaunch":"attributed-result"}));
+    assert_eq!(settled["launch_result"]["request"], "attributed-result");
+    assert!(settled["launch_result"]["error"].is_null());
+    assert_eq!(settled["session_identity"], pending["session_identity"]);
+    assert_eq!(settled["lifecycle"], "Stopped");
+    assert!(settled["execution"].is_null());
+    controller.request(serde_json::json!("Shutdown"));
+}
+
+#[test]
+fn duplicate_and_prior_session_completions_cannot_replace_current_execution_facts() {
+    let fixture = Fixture::new();
+    let mut dashboard = fixture.open();
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted");
+    dashboard.kill();
+    let mut controller = Controller::connect(&fixture);
+    let first = controller.request(serde_json::json!({"Launch":"old-attribution"}));
+    controller.request(serde_json::json!("Stop"));
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        let stopped = controller.request_now(serde_json::json!("Screen"));
+        if stopped["lifecycle"] == "Stopped" && stopped["metadata_pending"] == false {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "old capture did not settle: {stopped}"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    std::fs::write(fixture.state().join("proof-storage-replay"), "replay").unwrap();
+    let second = controller.request(serde_json::json!({"Launch":"new-attribution"}));
+    assert_eq!(second["lifecycle"], "Running");
+    assert!(
+        second["error"].is_null(),
+        "stale failure replaced newer execution: {second}"
+    );
+    assert_eq!(second["launch_result"]["request"], "new-attribution");
+    assert_ne!(second["session_identity"], first["session_identity"]);
+    fixture.assert_one_owner_and_child();
+    let replay = controller.request(serde_json::json!({"Launch":"new-attribution"}));
+    assert_eq!(replay["execution"], second["execution"]);
+    assert_eq!(replay["launch_result"], second["launch_result"]);
+    controller.request(serde_json::json!("Shutdown"));
+}
+
+#[test]
+fn lifecycle_metadata_cannot_settle_failed_launch_result_and_retry_keeps_execution_stopped() {
+    let fixture = Fixture::new();
+    let mut dashboard = fixture.open();
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted");
+    dashboard.kill();
+    let mut controller = Controller::connect(&fixture);
+    let fault = fixture.state().join("proof-storage-save");
+    std::fs::write(&fault, "error").unwrap();
+    controller.request_now(serde_json::json!({"Launch":"failed-attributed-result"}));
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        let state = controller.request_now(serde_json::json!("Screen"));
+        if state["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("outcome not durable"))
+        {
+            break;
+        }
+        assert!(Instant::now() < deadline, "missing failed result: {state}");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    std::fs::remove_file(fault).unwrap();
+    controller.request(serde_json::json!("Stop"));
+    std::thread::sleep(Duration::from_millis(800));
+    let stopped = controller.request_now(serde_json::json!("Screen"));
+    assert_eq!(stopped["lifecycle"], "Stopped");
+    assert_eq!(
+        stopped["metadata_pending"], true,
+        "lifecycle metadata cannot discharge the result obligation"
+    );
+    assert!(stopped["launch_result"].is_null());
+    controller.request(serde_json::json!("RetryStorage"));
+    let durable = controller.request(serde_json::json!({"QueryLaunch":"failed-attributed-result"}));
+    assert_eq!(
+        durable["launch_result"]["request"],
+        "failed-attributed-result"
+    );
+    assert!(durable["launch_result"]["error"].is_null());
+    assert_eq!(durable["lifecycle"], "Stopped");
+    assert!(durable["execution"].is_null());
+    controller.request(serde_json::json!("Shutdown"));
+}
+
 fn transcript_bytes14(fixture: &Fixture) -> Vec<u8> {
     let mut paths: Vec<_> = std::fs::read_dir(fixture.state())
         .unwrap()
@@ -2705,6 +3093,102 @@ fn transcript_bytes14(fixture: &Fixture) -> Vec<u8> {
         .into_iter()
         .flat_map(|path| std::fs::read(path).unwrap())
         .collect()
+}
+
+#[test]
+fn sealing_retains_final_capture_counters_before_receipt_and_after_reconnect() {
+    let fixture = Fixture::new();
+    let mut dashboard = fixture.open();
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted");
+    dashboard.send(b"l");
+    dashboard.wait("fixture>");
+    dashboard.kill();
+    let mut control = Controller::connect(&fixture);
+    let marker = fixture.state().join("proof-storage-completion");
+    std::fs::write(&marker, "seal").unwrap();
+    control.request(serde_json::json!("Stop"));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !marker.with_extension("ready").exists() {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let bytes = transcript_bytes14(&fixture);
+    assert!(!bytes.is_empty());
+    for _ in 0..5 {
+        let state = control.request(serde_json::json!("Screen"));
+        assert_eq!(state["accepted_bytes"], bytes.len() as u64);
+        assert_eq!(state["written_bytes"], bytes.len() as u64);
+        assert_eq!(state["durable_bytes"], bytes.len() as u64);
+        assert_eq!(state["capture_pending_bytes"], 0);
+    }
+    std::fs::remove_file(marker).unwrap();
+    cleanup_wait15(&mut control, |state| {
+        state["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|session| session["reserved"] == false)
+    });
+    drop(control);
+    let control = Controller::connect(&fixture);
+    for field in ["accepted_bytes", "written_bytes", "durable_bytes"] {
+        assert_eq!(control.greeting[field], bytes.len() as u64, "{field}");
+    }
+    let original = control.greeting["session_identity"]["session"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    drop(control);
+    kill_owner(&fixture);
+    let mut dashboard = fixture.open();
+    dashboard.wait("Process: Stopped");
+    dashboard.kill();
+    let mut control = Controller::connect(&fixture);
+    for field in ["accepted_bytes", "written_bytes", "durable_bytes"] {
+        assert_eq!(
+            control.greeting[field],
+            bytes.len() as u64,
+            "restored {field}"
+        );
+    }
+    let replacement = control.request(serde_json::json!({"Launch":"after-seal-counters"}));
+    let replacement = replacement["session_identity"]["session"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_ne!(replacement, original);
+    cleanup_wait15(&mut control, |state| {
+        state["screen"].as_str().unwrap_or("").contains("fixture>")
+    });
+    control.request(serde_json::json!("Stop"));
+    let final_state = cleanup_wait15(&mut control, |state| {
+        state["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|session| session["reserved"] == false)
+    });
+    let replacement_bytes: usize = cleanup_chunks15(&fixture, &replacement)
+        .iter()
+        .map(|(_, raw)| raw.len())
+        .sum();
+    assert!(replacement_bytes > 0);
+    for field in ["accepted_bytes", "written_bytes", "durable_bytes"] {
+        assert_eq!(
+            final_state[field], replacement_bytes as u64,
+            "replacement {field}"
+        );
+    }
+    assert_eq!(
+        cleanup_chunks15(&fixture, &original)
+            .into_iter()
+            .flat_map(|(_, raw)| raw)
+            .collect::<Vec<_>>(),
+        bytes
+    );
+    control.request(serde_json::json!("Shutdown"));
 }
 
 #[test]
@@ -3265,7 +3749,9 @@ fn explicit_cleanup_warns_previews_cancels_and_deletes_only_selected_history() {
     dashboard.wait("Discovery complete");
     std::fs::write(fixture.state().join("proof-storage-available"), b"0").unwrap();
     dashboard.wait("Low storage");
-    dashboard.send(b"al");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted");
+    dashboard.send(b"l");
     dashboard.wait("fixture>");
     dashboard.send(b"\x1ds");
     dashboard.wait("Process: Stopped");
@@ -3431,6 +3917,52 @@ impl Drop for FailedMeasurementEvidence {
             }
         }
     }
+}
+
+#[cfg(target_os = "macos")]
+fn measurement_process_identity(pid: i32) -> std::io::Result<(u64, u64, Vec<u8>)> {
+    let start = || {
+        let mut info = unsafe { std::mem::zeroed::<libc::proc_bsdinfo>() };
+        let size = std::mem::size_of_val(&info) as i32;
+        if unsafe {
+            libc::proc_pidinfo(
+                pid,
+                libc::PROC_PIDTBSDINFO,
+                0,
+                (&mut info as *mut libc::proc_bsdinfo).cast(),
+                size,
+            )
+        } != size
+        {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok((info.pbi_start_tvsec, info.pbi_start_tvusec))
+    };
+    let before = start()?;
+    let mut executable = vec![0; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
+    if unsafe { libc::proc_pidpath(pid, executable.as_mut_ptr().cast(), executable.len() as u32) }
+        <= 0
+    {
+        return Err(std::io::Error::last_os_error());
+    }
+    executable.truncate(
+        executable
+            .iter()
+            .position(|b| *b == 0)
+            .unwrap_or(executable.len()),
+    );
+    if start()? != before {
+        return Err(std::io::Error::other(
+            "Measurement peer identity changed during inspection",
+        ));
+    }
+    Ok((before.0, before.1, executable))
+}
+#[cfg(not(target_os = "macos"))]
+fn measurement_process_identity(_: i32) -> std::io::Result<(u64, u64, Vec<u8>)> {
+    Err(std::io::Error::other(
+        "This explicit measurement requires macOS process identity",
+    ))
 }
 
 fn measurement_shutdown(control: &mut Controller) -> serde_json::Value {
@@ -5073,8 +5605,8 @@ fn native_process_outcomes_survive_cleanup_reload_and_explicit_resume() {
         assert_eq!(control.greeting["native_conversation"], native);
         assert_eq!(control.greeting["process_exit"], finished["process_exit"]);
         assert_no_owned_coding(&fixture);
-        let resumed =
-            control.request(serde_json::json!({"Resume":format!("explicit-after-{command}")}));
+        control.request(serde_json::json!({"Resume":format!("explicit-after-{command}")}));
+        let resumed = cleanup_wait15(&mut control, |state| state["identity"] != identity);
         assert_ne!(resumed["identity"], identity);
         assert_eq!(resumed["native_conversation"], native);
         cleanup_wait15(&mut control, |state| state["lifecycle"] == "Running");
@@ -5086,4 +5618,6525 @@ fn native_process_outcomes_survive_cleanup_reload_and_explicit_resume() {
         );
         control.request(serde_json::json!("Shutdown"));
     }
+}
+
+#[test]
+fn partial_spawn_failure_keeps_gated_process_owned_until_stop() {
+    for boundary in [
+        "before-scope",
+        "after-create",
+        "before-input",
+        "before-capture",
+        "before-authorization",
+    ] {
+        let fixture = Fixture::new();
+        let mut dashboard = fixture.open();
+        dashboard.wait("Discovery complete");
+        dashboard.send(b"a");
+        dashboard.wait("Adopted");
+        dashboard.kill();
+        let mut control = Controller::connect(&fixture);
+        std::fs::write(fixture.state().join("proof-launch-setup"), boundary).unwrap();
+        let failed = control.request(serde_json::json!({"Launch":"partial-create"}));
+        assert!(
+            failed["error"]
+                .as_str()
+                .unwrap_or("")
+                .contains("Injected launch setup failure"),
+            "{failed}"
+        );
+        assert!(!failed["screen"].as_str().unwrap().contains("fixture>"));
+        let pid = failed["execution"]["pid"]
+            .as_i64()
+            .expect("owned gated process");
+        control.request(serde_json::json!("Stop"));
+        cleanup_wait15(&mut control, |state| {
+            matches!(state["lifecycle"].as_str(), Some("Stopped" | "Failed"))
+                && state["metadata_pending"] == false
+        });
+        assert!(
+            !Command::new("/bin/ps")
+                .args(["-p", &pid.to_string(), "-o", "stat="])
+                .output()
+                .unwrap()
+                .stdout
+                .iter()
+                .any(|b| !b.is_ascii_whitespace())
+        );
+        // Shutdown's confirmed receipt also establishes the final capture and
+        // metadata barrier, independently of the earlier process-stop receipt.
+        control.request(serde_json::json!("Shutdown"));
+        cleanup_wait15(&mut control, |state| state["stopped"] == true);
+        drop(control);
+        std::fs::remove_file(fixture.state().join("proof-launch-setup")).unwrap();
+        let mut dashboard = fixture.open();
+        dashboard.wait("Adopted:");
+        dashboard.kill();
+        let mut control = Controller::connect(&fixture);
+        let replacement = control.request(serde_json::json!({"Launch":"after-partial"}));
+        assert!(replacement["error"].is_null(), "{replacement}");
+        cleanup_wait15(&mut control, |state| {
+            state["screen"].as_str().unwrap().contains("fixture>")
+        });
+        control.request(serde_json::json!("Shutdown"));
+    }
+}
+
+#[test]
+fn stop_during_outstanding_creation_never_releases_late_gated_process() {
+    let fixture = Fixture::new();
+    let mut dashboard = fixture.open();
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted");
+    dashboard.kill();
+    let mut control = Controller::connect(&fixture);
+    let pause = fixture.state().join("proof-launch-creation");
+    std::fs::write(&pause, "pause").unwrap();
+    control.request_now(serde_json::json!({"Launch":"cancel-creation"}));
+    let ready = pause.with_extension("ready");
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while !ready.exists() {
+        assert!(
+            Instant::now() < deadline,
+            "creation worker did not reach gated child"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let provisional = control.request_now(serde_json::json!({"Launch":"cancel-creation"}));
+    assert!(
+        provisional["launch_result"].is_null(),
+        "same request remains provisional: {provisional}"
+    );
+    let query = control.request_now(serde_json::json!({"QueryLaunch":"cancel-creation"}));
+    assert!(
+        query["launch_result"].is_null(),
+        "query must not manufacture a failure: {query}"
+    );
+    let pid = std::fs::read_to_string(&ready)
+        .unwrap()
+        .parse::<i32>()
+        .unwrap();
+    let started = Instant::now();
+    let stopping = control.request_now(serde_json::json!("Stop"));
+    assert!(started.elapsed() < Duration::from_secs(1));
+    assert_eq!(stopping["lifecycle"], "Stopping");
+    assert_eq!(stopping["stopped"], false);
+    assert!(
+        stopping["error"]
+            .as_str()
+            .unwrap()
+            .contains("cleanup pending")
+    );
+    let refused = control.request_now(serde_json::json!({"Launch":"replacement-too-soon"}));
+    assert!(refused["error"].is_string(), "{refused}");
+    std::fs::remove_file(pause).unwrap();
+    let stopped = cleanup_wait15(&mut control, |state| {
+        state["lifecycle"] == "Stopped" && state["metadata_pending"] == false
+    });
+    assert!(!stopped["screen"].as_str().unwrap().contains("fixture>"));
+    assert!(
+        !Command::new("/bin/ps")
+            .args(["-p", &pid.to_string(), "-o", "stat="])
+            .output()
+            .unwrap()
+            .stdout
+            .iter()
+            .any(|b| !b.is_ascii_whitespace())
+    );
+    let result = control.request(serde_json::json!({"QueryLaunch":"cancel-creation"}));
+    assert!(
+        result["launch_result"]["error"]
+            .as_str()
+            .unwrap()
+            .contains("cancelled")
+    );
+    control.request(serde_json::json!("Shutdown"));
+}
+
+#[test]
+fn partial_spawn_cleanup_failure_retains_reservation_and_retries() {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = Fixture::new();
+    let tools = fixture.temp.path().join("partial-tools");
+    std::fs::create_dir(&tools).unwrap();
+    let ps = tools.join("ps");
+    std::fs::write(&ps, "#!/bin/sh\nexit 1\n").unwrap();
+    std::fs::set_permissions(&ps, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let path = std::env::join_paths(
+        std::iter::once(tools).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+    )
+    .unwrap();
+    let mut dashboard =
+        Dashboard::open_with_path(&fixture.repository, &fixture.state(), Some(&path));
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted");
+    dashboard.kill();
+    let mut control = Controller::connect(&fixture);
+    std::fs::write(fixture.state().join("proof-launch-setup"), "after-create").unwrap();
+    let failed = control.request(serde_json::json!({"Launch":"partial-cleanup"}));
+    let pid = failed["execution"]["pid"].as_i64().unwrap();
+    control.request(serde_json::json!("Stop"));
+    let blocked = cleanup_wait15(&mut control, |state| state["lifecycle"] == "StopFailed");
+    assert_eq!(blocked["execution"]["pid"], pid);
+    let refused = control.request(serde_json::json!({"Launch":"partial-cleanup-replacement"}));
+    assert!(refused["error"].is_string());
+    assert_eq!(refused["execution"]["pid"], pid);
+    std::fs::remove_file(&ps).unwrap();
+    std::os::unix::fs::symlink("/bin/ps", ps).unwrap();
+    control.request(serde_json::json!("Stop"));
+    let cleaned = cleanup_wait15(&mut control, |state| {
+        state["lifecycle"] == "Stopped" && state["metadata_pending"] == false
+    });
+    assert!(cleaned["execution"].is_null());
+    assert!(!cleaned["screen"].as_str().unwrap().contains("fixture>"));
+    control.request(serde_json::json!("Shutdown"));
+}
+
+#[test]
+fn failed_capture_installation_never_borrows_previous_sessions_eof_proof() {
+    let fixture = Fixture::new();
+    let mut dashboard = fixture.open();
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted");
+    dashboard.kill();
+    let mut control = Controller::connect(&fixture);
+    control.request(serde_json::json!({"Launch":"completed-capture"}));
+    cleanup_wait15(&mut control, |state| {
+        state["screen"].as_str().unwrap().contains("fixture>")
+    });
+    control.request(serde_json::json!("Stop"));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let page = cleanup_page15(&mut control);
+        if page["cleanup"]["entries"][0]["eligible"] == true {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "previous capture must settle: {page}"
+        );
+    }
+    std::fs::write(fixture.state().join("proof-launch-setup"), "before-capture").unwrap();
+    let failed = control.request(serde_json::json!({"Launch":"capture-not-installed"}));
+    let id = failed["session_identity"]["session"].clone();
+    control.request(serde_json::json!("Stop"));
+    cleanup_wait15(&mut control, |state| {
+        matches!(state["lifecycle"].as_str(), Some("Stopped" | "Failed"))
+            && state["metadata_pending"] == false
+    });
+    control.request(serde_json::json!("Shutdown"));
+    cleanup_wait15(&mut control, |state| state["stopped"] == true);
+    drop(control);
+    let mut dashboard = fixture.open();
+    dashboard.wait("Adopted:");
+    dashboard.kill();
+    let mut control = Controller::connect(&fixture);
+    let page = cleanup_page15(&mut control);
+    let entry = page["cleanup"]["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["id"] == id)
+        .unwrap();
+    assert_eq!(
+        entry["eligible"], false,
+        "no reader observed this session's EOF: {page}"
+    );
+    control.request(serde_json::json!("Shutdown"));
+}
+
+#[test]
+fn slow_adoption_and_saturated_discovery_leave_polling_stop_and_exit_usable() {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = Fixture::new();
+    let bin = fixture.temp.path().join("bin04");
+    std::fs::create_dir(&bin).unwrap();
+    let marker = fixture.temp.path().join("slow-git04");
+    let git = bin.join("git");
+    std::fs::write(
+        &git,
+        format!(
+            "#!/bin/sh\nif [ -f '{}' ]; then /bin/sleep 10; fi\nexec /usr/bin/git \"$@\"\n",
+            marker.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&git, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let mut paths = vec![bin];
+    paths.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap()));
+    let mut dashboard = Dashboard::open_with_path(
+        &fixture.repository,
+        &fixture.state(),
+        Some(&std::env::join_paths(paths).unwrap()),
+    );
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted");
+    dashboard.send(b"l");
+    dashboard.wait("fixture>");
+    dashboard.kill();
+    let mut control = Controller::connect(&fixture);
+    std::fs::write(&marker, b"hold git only").unwrap();
+    let adopted = control.request_now(
+        serde_json::json!({"Adopt":fixture.repository.as_os_str().as_encoded_bytes()}),
+    );
+    assert_eq!(adopted["adoption_pending"], true);
+    let previous = adopted["adopted"].clone();
+    for request in 1..8 {
+        let start = Instant::now();
+        let result = control.request_now(serde_json::json!({"Discover":{"request":request,"repository":fixture.repository.as_os_str().as_encoded_bytes()}}));
+        assert_eq!(result["lifecycle"], "Running");
+        assert!(
+            start.elapsed() < Duration::from_millis(500),
+            "Git dispatch blocked controls"
+        );
+    }
+    let start = Instant::now();
+    control.request_now(serde_json::json!("Stop"));
+    let stopped = cleanup_wait15(&mut control, |state| state["lifecycle"] == "Stopped");
+    assert!(
+        start.elapsed() < Duration::from_secs(2),
+        "Stop waited for slow Git"
+    );
+    assert_eq!(stopped["adoption_pending"], false);
+    assert_eq!(
+        stopped["adopted"], previous,
+        "cancelled adoption cannot change checkout"
+    );
+    let start = Instant::now();
+    control.request_now(serde_json::json!("Shutdown"));
+    cleanup_wait15(&mut control, |state| state["stopped"] == true);
+    assert!(
+        start.elapsed() < Duration::from_secs(2),
+        "Shutdown waited for slow Git"
+    );
+}
+
+#[test]
+fn dashboard_refuses_legacy_live_owner_before_sending_new_git_requests() {
+    use std::os::unix::{fs::PermissionsExt, net::UnixListener};
+    for (protocol, diff_protocol, creation_protocol) in [(0, 0, 1), (1, 0, 1), (1, 1, 1), (1, 2, 0)]
+    {
+        let fixture = Fixture::new();
+        std::fs::create_dir(fixture.state()).unwrap();
+        std::fs::set_permissions(fixture.state(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let lock_path = fixture.state().join("supervisor.lock");
+        let lock = std::fs::File::create(&lock_path).unwrap();
+        std::fs::set_permissions(&lock_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        lock.try_lock().unwrap();
+        let listener = UnixListener::bind(fixture.state().join("supervisor.sock")).unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            let old = serde_json::json!({"git_jobs_protocol":protocol,"diff_protocol":diff_protocol,"creation_protocol":creation_protocol,"editor_protocol":1,"registry_protocol":1,"sessions_protocol":1,"prompt_naming_protocol":1,"adopted":null,"identity":null,"screen":"","formatted":"","rows":24,"cols":100,"output_bytes":0,"error":null,"stopped":false,"lifecycle":"Idle","control_denied":false});
+            serde_json::to_writer(&mut stream, &old).unwrap();
+            stream.write_all(b"\n").unwrap();
+            let mut unexpected = [0; 1];
+            assert_eq!(
+                stream.read(&mut unexpected).unwrap(),
+                0,
+                "dashboard sent unsupported worktree request to live legacy owner"
+            );
+        });
+        let mut dashboard = fixture.open();
+        dashboard.wait("does not support this dashboard");
+        dashboard.send(b"d");
+        dashboard.child.wait().unwrap();
+        server.join().unwrap();
+        assert!(
+            !fixture.state().join("history.sqlite3").exists(),
+            "live owner prevents migration/second writer"
+        );
+    }
+}
+
+struct RegistryOwner(std::process::Child);
+impl Drop for RegistryOwner {
+    fn drop(&mut self) {
+        if self.0.try_wait().ok().flatten().is_none() {
+            let _ = self.0.kill();
+        }
+        let _ = self.0.wait();
+    }
+}
+
+#[test]
+fn retained_registry_reuses_workspace_across_adoption_alias_and_restart() {
+    use std::os::unix::ffi::OsStrExt;
+    let fixture = Fixture::new();
+    let other = fixture.temp.path().join("other project");
+    assert!(
+        Command::new("git")
+            .args(["init", "-b", "main"])
+            .arg(&other)
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    let start = || {
+        let child = Command::new(env!("CARGO_BIN_EXE_agent-terminal"))
+            .arg("--supervisor")
+            .arg(fixture.state())
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !fixture.state().join("supervisor.sock").exists() {
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        RegistryOwner(child)
+    };
+    let mut owner = start();
+    let mut control = Controller::connect(&fixture);
+    let adopt = |control: &mut Controller, path: &Path| {
+        control.request(serde_json::json!({"Adopt": path.as_os_str().as_bytes()}));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let state = control.request(serde_json::json!("Screen"));
+            if state["adoption_pending"] == false && state["metadata_pending"] == false {
+                assert!(state["error"].is_null(), "{state}");
+                return state;
+            }
+            assert!(Instant::now() < deadline, "{state}");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    };
+    let first = adopt(&mut control, &fixture.repository);
+    let selected = first["registry"]["selected"]
+        .as_str()
+        .expect("durable workspace identity")
+        .to_owned();
+    adopt(&mut control, &other);
+    let alias = fixture.temp.path().join("alias");
+    std::os::unix::fs::symlink(&fixture.repository, &alias).unwrap();
+    let returned = adopt(&mut control, &alias);
+    assert_eq!(returned["registry"]["selected"], selected);
+    assert_eq!(
+        returned["registry"]["projects"].as_array().unwrap().len(),
+        2
+    );
+    assert_eq!(
+        returned["registry"]["workspaces"].as_array().unwrap().len(),
+        2
+    );
+    assert!(
+        returned["identity"].is_null(),
+        "registration never launches coding"
+    );
+    control.request(serde_json::json!("Shutdown"));
+    drop(control);
+    owner.0.wait().unwrap();
+    let mut owner = start();
+    let mut control = Controller::connect(&fixture);
+    assert_eq!(control.greeting["registry"]["selected"], selected);
+    assert_eq!(
+        control.greeting["registry"]["workspaces"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    control.request(serde_json::json!("Shutdown"));
+    drop(control);
+    owner.0.wait().unwrap();
+}
+
+#[test]
+fn populated_legacy_registry_migration_preserves_opaque_membership_paths_and_history() {
+    use std::os::unix::fs::PermissionsExt;
+    for version in 1..=3 {
+        let fixture = Fixture::new();
+        std::fs::create_dir(fixture.state()).unwrap();
+        std::fs::set_permissions(fixture.state(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let db = rusqlite::Connection::open(fixture.state().join("history.sqlite3")).unwrap();
+        db.execute_batch("CREATE TABLE app(id INTEGER PRIMARY KEY CHECK(id=1),state TEXT NOT NULL,checkout BLOB,task TEXT NOT NULL); CREATE TABLE sessions(id TEXT PRIMARY KEY,identity TEXT NOT NULL,state TEXT NOT NULL,durable INTEGER NOT NULL DEFAULT 0);").unwrap();
+        if version >= 2 {
+            db.execute_batch("CREATE TABLE requests(id TEXT PRIMARY KEY,result TEXT NOT NULL);")
+                .unwrap();
+        }
+        if version >= 3 {
+            db.execute_batch("ALTER TABLE sessions ADD COLUMN created INTEGER; ALTER TABLE sessions ADD COLUMN sealed INTEGER NOT NULL DEFAULT 0; ALTER TABLE sessions ADD COLUMN history_state TEXT NOT NULL DEFAULT 'retained';").unwrap();
+        }
+        db.pragma_update(None, "user_version", version).unwrap();
+        let ids = [
+            "11111111-1111-4111-8111-111111111111",
+            "22222222-2222-4222-8222-222222222222",
+        ];
+        let tasks = ["opaque legacy task", "another opaque task"];
+        let native = "33333333-3333-4333-8333-333333333333";
+        let mut current = serde_json::Value::Null;
+        for (index, id) in ids.iter().enumerate() {
+            let label = format!(
+                "task={} session={id} request=request with spaces {index}",
+                tasks[index]
+            );
+            let mut state = serde_json::json!({"adopted":"same lossy display �", "identity":label,"screen":"","formatted":"","rows":24,"cols":80,"output_bytes":0,"error":null,"stopped":false,"control_denied":false,"lifecycle":"Exited","native_conversation":native,"agent":"claude"});
+            if index == 1 {
+                state.as_object_mut().unwrap().remove("identity");
+            }
+            let raw = format!("legacy history {index}\n").into_bytes();
+            std::fs::write(
+                fixture.state().join(format!("{id}-00000000.transcript")),
+                &raw,
+            )
+            .unwrap();
+            db.execute(
+                "INSERT INTO sessions(id,identity,state,durable) VALUES(?1,?2,?3,?4)",
+                rusqlite::params![id, label, state.to_string(), raw.len()],
+            )
+            .unwrap();
+            if index == 0 {
+                current = state;
+            }
+        }
+        let path = b"/missing/original-\xff-checkout".to_vec();
+        db.execute(
+            "INSERT INTO app VALUES(1,?1,?2,?3)",
+            rusqlite::params![current.to_string(), path, tasks[0]],
+        )
+        .unwrap();
+        if version >= 2 {
+            db.execute("INSERT INTO requests VALUES(?1,?2)", rusqlite::params!["failed opaque request",serde_json::json!({"request":"failed opaque request","identity":null,"error":"original failure"}).to_string()]).unwrap();
+        }
+        drop(db);
+        let mut owner = RegistryOwner(
+            Command::new(env!("CARGO_BIN_EXE_agent-terminal"))
+                .arg("--supervisor")
+                .arg(fixture.state())
+                .spawn()
+                .unwrap(),
+        );
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !fixture.state().join("supervisor.sock").exists() {
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let mut control = Controller::connect(&fixture);
+        let registry = control.greeting["registry"].clone();
+        let workspaces = registry["workspaces"].as_array().unwrap();
+        assert_eq!(workspaces.len(), 2);
+        assert_eq!(
+            registry["projects"].as_array().unwrap().len(),
+            0,
+            "lossy legacy labels are not repository facts"
+        );
+        for (index, task) in tasks.iter().enumerate() {
+            let workspace = workspaces
+                .iter()
+                .find(|workspace| workspace["task"] == *task)
+                .unwrap();
+            assert_eq!(workspace["sessions"], serde_json::json!([ids[index]]));
+            assert!(workspace["checkout"].is_null());
+            if index == 0 {
+                assert_eq!(workspace["path"], serde_json::json!(path));
+            } else {
+                assert!(workspace["path"].is_null());
+            }
+            control
+                .request(serde_json::json!({"HistorySession":{"session":ids[index],"offset":0}}));
+            let deadline = Instant::now() + Duration::from_secs(3);
+            loop {
+                let observed = control.request(serde_json::json!("Screen"));
+                if observed["history"]["text"]
+                    .as_str()
+                    .is_some_and(|text| text.contains(&format!("legacy history {index}")))
+                {
+                    break;
+                }
+                assert!(Instant::now() < deadline, "{observed}");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            assert_eq!(
+                std::fs::read(
+                    fixture
+                        .state()
+                        .join(format!("{}-00000000.transcript", ids[index]))
+                )
+                .unwrap(),
+                format!("legacy history {index}\n").into_bytes()
+            );
+        }
+        assert_eq!(control.greeting["native_conversation"], native);
+        assert_eq!(control.greeting["lifecycle"], "Exited");
+        assert!(control.greeting["execution"].is_null());
+        if version >= 2 {
+            let outcome =
+                control.request(serde_json::json!({"QueryLaunch":"failed opaque request"}));
+            assert_eq!(outcome["launch_result"]["error"], "original failure");
+        }
+        control.request(serde_json::json!("Shutdown"));
+        drop(control);
+        owner.0.wait().unwrap();
+    }
+}
+
+#[test]
+fn project_registration_deduplicates_linked_checkouts_and_failed_writes_keep_prior_registry() {
+    use std::os::unix::ffi::OsStrExt;
+    let fixture = Fixture::new();
+    assert!(
+        Command::new("git")
+            .arg("-C")
+            .arg(&fixture.repository)
+            .args([
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=fixture@example.invalid",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "base"
+            ])
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    let linked = fixture.temp.path().join("linked checkout");
+    assert!(
+        Command::new("git")
+            .arg("-C")
+            .arg(&fixture.repository)
+            .args(["worktree", "add", "-b", "linked"])
+            .arg(&linked)
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    let mut owner = RegistryOwner(
+        Command::new(env!("CARGO_BIN_EXE_agent-terminal"))
+            .arg("--supervisor")
+            .arg(fixture.state())
+            .spawn()
+            .unwrap(),
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !fixture.state().join("supervisor.sock").exists() {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let mut control = Controller::connect(&fixture);
+    let register = |control: &mut Controller, path: &Path| {
+        control.request(serde_json::json!({"Register":path.as_os_str().as_bytes()}));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let state = control.request(serde_json::json!("Screen"));
+            if state["registry_pending"] == false && state["adoption_pending"] == false {
+                return state;
+            }
+            assert!(Instant::now() < deadline, "{state}");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    };
+    let first = register(&mut control, &fixture.repository);
+    assert!(first["error"].is_null(), "{first}");
+    assert_eq!(first["registry"]["projects"].as_array().unwrap().len(), 1);
+    assert_eq!(first["registry"]["workspaces"].as_array().unwrap().len(), 1);
+    assert!(
+        first["adopted"].is_null(),
+        "project registration must not retarget active coding"
+    );
+    assert!(first["registry"]["selected"].is_null());
+    std::fs::write(fixture.state().join("proof-storage-registry"), "error").unwrap();
+    let failed = register(&mut control, &linked);
+    assert!(
+        failed["error"]
+            .as_str()
+            .unwrap()
+            .contains("Project not registered")
+    );
+    assert_eq!(
+        failed["registry"], first["registry"],
+        "failed write cannot announce durable project/workspace"
+    );
+    std::fs::remove_file(fixture.state().join("proof-storage-registry")).unwrap();
+    let second = register(&mut control, &linked);
+    assert!(second["error"].is_null(), "{second}");
+    assert_eq!(second["registry"]["projects"].as_array().unwrap().len(), 1);
+    let workspaces = second["registry"]["workspaces"].as_array().unwrap();
+    assert_eq!(workspaces.len(), 2);
+    assert_ne!(workspaces[0]["id"], workspaces[1]["id"]);
+    let alias = fixture.temp.path().join("linked alias");
+    std::os::unix::fs::symlink(&linked, &alias).unwrap();
+    let aliased = register(&mut control, &alias);
+    assert_eq!(aliased["registry"], second["registry"]);
+    let missing = register(&mut control, &fixture.temp.path().join("absent"));
+    assert!(
+        missing["error"]
+            .as_str()
+            .unwrap()
+            .contains("Checkout unavailable")
+    );
+    assert_eq!(missing["registry"], second["registry"]);
+    assert!(missing["identity"].is_null());
+    control.request(serde_json::json!("Shutdown"));
+    drop(control);
+    owner.0.wait().unwrap();
+}
+
+#[test]
+fn keyboard_project_registration_and_retained_selection_work_in_normal_and_small_ptys() {
+    let fixture = Fixture::new();
+    let other = fixture.temp.path().join("retained-project");
+    assert!(
+        Command::new("git")
+            .args(["init", "-b", "main"])
+            .arg(&other)
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    for (cols, rows) in [(160, 40), (60, 18)] {
+        let deadline = Instant::now() + Duration::from_secs(8);
+        let mut dashboard = loop {
+            let mut candidate = Dashboard::open_geometry(
+                &fixture.repository,
+                &fixture.state(),
+                None,
+                None,
+                rows,
+                cols,
+            );
+            let screen = candidate.wait_any(&[
+                "Discovery complete",
+                "Adopted:",
+                "Another dashboard controls this supervisor",
+            ]);
+            if !screen.contains("Another dashboard controls this supervisor") {
+                break candidate;
+            }
+            candidate.kill();
+            assert!(
+                Instant::now() < deadline,
+                "previous dashboard controller was not released"
+            );
+        };
+        dashboard.wait_any(&["Discovery complete", "Adopted:"]);
+        if cols == 160 {
+            dashboard.send(b"A");
+            dashboard.wait("Add project:");
+            dashboard.send(other.as_os_str().as_encoded_bytes());
+            dashboard.send(b"\r");
+            dashboard.wait("retained-project / Workspace");
+            // Registration is not adoption or execution. The explicit a action follows.
+            dashboard.send(b"a");
+            dashboard.wait("Adopted:");
+        } else {
+            dashboard.send(b"w");
+            dashboard.wait("retained-project / Workspace");
+        }
+        let screen = dashboard.wait("retained-project / Workspace");
+        assert!(screen.contains("j/k select"));
+        if cols == 160 {
+            assert!(screen.contains("Reviews"));
+            assert!(screen.contains("Unavailable"));
+        }
+        if let Some(directory) = std::env::var_os("RAT_REGISTRY_EVIDENCE") {
+            let mut cells = Vec::new();
+            for row in 0..rows {
+                for col in 0..cols {
+                    let cell = dashboard.screen.screen().cell(row, col).unwrap();
+                    cells.push(serde_json::json!({"row":row,"col":col,"text":cell.contents(),"fg":format!("{:?}",cell.fgcolor()),"bg":format!("{:?}",cell.bgcolor()),"bold":cell.bold(),"wide":cell.is_wide_continuation()}));
+                }
+            }
+            std::fs::create_dir_all(&directory).unwrap();
+            std::fs::write(Path::new(&directory).join(format!("m2-05-registry-pty-{cols}.json")),serde_json::to_vec_pretty(&serde_json::json!({"source":"real dashboard outer PTY cells, no coding child or native compatibility claim","cols":cols,"rows":rows,"cells":cells,"hide_cursor":true})).unwrap()).unwrap();
+        }
+        if cols == 160 {
+            dashboard.send(b"d");
+            dashboard.child.wait().unwrap();
+        } else {
+            dashboard.send(b"q");
+            dashboard.child.wait().unwrap();
+        }
+    }
+}
+
+#[test]
+fn registry_migration_refuses_unattributable_legacy_record_and_preserves_database_and_transcript() {
+    use std::{io::BufRead, os::unix::fs::PermissionsExt};
+    let fixture = Fixture::new();
+    std::fs::create_dir(fixture.state()).unwrap();
+    std::fs::set_permissions(fixture.state(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let dbpath = fixture.state().join("history.sqlite3");
+    let db = rusqlite::Connection::open(&dbpath).unwrap();
+    db.execute_batch("CREATE TABLE app(id INTEGER PRIMARY KEY CHECK(id=1),state TEXT NOT NULL,checkout BLOB,task TEXT NOT NULL); CREATE TABLE sessions(id TEXT PRIMARY KEY,identity TEXT NOT NULL,state TEXT NOT NULL,durable INTEGER NOT NULL DEFAULT 0,created INTEGER,sealed INTEGER NOT NULL DEFAULT 0,history_state TEXT NOT NULL DEFAULT 'retained'); CREATE TABLE requests(id TEXT PRIMARY KEY,result TEXT NOT NULL); PRAGMA user_version=3;").unwrap();
+    let id = "11111111-1111-4111-8111-111111111111";
+    let state = serde_json::json!({"adopted":null,"identity":null,"screen":"","formatted":"","rows":24,"cols":80,"output_bytes":0,"error":null,"stopped":false,"control_denied":false,"lifecycle":"Exited"});
+    db.execute(
+        "INSERT INTO sessions(id,identity,state) VALUES(?1,'unattributable label',?2)",
+        rusqlite::params![id, state.to_string()],
+    )
+    .unwrap();
+    drop(db);
+    let original_db = std::fs::read(&dbpath).unwrap();
+    let transcript = fixture.state().join(format!("{id}-00000000.transcript"));
+    std::fs::write(&transcript, b"retained original bytes\xff").unwrap();
+    let mut owner = RegistryOwner(
+        Command::new(env!("CARGO_BIN_EXE_agent-terminal"))
+            .arg("--supervisor")
+            .arg(fixture.state())
+            .spawn()
+            .unwrap(),
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let stream = loop {
+        if let Ok(stream) =
+            std::os::unix::net::UnixStream::connect(fixture.state().join("supervisor.sock"))
+        {
+            break stream;
+        }
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    let mut reader = std::io::BufReader::new(stream);
+    let mut line = String::new();
+    reader.read_line(&mut line).unwrap();
+    let failed: serde_json::Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(failed["control_denied"], true);
+    assert!(
+        failed["error"]
+            .as_str()
+            .unwrap()
+            .contains("Invalid legacy task/session identity"),
+        "{failed}"
+    );
+    owner.0.wait().unwrap();
+    assert_eq!(
+        std::fs::read(dbpath).unwrap(),
+        original_db,
+        "failed migration transaction changes no retained metadata bytes"
+    );
+    assert_eq!(
+        std::fs::read(transcript).unwrap(),
+        b"retained original bytes\xff"
+    );
+}
+
+#[test]
+fn concurrent_workspaces_keep_controls_capture_faults_and_final_flush_scoped() {
+    use std::os::unix::ffi::OsStrExt;
+    let fixture = Fixture::new();
+    assert!(
+        Command::new("git")
+            .arg("-C")
+            .arg(&fixture.repository)
+            .args([
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=fixture@example.invalid",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "fixture"
+            ])
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    let second = fixture.temp.path().join("second-worktree");
+    assert!(
+        Command::new("git")
+            .arg("-C")
+            .arg(&fixture.repository)
+            .args(["worktree", "add", "-b", "second"])
+            .arg(&second)
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    let mut dashboard = fixture.open();
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted");
+    dashboard.send(b"l");
+    dashboard.wait("fixture>");
+    dashboard.kill();
+    let mut control = Controller::connect(&fixture);
+    let a = control.greeting.clone();
+    let target_a = a["control_target"].as_str().unwrap().to_owned();
+    let id_a = a["session_identity"]["session"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let target = |owner: &str, session: &str, command: serde_json::Value| serde_json::json!({"Session":{"target":owner,"session":session,"command":command}});
+    control.request(target(
+        &target_a,
+        &id_a,
+        serde_json::json!({"Input": b"only-workspace-A\r".to_vec()}),
+    ));
+    control.request(serde_json::json!({"Adopt":second.as_os_str().as_bytes()}));
+    let wait = |control: &mut Controller, predicate: &dyn Fn(&serde_json::Value) -> bool| {
+        let deadline = Instant::now() + Duration::from_secs(8);
+        loop {
+            let state = control.request(serde_json::json!("Screen"));
+            if predicate(&state) {
+                break state;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "session condition timed out: {state}"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    };
+    wait(&mut control, &|state| {
+        state["adoption_pending"] == false && state["adopted"] == second.to_str().unwrap()
+    });
+    let b = control.request(serde_json::json!({"Launch":"concurrent-workspace-b"}));
+    assert!(b["launch_result"]["error"].is_null(), "{b}");
+    let target_b = b["control_target"].as_str().unwrap().to_owned();
+    let id_b = b["session_identity"]["session"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_ne!(target_a, target_b);
+    assert_ne!(id_a, id_b);
+    let alias = fixture.temp.path().join("alias-to-first");
+    std::os::unix::fs::symlink(&fixture.repository, &alias).unwrap();
+    control.request(serde_json::json!({"Adopt":alias.as_os_str().as_bytes()}));
+    let aliased = wait(&mut control, &|state| {
+        state["adoption_pending"] == false && state["control_target"] == target_a
+    });
+    assert_eq!(aliased["session_identity"]["session"], id_a);
+    assert_eq!(
+        aliased["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|entry| !entry["session"].is_null())
+            .count(),
+        2
+    );
+    let duplicate = control.request(serde_json::json!({"Launch":"duplicate-in-aliased-worktree"}));
+    assert_eq!(duplicate["session_identity"]["session"], id_a);
+    assert!(
+        duplicate["error"]
+            .as_str()
+            .unwrap()
+            .contains("already exists")
+    );
+    control.request(serde_json::json!({"SelectSession":target_b}));
+    control.request(target(
+        &target_b,
+        &id_b,
+        serde_json::json!({"Input": b"only-workspace-B\r".to_vec()}),
+    ));
+    wait(&mut control, &|state| {
+        state["screen"]
+            .as_str()
+            .unwrap_or("")
+            .contains("received: only-workspace-B")
+    });
+    // A's input and geometry target remain A even though B is selected.
+    control.request(target(
+        &target_a,
+        &id_a,
+        serde_json::json!({"Resize":{"rows":19,"cols":77}}),
+    ));
+    let selected_b = control.request(serde_json::json!("Screen"));
+    assert_ne!(selected_b["rows"], 19);
+    assert!(
+        !selected_b["screen"]
+            .as_str()
+            .unwrap()
+            .contains("only-workspace-A")
+    );
+    control.request(serde_json::json!({"SelectSession":target_a}));
+    let selected_a = wait(&mut control, &|state| {
+        state["rows"] == 19
+            && state["screen"]
+                .as_str()
+                .unwrap_or("")
+                .contains("received: only-workspace-A")
+    });
+    assert_eq!(selected_a["cols"], 77);
+    // A stale conversation UUID cannot stop this owner's current conversation.
+    let stale = control.request(target(
+        &target_a,
+        "00000000-0000-0000-0000-000000000000",
+        serde_json::json!("Stop"),
+    ));
+    assert_eq!(stale["lifecycle"], "Running");
+    assert!(stale["error"].as_str().unwrap().contains("Session changed"));
+    let after_automatic_resize = control.request(target(
+        &target_a,
+        &id_a,
+        serde_json::json!({"Resize":{"rows":20,"cols":78}}),
+    ));
+    assert_eq!(
+        after_automatic_resize["error"], stale["error"],
+        "background geometry must preserve the actionable refusal"
+    );
+    std::fs::write(fixture.state().join("proof-storage-session"), &id_a).unwrap();
+    std::fs::write(fixture.state().join("proof-storage-write"), "error").unwrap();
+    control.request(target(
+        &target_a,
+        &id_a,
+        serde_json::json!({"Input":b"pace17 601 15000 131072\r".to_vec()}),
+    ));
+    wait(&mut control, &|state| {
+        state["storage_error"].is_string()
+            && state["capture_pending_bytes"].as_u64().unwrap_or(0) > 0
+    });
+    control.request(serde_json::json!({"SelectSession":target_b}));
+    control.request(target(
+        &target_b,
+        &id_b,
+        serde_json::json!({"Input":b"pace17 602 15000 65536\r".to_vec()}),
+    ));
+    let flowing_b = wait(&mut control, &|state| {
+        state["durable_bytes"].as_u64().unwrap_or(0) > 8192
+    });
+    assert!(
+        flowing_b["storage_error"].is_null(),
+        "A's fault leaked into B: {flowing_b}"
+    );
+    let before_b = flowing_b["output_bytes"].as_u64().unwrap();
+    // Stopping faulted A never targets B; B still captures while A retains bytes.
+    control.request(target(&target_a, &id_a, serde_json::json!("Stop")));
+    let continuing_b = wait(&mut control, &|state| {
+        state["output_bytes"].as_u64().unwrap_or(0) > before_b + 4096
+    });
+    assert_eq!(continuing_b["lifecycle"], "Running");
+    control.request(serde_json::json!({"SelectSession":target_a}));
+    let stopped_a = wait(&mut control, &|state| state["lifecycle"] == "Stopped");
+    assert!(stopped_a["capture_pending_bytes"].as_u64().unwrap_or(0) > 0);
+    assert!(stopped_a["capture_loss_possible"].as_bool().unwrap());
+    std::fs::remove_file(fixture.state().join("proof-storage-write")).unwrap();
+    control.request(target(&target_a, &id_a, serde_json::json!("RetryStorage")));
+    let final_a = wait(&mut control, &|state| {
+        state["metadata_pending"] == false
+            && state["capture_pending_bytes"] == 0
+            && state["accepted_bytes"] == state["durable_bytes"]
+    });
+    assert_eq!(final_a["lifecycle"], "Stopped");
+    control.request(target(
+        &target_a,
+        &id_a,
+        serde_json::json!({"HistorySession":{"session":id_a,"offset":0}}),
+    ));
+    let history_a = wait(&mut control, &|state| {
+        state["history"]["text"]
+            .as_str()
+            .unwrap_or("")
+            .contains("only-workspace-A")
+    });
+    assert!(
+        !history_a["history"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("only-workspace-B")
+    );
+    control.request(serde_json::json!({"SelectSession":target_b}));
+    let after_a = control.request(serde_json::json!("Screen"));
+    assert_eq!(after_a["lifecycle"], "Running");
+    assert!(
+        after_a["durable_bytes"].as_u64().unwrap() > flowing_b["durable_bytes"].as_u64().unwrap()
+    );
+    // A new explicit conversation can start after its final capture settles;
+    // ordinary quit must stop this new child and the still-streaming B child.
+    control.request(serde_json::json!({"SelectSession":target_a}));
+    let replacement_a =
+        control.request(serde_json::json!({"Launch":"concurrent-workspace-a-next"}));
+    assert_eq!(replacement_a["lifecycle"], "Running", "{replacement_a}");
+    let pid_a = replacement_a["execution"]["pid"].as_i64().unwrap() as i32;
+    let pid_b = after_a["execution"]["pid"].as_i64().unwrap() as i32;
+    let mut state = control.request(serde_json::json!("Shutdown"));
+    let deadline = Instant::now() + Duration::from_secs(8);
+    while state["stopped"] != true {
+        assert!(
+            Instant::now() < deadline,
+            "ordinary quit did not settle every owner: {state}"
+        );
+        state = control.request(serde_json::json!("Screen"));
+    }
+    drop(control);
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while unsafe { libc::kill(pid_a, 0) } == 0 || unsafe { libc::kill(pid_b, 0) } == 0 {
+        assert!(
+            Instant::now() < deadline,
+            "ordinary quit left a fixture child alive"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[test]
+fn first_prompt_and_manual_names_preserve_workspace_and_conversation_identity() {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = Fixture::new();
+    let tools = fixture.temp.path().join("tools");
+    std::fs::create_dir(&tools).unwrap();
+    let wrapper = tools.join("claude");
+    std::fs::write(&wrapper, format!("#!/bin/sh\nprintf 'prompt-args:'\nprintf '<%s>' \"$@\"\nprintf '\\r\\n'\nexec '{}' --scripted-child\n", env!("CARGO_BIN_EXE_agent-terminal"))).unwrap();
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let path = std::env::join_paths(
+        std::iter::once(tools).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+    )
+    .unwrap();
+    let mut dashboard =
+        Dashboard::open_with_path(&fixture.repository, &fixture.state(), Some(&path));
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted:");
+    dashboard.send(b"C");
+    dashboard.wait("First prompt");
+    dashboard.send(b"\x1b[200~Cancel me\x1b[201~");
+    dashboard.send(b"\x1b");
+    std::thread::sleep(Duration::from_millis(100));
+    dashboard.kill();
+    let mut control = Controller::connect(&fixture);
+    assert!(control.greeting["identity"].is_null());
+    let workspace = control.greeting["registry"]["workspaces"][0].clone();
+    assert!(
+        workspace["name"]
+            .as_str()
+            .unwrap()
+            .starts_with("Workspace ")
+    );
+    let launched = control.request(serde_json::json!({"LaunchNative":{"request":"prompt07","agent":"Claude","prompt":"Fix unicode λ search"}}));
+    assert!(launched["launch_result"]["error"].is_null(), "{launched}");
+    assert_eq!(
+        launched["registry"]["workspaces"][0]["name"],
+        "Fix unicode λ search"
+    );
+    let native = launched["native_conversation"].clone();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let state = control.request(serde_json::json!("Screen"));
+        if state["screen"]
+            .as_str()
+            .unwrap()
+            .contains("<--><Fix unicode λ search>")
+        {
+            break;
+        }
+        assert!(Instant::now() < deadline, "{state}");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let same = control.request(serde_json::json!({"LaunchNative":{"request":"prompt07","agent":"Claude","prompt":"Duplicate must never execute"}}));
+    assert_eq!(same["identity"], launched["identity"]);
+    let renamed = control.request(serde_json::json!({"RenameWorkspace":{"workspace":workspace["id"],"name":"My manual name"}}));
+    let mut state = renamed;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while state["registry_pending"] == true {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+        state = control.request(serde_json::json!("Screen"));
+    }
+    let renamed = &state["registry"]["workspaces"][0];
+    assert_eq!(renamed["name"], "My manual name");
+    assert_eq!(renamed["id"], workspace["id"]);
+    assert_eq!(renamed["path"], workspace["path"]);
+    assert_eq!(state["native_conversation"], native);
+    assert_eq!(state["identity"], launched["identity"]);
+    let repeated = control.request(serde_json::json!({"QueryLaunch":"prompt07"}));
+    assert_eq!(
+        repeated["registry"]["workspaces"][0]["name"],
+        "My manual name"
+    );
+    control.request(serde_json::json!("Stop"));
+    control.request(serde_json::json!("Shutdown"));
+}
+
+#[test]
+fn stopped_pending_first_prompt_is_never_submitted_after_storage_recovers() {
+    let fixture = Fixture::new();
+    let mut dashboard = fixture.open();
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted:");
+    dashboard.kill();
+    let mut controller = Controller::connect(&fixture);
+    std::fs::write(fixture.state().join("proof-storage-prepare"), "stall").unwrap();
+    let launch = controller.request_now(serde_json::json!({"LaunchNative":{"request":"cancel-prompt07","agent":"Claude","prompt":"This cancelled prompt must never run"}}));
+    assert_eq!(launch["metadata_pending"], true);
+    assert!(launch["launch_result"].is_null());
+    let stopped = controller.request(serde_json::json!("Stop"));
+    assert_ne!(stopped["lifecycle"], "Running");
+    std::fs::remove_file(fixture.state().join("proof-storage-prepare")).unwrap();
+    for _ in 0..30 {
+        std::thread::sleep(Duration::from_millis(20));
+        let state = controller.request(serde_json::json!("Screen"));
+        assert_ne!(state["lifecycle"], "Running");
+        assert!(state["native_conversation"].is_null());
+        assert_eq!(state["output_bytes"], 0);
+    }
+    let query = controller.request(serde_json::json!({"QueryLaunch":"cancel-prompt07"}));
+    assert!(
+        query["launch_result"]["error"]
+            .as_str()
+            .unwrap()
+            .contains("cancelled")
+    );
+    controller.request(serde_json::json!("Shutdown"));
+}
+
+#[test]
+fn prompt_editor_and_manual_rename_are_usable_in_normal_and_small_dashboard_ptys() {
+    for (cols, rows) in [(160, 40), (60, 18)] {
+        let fixture = Fixture::new();
+        let mut dashboard = Dashboard::open_geometry(
+            &fixture.repository,
+            &fixture.state(),
+            None,
+            None,
+            rows,
+            cols,
+        );
+        dashboard.wait("Discovery complete");
+        dashboard.send(b"a");
+        dashboard.wait("Adopted:");
+        dashboard.send(b"X");
+        dashboard.wait("First prompt");
+        dashboard.send(b"\x1b[200~Fix a local workspace name\x1b[201~");
+        dashboard.wait("Fix a local workspace name");
+        if let Some(directory) = std::env::var_os("RAT_PROMPT_NAMING_EVIDENCE") {
+            let directory = PathBuf::from(directory);
+            std::fs::create_dir_all(&directory).unwrap();
+            std::fs::write(
+                directory.join(format!("prompt-editor-{cols}.txt")),
+                dashboard.screen.screen().contents(),
+            )
+            .unwrap();
+        }
+        dashboard.send(b"\x1b");
+        std::thread::sleep(Duration::from_millis(100));
+        dashboard.send(b"R");
+        dashboard.wait("Workspace name");
+        dashboard.send(b"\x15");
+        dashboard.send(b"\x1b[200~My local workspace\x1b[201~");
+        dashboard.wait("My local workspace");
+        if let Some(directory) = std::env::var_os("RAT_PROMPT_NAMING_EVIDENCE") {
+            std::fs::write(
+                PathBuf::from(directory).join(format!("rename-editor-{cols}.txt")),
+                dashboard.screen.screen().contents(),
+            )
+            .unwrap();
+        }
+        dashboard.send(b"\r");
+        std::thread::sleep(Duration::from_millis(100));
+        dashboard.kill();
+        let mut control = Controller::connect(&fixture);
+        assert!(
+            control.greeting["identity"].is_null(),
+            "cancelled prompt editor never starts coding"
+        );
+        assert_eq!(
+            control.greeting["registry"]["workspaces"][0]["name"],
+            "My local workspace"
+        );
+        control.request(serde_json::json!("Shutdown"));
+    }
+}
+
+#[test]
+fn keyboard_switches_live_workspaces_and_reconnects_in_normal_and_small_ptys() {
+    use std::os::unix::ffi::OsStrExt;
+    let fixture = Fixture::new();
+    let second = fixture.temp.path().join("second-repository");
+    std::fs::create_dir(&second).unwrap();
+    assert!(
+        Command::new("git")
+            .args(["init", "-b", "main"])
+            .arg(&second)
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    let mut dashboard = fixture.open();
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted:");
+    dashboard.send(b"l");
+    dashboard.wait("fixture>");
+    dashboard.send(b"workspace-A-visible\r");
+    dashboard.wait("received: workspace-A-visible");
+    dashboard.kill();
+    let mut control = Controller::connect(&fixture);
+    let target_a = control.greeting["control_target"].clone();
+    let id_a = control.greeting["session_identity"]["session"].clone();
+    control.request(serde_json::json!({"Adopt": second.as_os_str().as_bytes()}));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let state = control.request(serde_json::json!("Screen"));
+        if state["adoption_pending"] == false && state["adopted"] == second.to_str().unwrap() {
+            break;
+        }
+        assert!(Instant::now() < deadline, "{state}");
+    }
+    let b = control.request(serde_json::json!({"Launch":"live-ui-b"}));
+    let target_b = b["control_target"].clone();
+    let id_b = b["session_identity"]["session"].clone();
+    control.request(serde_json::json!({"Input":b"workspace-B-visible\r".to_vec()}));
+    drop(control);
+    let capture = |dashboard: &Dashboard, cols: u16, rows: u16, name: &str| {
+        if let Some(directory) = std::env::var_os("RAT_CONCURRENT_UI_EVIDENCE") {
+            let mut cells = Vec::new();
+            for row in 0..rows {
+                for col in 0..cols {
+                    let cell = dashboard.screen.screen().cell(row, col).unwrap();
+                    cells.push(serde_json::json!({"row":row,"col":col,"text":cell.contents(),"fg":format!("{:?}",cell.fgcolor()),"bg":format!("{:?}",cell.bgcolor()),"bold":cell.bold(),"wide":cell.is_wide_continuation()}));
+                }
+            }
+            let directory = PathBuf::from(directory);
+            std::fs::create_dir_all(&directory).unwrap();
+            std::fs::write(directory.join(format!("m2-06-{name}-{cols}.json")),serde_json::to_vec_pretty(&serde_json::json!({"source":"real dashboard outer PTY cells switching two scripted coding sessions; no native terminal application compatibility claim","cols":cols,"rows":rows,"cells":cells,"hide_cursor":true})).unwrap()).unwrap();
+        }
+    };
+    for (cols, rows) in [(160, 40), (60, 18)] {
+        let reconnect_deadline = Instant::now() + Duration::from_secs(8);
+        dashboard = loop {
+            let mut candidate = Dashboard::open_geometry(
+                &fixture.repository,
+                &fixture.state(),
+                None,
+                None,
+                rows,
+                cols,
+            );
+            let visible = candidate.wait_any(&[
+                "workspace-B-visible",
+                "Another dashboard controls this supervisor",
+            ]);
+            if visible.contains("workspace-B-visible") {
+                break candidate;
+            }
+            candidate.kill();
+            assert!(
+                Instant::now() < reconnect_deadline,
+                "prior controller EOF not released"
+            );
+        };
+        dashboard.send(&[0x1d]);
+        dashboard.wait("Focus: dashboard");
+        dashboard.send(b"w");
+        dashboard.wait("retained workspaces");
+        dashboard.send(b"k\r");
+        let a_screen = dashboard.wait("workspace-A-visible");
+        assert!(!a_screen.contains("workspace-B-visible"));
+        dashboard.send(b"A-after-switch\r");
+        dashboard.wait("received: A-after-switch");
+        if cols == 160 {
+            capture(&dashboard, cols, rows, "A");
+        }
+        if let Some(directory) = std::env::var_os("RAT_CONCURRENT_UI_EVIDENCE") {
+            let directory = PathBuf::from(directory);
+            std::fs::create_dir_all(&directory).unwrap();
+            std::fs::write(
+                directory.join(format!("m2-06-A-{cols}.txt")),
+                dashboard.screen.screen().contents(),
+            )
+            .unwrap();
+            std::fs::write(
+                directory.join(format!("m2-06-A-{cols}.ansi")),
+                dashboard.screen.screen().state_formatted(),
+            )
+            .unwrap();
+        }
+        dashboard.send(&[0x1d]);
+        dashboard.wait("Focus: dashboard");
+        dashboard.send(b"w");
+        dashboard.wait("retained workspaces");
+        dashboard.send(b"j\r");
+        let b_screen = dashboard.wait("workspace-B-visible");
+        assert!(!b_screen.contains("workspace-A-visible"));
+        assert!(
+            !b_screen.contains("Session changed before command delivery"),
+            "selection must wait for B's identity before automatic resize: {b_screen}"
+        );
+        if cols == 60 {
+            capture(&dashboard, cols, rows, "B");
+        }
+        if let Some(directory) = std::env::var_os("RAT_CONCURRENT_UI_EVIDENCE") {
+            let directory = PathBuf::from(directory);
+            std::fs::write(
+                directory.join(format!("m2-06-B-{cols}.txt")),
+                dashboard.screen.screen().contents(),
+            )
+            .unwrap();
+            std::fs::write(
+                directory.join(format!("m2-06-B-{cols}.ansi")),
+                dashboard.screen.screen().state_formatted(),
+            )
+            .unwrap();
+        }
+        dashboard.kill();
+        let mut control = Controller::connect(&fixture);
+        assert_eq!(control.greeting["control_target"], target_b);
+        assert_eq!(control.greeting["session_identity"]["session"], id_b);
+        let a = control.request(serde_json::json!({"SelectSession":target_a}));
+        assert_eq!(a["session_identity"]["session"], id_a);
+        assert_eq!(a["lifecycle"], "Running");
+        control.request(serde_json::json!({"SelectSession":target_b}));
+    }
+    let mut control = Controller::connect(&fixture);
+    let mut state = control.request(serde_json::json!("Shutdown"));
+    let deadline = Instant::now() + Duration::from_secs(8);
+    while state["stopped"] != true {
+        assert!(Instant::now() < deadline, "{state}");
+        state = control.request(serde_json::json!("Screen"));
+    }
+}
+
+#[test]
+fn working_diff_dashboard_inspects_and_refreshes_real_files_in_normal_and_small_ptys() {
+    let fixture = Fixture::new();
+    let git = |args: &[&str]| {
+        let result = Command::new("git")
+            .arg("-C")
+            .arg(&fixture.repository)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+    };
+    git(&["config", "user.name", "Test"]);
+    git(&["config", "user.email", "test@example.com"]);
+    std::fs::write(fixture.repository.join("zeta"), "base\n").unwrap();
+    git(&["add", "zeta"]);
+    git(&["commit", "-qm", "initial"]);
+    std::fs::write(fixture.repository.join("zeta"), "staged\n").unwrap();
+    git(&["add", "zeta"]);
+    std::fs::write(fixture.repository.join("zeta"), "unstaged\n").unwrap();
+    std::fs::write(fixture.repository.join("alpha"), "first file\n").unwrap();
+    std::fs::write(fixture.repository.join("beta"), "first response\n").unwrap();
+    for (cols, rows) in [(160, 40), (60, 18)] {
+        let mut dashboard = Dashboard::open_geometry(
+            &fixture.repository,
+            &fixture.state(),
+            None,
+            None,
+            rows,
+            cols,
+        );
+        dashboard.wait_any(&["Discovery complete", "Adopted:"]);
+        dashboard.send(b"a");
+        dashboard.wait("Adopted:");
+        dashboard.send(b"w");
+        dashboard.wait(" / Workspace ");
+        dashboard.send(b"f");
+        dashboard.wait("first file");
+        dashboard.send(b"j");
+        dashboard.wait("first response");
+        std::fs::write(
+            fixture.repository.join("beta"),
+            "agent changes while inspecting\n",
+        )
+        .unwrap();
+        dashboard.send(b"r");
+        let screen = dashboard.wait("agent changes while inspecting");
+        assert!(screen.contains("Working"), "{screen}");
+        assert!(screen.contains("Snapshot; not live"), "{screen}");
+        assert!(screen.contains("new file"), "{screen}");
+        assert!(screen.contains("r refresh"), "{screen}");
+        if cols == 160 {
+            assert!(screen.contains("Reviews"));
+        }
+        if let Some(directory) = std::env::var_os("RAT_DIFF_EVIDENCE") {
+            std::fs::create_dir_all(&directory).unwrap();
+            std::fs::write(
+                Path::new(&directory).join(format!("m2-13-working-pty-{cols}.txt")),
+                &screen,
+            )
+            .unwrap();
+            let mut cells = Vec::new();
+            for row in 0..rows {
+                for col in 0..cols {
+                    let cell = dashboard.screen.screen().cell(row, col).unwrap();
+                    cells.push(serde_json::json!({"row":row,"col":col,"text":cell.contents(),"fg":format!("{:?}",cell.fgcolor()),"bg":format!("{:?}",cell.bgcolor()),"bold":cell.bold(),"wide":cell.is_wide_continuation()}));
+                }
+            }
+            std::fs::write(Path::new(&directory).join(format!("m2-13-working-pty-{cols}.json")),serde_json::to_vec_pretty(&serde_json::json!({"source":"actual dashboard outer PTY, agent-like concurrent filesystem edits; no coding child launched","cols":cols,"rows":rows,"cells":cells,"hide_cursor":true})).unwrap()).unwrap();
+        }
+        dashboard.send(b"j");
+        dashboard.wait("Staged · HEAD to index");
+        dashboard.send(b"\x1b[6~");
+        dashboard.wait("Unstaged · index to working files");
+        dashboard.send(b"\x1b");
+        dashboard.wait("Focus: dashboard");
+        dashboard.send(b"f");
+        dashboard.wait("first file");
+        dashboard.send(b"q");
+        dashboard.child.wait().unwrap();
+        std::fs::write(fixture.repository.join("beta"), "first response\n").unwrap();
+    }
+}
+
+#[test]
+fn working_diff_jobs_are_workspace_owned_read_only_bounded_and_stop_cancellable() {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = Fixture::new();
+    let bin = fixture.temp.path().join("diff-bin");
+    std::fs::create_dir(&bin).unwrap();
+    let slow = fixture.temp.path().join("slow-diff");
+    let wrapper = bin.join("git");
+    std::fs::write(
+        &wrapper,
+        format!(
+            "#!/bin/sh\nif [ -f '{}' ]; then /bin/sleep 10; fi\nexec /usr/bin/git \"$@\"\n",
+            slow.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let mut paths = vec![bin];
+    paths.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap()));
+    let mut owner = Command::new(env!("CARGO_BIN_EXE_agent-terminal"))
+        .arg("--supervisor")
+        .arg(fixture.state())
+        .env("PATH", std::env::join_paths(paths).unwrap())
+        .spawn()
+        .unwrap();
+    struct Owner<'a>(&'a mut std::process::Child);
+    impl Drop for Owner<'_> {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    let _owner = Owner(&mut owner);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !fixture.state().join("supervisor.sock").exists() {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let mut control = Controller::connect(&fixture);
+    control.request(serde_json::json!({"Adopt":fixture.repository.as_os_str().as_encoded_bytes()}));
+    let adopted = cleanup_wait15(&mut control, |state| {
+        state["registry"]["selected"].is_string() && state["registry_pending"] == false
+    });
+    let workspace = adopted["registry"]["selected"].as_str().unwrap();
+    std::fs::write(fixture.repository.join("new\nfile"), "visible text\n").unwrap();
+    let inspect = |request: &str| serde_json::json!({"InspectWorking":{"request":request,"workspace":workspace,"selected":null}});
+    control.request(inspect("first"));
+    let snapshot = cleanup_wait15(&mut control, |state| {
+        state["working_diff"]["request"] == "first"
+    });
+    assert_eq!(snapshot["working_diff"]["workspace"], workspace);
+    assert_eq!(
+        snapshot["working_diff"]["result"]["Ok"]["files"][0]["state"],
+        "new file"
+    );
+    assert!(
+        snapshot["working_diff"]["result"]["Ok"]["content"]
+            .as_str()
+            .unwrap()
+            .contains("visible text")
+    );
+    assert!(
+        snapshot["identity"].is_null(),
+        "inspection never launches a session"
+    );
+    let target = adopted["control_target"].clone();
+    let rejected=control.request_now(serde_json::json!({"Session":{"target":target,"session":null,"command":inspect("invalid-envelope")}}));
+    assert!(
+        rejected["error"]
+            .as_str()
+            .unwrap()
+            .contains("Invalid targeted session command")
+    );
+    assert_eq!(rejected["working_diff"]["request"], "first");
+    std::fs::write(&slow, b"slow Git").unwrap();
+    let start = Instant::now();
+    control.request_now(inspect("slow"));
+    let screen = control.request_now(serde_json::json!("Screen"));
+    assert!(
+        start.elapsed() < Duration::from_millis(500),
+        "Git work blocked controller: {screen}"
+    );
+    control.request_now(inspect("busy"));
+    let busy = cleanup_wait15(&mut control, |state| {
+        state["working_diff"]["request"] == "busy"
+    });
+    assert!(
+        busy["working_diff"]["result"]["Err"]
+            .as_str()
+            .unwrap()
+            .contains("busy")
+    );
+    let start = Instant::now();
+    control.request_now(
+        serde_json::json!({"Session":{"target":target,"session":null,"command":"Stop"}}),
+    );
+    let cancelled = cleanup_wait15(&mut control, |state| {
+        state["working_diff"]["request"] == "slow"
+    });
+    assert!(
+        cancelled["working_diff"]["result"]["Err"]
+            .as_str()
+            .unwrap()
+            .contains("cancelled")
+    );
+    assert!(
+        start.elapsed() < Duration::from_secs(1),
+        "Stop waited for Git"
+    );
+    control.request(inspect("timeout"));
+    let timeout = cleanup_wait15(&mut control, |state| {
+        state["working_diff"]["request"] == "timeout"
+    });
+    assert!(
+        timeout["working_diff"]["result"]["Err"]
+            .as_str()
+            .unwrap()
+            .contains("timed out")
+    );
+    std::fs::remove_file(slow).unwrap();
+    control.request(inspect("retry"));
+    let retry = cleanup_wait15(&mut control, |state| {
+        state["working_diff"]["request"] == "retry"
+    });
+    assert!(retry["working_diff"]["result"]["Ok"].is_object());
+    control.request_now(serde_json::json!("Shutdown"));
+    cleanup_wait15(&mut control, |state| state["stopped"] == true);
+}
+
+#[test]
+fn whole_workspace_base_selection_is_durable_and_refresh_tracks_exact_local_commits() {
+    let fixture = Fixture::new();
+    let git = |args: &[&str]| {
+        let result = Command::new("git")
+            .arg("-C")
+            .arg(&fixture.repository)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        String::from_utf8_lossy(&result.stdout).trim().to_owned()
+    };
+    git(&["config", "user.name", "Test"]);
+    git(&["config", "user.email", "test@example.com"]);
+    std::fs::write(fixture.repository.join("file"), "base\n").unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-qm", "base"]);
+    let original = git(&["rev-parse", "HEAD"]);
+    git(&["branch", "base"]);
+    std::fs::write(fixture.repository.join("file"), "committed\n").unwrap();
+    git(&["commit", "-qam", "work"]);
+    let head = git(&["rev-parse", "HEAD"]);
+    let mut owner = Command::new(env!("CARGO_BIN_EXE_agent-terminal"))
+        .arg("--supervisor")
+        .arg(fixture.state())
+        .spawn()
+        .unwrap();
+    struct Owner<'a>(&'a mut std::process::Child);
+    impl Drop for Owner<'_> {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    let owner_guard = Owner(&mut owner);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !fixture.state().join("supervisor.sock").exists() {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let mut control = Controller::connect(&fixture);
+    assert_eq!(control.greeting["diff_protocol"], 2);
+    control.request(serde_json::json!({"Adopt":fixture.repository.as_os_str().as_encoded_bytes()}));
+    let adopted = cleanup_wait15(&mut control, |s| s["registry"]["selected"].is_string());
+    let workspace = adopted["registry"]["selected"].as_str().unwrap().to_owned();
+    let inspect = |request: &str, base: Option<&[u8]>| serde_json::json!({"InspectWorking":{"request":request,"workspace":workspace,"selected":null,"whole":true,"base":base}});
+    control.request(inspect("missing", None));
+    let missing = cleanup_wait15(&mut control, |s| s["working_diff"]["request"] == "missing");
+    assert!(
+        missing["working_diff"]["result"]["Err"]
+            .as_str()
+            .unwrap()
+            .contains("selected local base")
+    );
+    std::fs::write(fixture.state().join("proof-storage-registry"), b"error").unwrap();
+    control.request(inspect("failed-save", Some(b"refs/heads/base")));
+    let failed = cleanup_wait15(&mut control, |s| {
+        s["working_diff"]["request"] == "failed-save"
+    });
+    assert!(
+        failed["working_diff"]["result"]["Err"]
+            .as_str()
+            .unwrap()
+            .contains("base not saved")
+    );
+    assert!(failed["registry"]["comparison_bases"][&workspace].is_null());
+    std::fs::remove_file(fixture.state().join("proof-storage-registry")).unwrap();
+    control.request(inspect("selected", Some(b"refs/heads/base")));
+    let selected = cleanup_wait15(&mut control, |s| s["working_diff"]["request"] == "selected");
+    assert_eq!(
+        selected["registry"]["comparison_bases"][&workspace]["commit"],
+        original
+    );
+    let snapshot = &selected["working_diff"]["result"]["Ok"];
+    assert!(snapshot["content"].as_str().unwrap().contains("+committed"));
+    assert!(
+        snapshot["comparison"]
+            .as_str()
+            .unwrap()
+            .contains(&format!("HEAD {head}"))
+    );
+    assert!(
+        snapshot["save_base"].is_null(),
+        "only publish after the attributed base commit"
+    );
+    assert!(
+        selected["identity"].is_null(),
+        "inspection does not start coding"
+    );
+    control.request_now(serde_json::json!("Shutdown"));
+    cleanup_wait15(&mut control, |s| s["stopped"] == true);
+    drop(control);
+    owner_guard.0.wait().unwrap();
+    drop(owner_guard);
+    git(&["branch", "-f", "base", "HEAD"]);
+    let mut next = Command::new(env!("CARGO_BIN_EXE_agent-terminal"))
+        .arg("--supervisor")
+        .arg(fixture.state())
+        .spawn()
+        .unwrap();
+    let _guard = Owner(&mut next);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !fixture.state().join("supervisor.sock").exists() {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let mut control = Controller::connect(&fixture);
+    assert_eq!(
+        control.greeting["registry"]["comparison_bases"][&workspace]["commit"],
+        original
+    );
+    control.request(inspect("restored", None));
+    let restored = cleanup_wait15(&mut control, |s| s["working_diff"]["request"] == "restored");
+    assert!(
+        restored["working_diff"]["result"]["Ok"]["comparison"]
+            .as_str()
+            .unwrap()
+            .contains("Base moved since selection")
+    );
+    assert_eq!(
+        restored["working_diff"]["result"]["Ok"]["files"]
+            .as_array()
+            .unwrap()
+            .len(),
+        0
+    );
+    control.request_now(serde_json::json!("Shutdown"));
+    cleanup_wait15(&mut control, |s| s["stopped"] == true);
+}
+
+#[test]
+fn whole_workspace_dashboard_switches_bases_and_reopens_working_in_normal_and_small_ptys() {
+    let fixture = Fixture::new();
+    let git = |args: &[&str]| {
+        let result = Command::new("git")
+            .arg("-C")
+            .arg(&fixture.repository)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+    };
+    git(&["config", "user.name", "Test"]);
+    git(&["config", "user.email", "test@example.com"]);
+    std::fs::write(fixture.repository.join("zeta"), "base\n").unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-qm", "base"]);
+    git(&["branch", "base"]);
+    std::fs::write(fixture.repository.join("zeta"), "committed\n").unwrap();
+    git(&["commit", "-qam", "work"]);
+    std::fs::write(fixture.repository.join("zeta"), "staged\n").unwrap();
+    git(&["add", "zeta"]);
+    std::fs::write(fixture.repository.join("zeta"), "unstaged\n").unwrap();
+    std::fs::write(fixture.repository.join("alpha"), "first file\n").unwrap();
+    let capture = |dashboard: &Dashboard, cols, rows, phase: &str| {
+        if let Some(directory) = std::env::var_os("RAT_DIFF_EVIDENCE") {
+            std::fs::create_dir_all(&directory).unwrap();
+            let screen = dashboard.screen.screen().contents();
+            std::fs::write(
+                Path::new(&directory).join(format!("m2-14-whole-pty-{cols}-{phase}.txt")),
+                screen,
+            )
+            .unwrap();
+            let mut cells = Vec::new();
+            for row in 0..rows {
+                for col in 0..cols {
+                    let cell = dashboard.screen.screen().cell(row, col).unwrap();
+                    cells.push(serde_json::json!({"row":row,"col":col,"text":cell.contents(),"fg":format!("{:?}",cell.fgcolor()),"bg":format!("{:?}",cell.bgcolor()),"bold":cell.bold(),"wide":cell.is_wide_continuation()}));
+                }
+            }
+            std::fs::write(Path::new(&directory).join(format!("m2-14-whole-pty-{cols}-{phase}.json")),serde_json::to_vec_pretty(&serde_json::json!({"source":"actual dashboard outer PTY; controlled concurrent filesystem edits and local-ref movement; no coding child launched","cols":cols,"rows":rows,"cells":cells,"hide_cursor":true})).unwrap()).unwrap();
+        }
+    };
+    for (cols, rows) in [(160, 40), (60, 18)] {
+        let mut dashboard = Dashboard::open_geometry(
+            &fixture.repository,
+            &fixture.state(),
+            None,
+            None,
+            rows,
+            cols,
+        );
+        dashboard.wait_any(&["Discovery complete", "Adopted:"]);
+        dashboard.send(b"a");
+        dashboard.wait("Adopted:");
+        dashboard.send(b"w");
+        dashboard.wait(" / Workspace ");
+        dashboard.send(b"f");
+        dashboard.wait("first file");
+        dashboard.send(b"w");
+        dashboard.wait_any(&["selected local base", "Branch refs/heads/main"]);
+        dashboard.send(b"b");
+        dashboard.wait("Local base (full");
+        dashboard.send(b"refs/heads/base\r");
+        let screen = dashboard.wait("Branch refs/heads/main");
+        assert!(screen.contains("Whole workspace"), "{screen}");
+        assert!(screen.contains("Snapshot; not live"), "{screen}");
+        assert!(
+            screen.contains("w Working/Whole") || screen.contains("w Working/Whole workspace"),
+            "{screen}"
+        );
+        capture(&dashboard, cols, rows, "header");
+        dashboard.send(b"j");
+        dashboard.wait("committed + staged + unstaged");
+        dashboard.send(b"\x1b[H");
+        for _ in 0..12 {
+            dashboard.send(b"\x1b[B");
+        }
+        dashboard.wait("+unstaged");
+        capture(&dashboard, cols, rows, "patch");
+        std::fs::write(fixture.repository.join("zeta"), "agent current\n").unwrap();
+        dashboard.send(b"r");
+        dashboard.wait("+agent current");
+        git(&["branch", "-f", "base", "HEAD"]);
+        dashboard.send(b"r");
+        dashboard.send(b"\x1b[H");
+        for _ in 0..4 {
+            dashboard.send(b"\x1b[B");
+        }
+        dashboard.wait("Base moved since selection");
+        capture(&dashboard, cols, rows, "moved");
+        dashboard.send(b"\x1b");
+        dashboard.wait("Focus: dashboard");
+        dashboard.send(b"f");
+        let screen = dashboard.wait("first file");
+        assert!(screen.contains("Working"), "{screen}");
+        assert!(!screen.contains("┌ Whole workspace ·"), "{screen}");
+        dashboard.send(b"q");
+        dashboard.child.wait().unwrap();
+        std::fs::write(fixture.repository.join("zeta"), "unstaged\n").unwrap();
+        git(&["branch", "-f", "base", "HEAD~1"]);
+    }
+}
+
+#[test]
+fn creation_without_start_retains_exact_base_and_same_request_after_owner_restart() {
+    use std::os::unix::ffi::OsStrExt;
+    let fixture = Fixture::new();
+    let git = |args: &[&str]| {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(&fixture.repository)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap().trim().to_owned()
+    };
+    git(&[
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@example.invalid",
+        "commit",
+        "--allow-empty",
+        "-m",
+        "base",
+    ]);
+    let base = git(&["symbolic-ref", "--short", "HEAD"]);
+    let commit = git(&["rev-parse", "HEAD"]);
+    std::fs::write(fixture.repository.join("private"), "retain me").unwrap();
+    let original_status = git(&["status", "--porcelain"]);
+    let start = || {
+        let owner = RegistryOwner(
+            Command::new(env!("CARGO_BIN_EXE_agent-terminal"))
+                .arg("--supervisor")
+                .arg(fixture.state())
+                .spawn()
+                .unwrap(),
+        );
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !fixture.state().join("supervisor.sock").exists() {
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        owner
+    };
+    let mut owner = start();
+    let mut control = Controller::connect(&fixture);
+    control.request(serde_json::json!({"Register":fixture.repository.as_os_str().as_bytes()}));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let registered = loop {
+        let state = control.request(serde_json::json!("Screen"));
+        if state["registry_pending"] == false
+            && state["adoption_pending"] == false
+            && !state["registry"]["projects"].as_array().unwrap().is_empty()
+        {
+            break state;
+        }
+        assert!(Instant::now() < deadline, "{state}");
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    let project = registered["registry"]["projects"][0]["id"]
+        .as_str()
+        .unwrap();
+    let request = uuid::Uuid::new_v4().to_string();
+    let folder = fixture.temp.path().join("independent workspace");
+    let intent = serde_json::json!({"request":request,"project":project,"base":base,"branch":"workspace/created","path":folder.as_os_str().as_bytes(),"agent":"Codex","start":false,"prompt":"Repair the independent parser"});
+    control.request(serde_json::json!({"CreateWorkspace":intent}));
+    let deadline = Instant::now() + Duration::from_secs(8);
+    let created = loop {
+        let state = control.request(serde_json::json!("Screen"));
+        if state["creation"]["pending"] == false
+            && state["creation"]["records"]
+                .as_array()
+                .is_some_and(|r| !r.is_empty())
+        {
+            break state;
+        }
+        assert!(Instant::now() < deadline, "{state}");
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    assert_eq!(
+        created["creation"]["records"][0]["phase"], "Created",
+        "{created}"
+    );
+    assert_eq!(created["creation"]["records"][0]["commit"], commit);
+    assert_eq!(
+        created["control_target"], registered["control_target"],
+        "creation completion cannot replace newer navigation"
+    );
+    assert!(created["execution"].is_null());
+    assert!(created["launch_result"].is_null());
+    assert_eq!(
+        created["registry"]["workspaces"].as_array().unwrap().len(),
+        2
+    );
+    assert!(
+        created["registry"]["workspaces"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|w| w["name"] == "Repair the independent parser")
+    );
+    assert_eq!(git(&["status", "--porcelain"]), original_status);
+    control.request(serde_json::json!({"CreateWorkspace":intent}));
+    assert_eq!(
+        git(&["worktree", "list", "--porcelain"])
+            .matches("worktree ")
+            .count(),
+        2
+    );
+    // Git succeeds while its result acknowledgement is blocked. Losing the
+    // dashboard and cancelling before that late receipt cannot start coding.
+    std::fs::write(
+        fixture.state().join("proof-storage-creation-result"),
+        "stall",
+    )
+    .unwrap();
+    let cancelled_request = uuid::Uuid::new_v4().to_string();
+    let cancelled_folder = fixture.temp.path().join("cancelled after Git");
+    let mut cancelled_intent = intent.clone();
+    cancelled_intent["request"] = serde_json::json!(cancelled_request);
+    cancelled_intent["branch"] = serde_json::json!("workspace/cancelled");
+    cancelled_intent["path"] = serde_json::json!(cancelled_folder.as_os_str().as_bytes());
+    cancelled_intent["start"] = serde_json::json!(true);
+    control.request(serde_json::json!({"CreateWorkspace":cancelled_intent}));
+    let deadline = Instant::now() + Duration::from_secs(8);
+    while !cancelled_folder.join(".git").exists() {
+        assert!(Instant::now() < deadline);
+        let _ = control.request(serde_json::json!("Screen"));
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    drop(control);
+    let mut control = Controller::connect(&fixture);
+    control.request(serde_json::json!({"CancelCreation":{"request":cancelled_request}}));
+    std::fs::remove_file(fixture.state().join("proof-storage-creation-result")).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let cancelled = loop {
+        let state = control.request(serde_json::json!("Screen"));
+        if state["creation"]["pending"] == false {
+            break state;
+        }
+        assert!(Instant::now() < deadline, "{state}");
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    assert!(matches!(
+        cancelled["creation"]["records"][1]["phase"].as_str(),
+        Some("Created" | "Cancelled")
+    ));
+    control.request(
+        serde_json::json!({"RecoverCreation":{"request":cancelled_request,"local":false}}),
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let recovered = loop {
+        let state = control.request(serde_json::json!("Screen"));
+        if state["creation"]["pending"] == false {
+            break state;
+        }
+        assert!(Instant::now() < deadline, "{state}");
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    assert_eq!(
+        recovered["creation"]["records"][1]["phase"], "Created",
+        "{recovered}"
+    );
+    assert!(recovered["execution"].is_null());
+    assert!(cancelled["execution"].is_null());
+    assert!(cancelled_folder.join(".git").exists());
+    control.request(serde_json::json!({"CreateWorkspace":cancelled_intent}));
+    assert_eq!(
+        git(&["worktree", "list", "--porcelain"])
+            .matches("worktree ")
+            .count(),
+        3
+    );
+    // A failed intent write cannot mutate Git. Explicit same-request recovery
+    // first commits that intent, then completes the original target once.
+    std::fs::write(fixture.state().join("proof-storage-registry"), "error").unwrap();
+    let storage_request = uuid::Uuid::new_v4().to_string();
+    let storage_folder = fixture.temp.path().join("storage retry");
+    let mut storage_intent = intent.clone();
+    storage_intent["request"] = serde_json::json!(storage_request);
+    storage_intent["branch"] = serde_json::json!("workspace/storage");
+    storage_intent["path"] = serde_json::json!(storage_folder.as_os_str().as_bytes());
+    control.request(serde_json::json!({"CreateWorkspace":storage_intent}));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let state = control.request(serde_json::json!("Screen"));
+        if state["creation"]["retry_request"] == storage_request {
+            break;
+        }
+        assert!(Instant::now() < deadline, "{state}");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(!storage_folder.exists());
+    std::fs::remove_file(fixture.state().join("proof-storage-registry")).unwrap();
+    control
+        .request(serde_json::json!({"RecoverCreation":{"request":storage_request,"local":false}}));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let stored = loop {
+        let state = control.request(serde_json::json!("Screen"));
+        if state["creation"]["pending"] == false {
+            break state;
+        }
+        assert!(Instant::now() < deadline, "{state}");
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    assert_eq!(
+        stored["creation"]["records"][2]["phase"], "Created",
+        "{stored}"
+    );
+    // A fetch failure is a durable choice, not permission to silently use stale
+    // code. Moving the remote-tracking ref afterward cannot alter that receipt.
+    git(&[
+        "remote",
+        "add",
+        "origin",
+        "/nonexistent/rat-creation-remote",
+    ]);
+    git(&["update-ref", "refs/remotes/origin/main", &commit]);
+    let fallback_request = uuid::Uuid::new_v4().to_string();
+    let fallback_folder = fixture.temp.path().join("explicit local fallback");
+    let mut fallback = intent.clone();
+    fallback["request"] = serde_json::json!(fallback_request);
+    fallback["base"] = serde_json::json!("origin/main");
+    fallback["branch"] = serde_json::json!("workspace/fallback");
+    fallback["path"] = serde_json::json!(fallback_folder.as_os_str().as_bytes());
+    control.request(serde_json::json!({"CreateWorkspace":fallback}));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let failed_fetch = loop {
+        let state = control.request(serde_json::json!("Screen"));
+        if state["creation"]["pending"] == false {
+            break state;
+        }
+        assert!(Instant::now() < deadline, "{state}");
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    assert_eq!(
+        failed_fetch["creation"]["records"][3]["phase"], "LocalChoice",
+        "{failed_fetch}"
+    );
+    assert!(!fallback_folder.exists());
+    git(&[
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@example.invalid",
+        "commit",
+        "--allow-empty",
+        "-m",
+        "later",
+    ]);
+    let later = git(&["rev-parse", "HEAD"]);
+    git(&["update-ref", "refs/remotes/origin/main", &later]);
+    control
+        .request(serde_json::json!({"RecoverCreation":{"request":fallback_request,"local":true}}));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let fallback_done = loop {
+        let state = control.request(serde_json::json!("Screen"));
+        if state["creation"]["pending"] == false {
+            break state;
+        }
+        assert!(Instant::now() < deadline, "{state}");
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    assert_eq!(
+        fallback_done["creation"]["records"][3]["phase"], "Created",
+        "{fallback_done}"
+    );
+    assert_eq!(fallback_done["creation"]["records"][3]["commit"], commit);
+    assert!(fallback_done["execution"].is_null());
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut state = control.request(serde_json::json!("Shutdown"));
+    while state["stopped"] != true {
+        assert!(Instant::now() < deadline, "{state}");
+        state = control.request(serde_json::json!("Screen"));
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    drop(control);
+    owner.0.wait().unwrap();
+    let mut owner = start();
+    let mut control = Controller::connect(&fixture);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let restored = loop {
+        let state = control.request(serde_json::json!("Screen"));
+        if state["creation"]["pending"] == false {
+            break state;
+        }
+        assert!(Instant::now() < deadline);
+    };
+    assert_eq!(restored["creation"]["records"][0]["commit"], commit);
+    assert!(restored["execution"].is_null());
+    control.request(serde_json::json!({"CreateWorkspace":intent}));
+    assert_eq!(
+        git(&["worktree", "list", "--porcelain"])
+            .matches("worktree ")
+            .count(),
+        5
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut state = control.request(serde_json::json!("Shutdown"));
+    while state["stopped"] != true {
+        assert!(Instant::now() < deadline);
+        state = control.request(serde_json::json!("Screen"));
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    drop(control);
+    owner.0.wait().unwrap();
+}
+
+#[test]
+fn dashboard_create_and_start_targets_new_checkout_and_retains_failed_launch_without_duplicates() {
+    use std::os::unix::{
+        ffi::{OsStrExt, OsStringExt},
+        fs::PermissionsExt,
+    };
+    let fixture = Fixture::new();
+    let git = |args: &[&str]| {
+        let out = Command::new("/usr/bin/git")
+            .arg("-C")
+            .arg(&fixture.repository)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8(out.stdout).unwrap().trim().to_owned()
+    };
+    git(&[
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@example.invalid",
+        "commit",
+        "--allow-empty",
+        "-m",
+        "base",
+    ]);
+    let commit = git(&["rev-parse", "HEAD"]);
+    let tools = fixture.temp.path().join("tools");
+    std::fs::create_dir(&tools).unwrap();
+    for (name, path) in [("git", "/usr/bin/git"), ("ps", "/bin/ps")] {
+        std::os::unix::fs::symlink(path, tools.join(name)).unwrap();
+    }
+    let marker = fixture.temp.path().join("native-launches");
+    let wrapper = tools.join("claude");
+    std::fs::write(&wrapper,format!("#!/bin/sh\nprintf 'once\\n' >> '{}'\nprintf 'creation-cwd:%s\\r\\n' \"$PWD\"\nprintf 'creation-argv:'\nprintf '<%s>' \"$@\"\nprintf '\\r\\n'\nexec '{}' --scripted-child\n",marker.display(),env!("CARGO_BIN_EXE_agent-terminal"))).unwrap();
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let mut owner = RegistryOwner(
+        Command::new(env!("CARGO_BIN_EXE_agent-terminal"))
+            .arg("--supervisor")
+            .arg(fixture.state())
+            .env("PATH", &tools)
+            .spawn()
+            .unwrap(),
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !fixture.state().join("supervisor.sock").exists() {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let wait = |control: &mut Controller, predicate: &dyn Fn(&serde_json::Value) -> bool| {
+        let deadline = Instant::now() + Duration::from_secs(8);
+        loop {
+            let state = control.request_now(serde_json::json!("Screen"));
+            if predicate(&state) {
+                break state;
+            }
+            assert!(Instant::now() < deadline, "{state}");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    };
+    let mut control = Controller::connect(&fixture);
+    control.request(serde_json::json!({"Register":fixture.repository.as_os_str().as_bytes()}));
+    let registered = wait(&mut control, &|s| {
+        s["registry_pending"] == false
+            && s["adoption_pending"] == false
+            && !s["registry"]["projects"].as_array().unwrap().is_empty()
+    });
+    control.request(serde_json::json!({"Adopt":fixture.repository.as_os_str().as_bytes()}));
+    wait(&mut control, &|s| {
+        s["adoption_pending"] == false && s["adopted"].is_string()
+    });
+    let original = control.request(serde_json::json!({"Launch":"creation-original-running"}));
+    assert!(original["launch_result"]["error"].is_null(), "{original}");
+    let target = original["control_target"].clone();
+    drop(control);
+    let mut dashboard =
+        fixture.reopen_with_path_after_release("Process: Running", Some(tools.as_os_str()));
+    dashboard.send(&[0x1d]);
+    dashboard.wait("Focus: dashboard");
+    dashboard.send(b"N");
+    dashboard.wait("New independent workspace");
+    // No title: explicitly choose local main, retain generated branch/folder,
+    // supply an optional first prompt and choose Create and start.
+    dashboard.send(b"main\t\t\tFix lambda parser");
+    dashboard.send(&[0x13]);
+    dashboard.wait("Creation receipt");
+    dashboard.wait("Phase: Created");
+    dashboard.kill();
+    let mut control = Controller::connect(&fixture);
+    let created = wait(&mut control, &|s| {
+        s["creation"]["launches"]
+            .as_array()
+            .is_some_and(|r| r.iter().any(|r| r["result"]["identity"].is_string()))
+    });
+    assert_eq!(
+        created["control_target"], target,
+        "late creation must preserve selected running workspace"
+    );
+    assert_eq!(created["lifecycle"], "Running");
+    let receipt = created["creation"]["records"][0].clone();
+    assert_eq!(receipt["commit"], commit);
+    let request = receipt["intent"]["request"].clone();
+    let folder = PathBuf::from(std::ffi::OsString::from_vec(
+        receipt["intent"]["path"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|b| b.as_u64().unwrap() as u8)
+            .collect(),
+    ));
+    assert!(folder.starts_with(fixture.state().join("workspaces")));
+    assert!(!folder.starts_with(&fixture.repository));
+    let session = created["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["task"] == request)
+        .unwrap();
+    let new_target = session["target"].clone();
+    assert_ne!(new_target, target);
+    control.request(serde_json::json!({"CreateWorkspace":receipt["intent"]}));
+    control.request(serde_json::json!({"RecoverCreation":{"request":request,"local":false}}));
+    control.request(serde_json::json!({"SelectSession":new_target}));
+    let native = wait(&mut control, &|s| {
+        s["screen"]
+            .as_str()
+            .unwrap_or("")
+            .contains("<--><Fix lambda parser>")
+    });
+    assert!(
+        native["screen"]
+            .as_str()
+            .unwrap()
+            .contains(&format!("creation-cwd:{}", folder.display())),
+        "{native}"
+    );
+    assert_eq!(std::fs::read_to_string(&marker).unwrap(), "once\n");
+    control.request(serde_json::json!({"SelectSession":target}));
+    // Codex is deliberately absent from this owner's isolated PATH. Native exec
+    // failure must keep its completed workspace and durable original outcome.
+    let failed_request = uuid::Uuid::new_v4().to_string();
+    let failed_folder = fixture.temp.path().join("failed native workspace");
+    let mut failed = receipt["intent"].clone();
+    failed["request"] = serde_json::json!(failed_request);
+    failed["branch"] = serde_json::json!("workspace/failed-native");
+    failed["path"] = serde_json::json!(failed_folder.as_os_str().as_bytes());
+    failed["agent"] = serde_json::json!("Codex");
+    control.request(serde_json::json!({"CreateWorkspace":failed}));
+    let failure = wait(&mut control, &|s| {
+        s["creation"]["launches"].as_array().is_some_and(|r| {
+            r.iter()
+                .any(|r| r["request"] == failed_request && r["result"]["error"].is_string())
+        })
+    });
+    assert_eq!(failure["control_target"], target);
+    assert_eq!(failure["lifecycle"], "Running");
+    assert!(failed_folder.join(".git").exists());
+    assert_eq!(failure["creation"]["records"][1]["phase"], "Created");
+    control.request(serde_json::json!({"CreateWorkspace":failed}));
+    control
+        .request(serde_json::json!({"RecoverCreation":{"request":failed_request,"local":false}}));
+    assert_eq!(
+        git(&["worktree", "list", "--porcelain"])
+            .matches("worktree ")
+            .count(),
+        3
+    );
+    assert_eq!(std::fs::read_to_string(&marker).unwrap(), "once\n");
+    assert_eq!(
+        failure["registry"]["projects"],
+        registered["registry"]["projects"]
+    );
+    // An old creation receipt cannot stop a later conversation in that workspace.
+    control.request(serde_json::json!({"SelectSession":new_target}));
+    control.request_now(serde_json::json!("Stop"));
+    wait(&mut control, &|s| {
+        s["lifecycle"] == "Stopped"
+            && s["metadata_pending"] == false
+            && s["capture_pending_bytes"] == 0
+    });
+    let later = control.request(serde_json::json!({"Launch":"later-conversation-after-creation"}));
+    assert!(later["launch_result"]["error"].is_null(), "{later}");
+    let later_id = later["session_identity"]["session"].clone();
+    control.request(serde_json::json!({"CancelCreation":{"request":request,"native_session":native["session_identity"]["session"]}}));
+    let untouched = wait(&mut control, &|s| s["creation"]["pending"] == false);
+    assert_eq!(untouched["session_identity"]["session"], later_id);
+    assert_eq!(
+        untouched["lifecycle"], "Running",
+        "old receipt stopped the later conversation: {untouched}"
+    );
+    control.request(serde_json::json!({"SelectSession":target}));
+    // Checkout is durable, but its exact original native Prepare is blocked.
+    // Z's operation/session-bound request must cancel that pending launch too.
+    std::fs::write(fixture.state().join("proof-storage-prepare"), "stall").unwrap();
+    let cancel_request = uuid::Uuid::new_v4().to_string();
+    let cancel_folder = fixture.temp.path().join("cancelled native handoff");
+    let mut cancel_intent = receipt["intent"].clone();
+    cancel_intent["request"] = serde_json::json!(cancel_request);
+    cancel_intent["branch"] = serde_json::json!("workspace/cancel-handoff");
+    cancel_intent["path"] = serde_json::json!(cancel_folder.as_os_str().as_bytes());
+    control.request(serde_json::json!({"CreateWorkspace":cancel_intent}));
+    let prepared = wait(&mut control, &|s| {
+        s["creation"]["launches"].as_array().is_some_and(|r| {
+            r.iter().any(|r| {
+                r["request"] == cancel_request && r["pending"] == true && r["result"].is_null()
+            })
+        })
+    });
+    let original_native = prepared["creation"]["launches"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["request"] == cancel_request)
+        .unwrap()["session"]
+        .clone();
+    control.request(serde_json::json!({"CancelCreation":{"request":cancel_request,"native_session":original_native}}));
+    std::fs::remove_file(fixture.state().join("proof-storage-prepare")).unwrap();
+    let cancelled = wait(&mut control, &|s| {
+        s["creation"]["pending"] == false
+            && s["creation"]["launches"].as_array().is_some_and(|r| {
+                r.iter()
+                    .any(|r| r["request"] == cancel_request && r["result"]["error"].is_string())
+            })
+    });
+    assert_eq!(cancelled["control_target"], target);
+    assert_eq!(cancelled["lifecycle"], "Running");
+    assert!(cancel_folder.join(".git").exists());
+    assert_eq!(
+        std::fs::read_to_string(&marker).unwrap(),
+        "once\n",
+        "late Prepare launched cancelled native code"
+    );
+    control.request(serde_json::json!({"SelectSession":new_target}));
+    let still_later = control.request(serde_json::json!("Screen"));
+    assert_eq!(still_later["session_identity"]["session"], later_id);
+    assert_eq!(still_later["lifecycle"], "Running");
+    control.request_now(serde_json::json!("Shutdown"));
+    wait(&mut control, &|s| s["stopped"] == true);
+    drop(control);
+    owner.0.wait().unwrap();
+}
+
+#[test]
+fn configured_setup_runs_once_in_created_workspace_without_starting_coding() {
+    use std::os::unix::ffi::OsStrExt;
+    let fixture = Fixture::new();
+    assert!(
+        Command::new("git")
+            .arg("-C")
+            .arg(&fixture.repository)
+            .args([
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=fixture@example.invalid",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "base"
+            ])
+            .status()
+            .unwrap()
+            .success()
+    );
+    let _owner = RegistryOwner(
+        Command::new(env!("CARGO_BIN_EXE_agent-terminal"))
+            .arg("--supervisor")
+            .arg(fixture.state())
+            .spawn()
+            .unwrap(),
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !fixture.state().join("supervisor.sock").exists() {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let mut control = Controller::connect(&fixture);
+    control.request(serde_json::json!({"Register":fixture.repository.as_os_str().as_bytes()}));
+    let project = loop {
+        let state = control.request(serde_json::json!("Screen"));
+        if let Some(project) = state["registry"]["projects"]
+            .as_array()
+            .and_then(|p| p.first())
+        {
+            break project["id"].as_str().unwrap().to_owned();
+        }
+        assert!(Instant::now() < deadline, "{state}");
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    control.request(serde_json::json!({"ConfigureSetup":{"project":project,"command":"pwd > setup-cwd; printf x >> setup-count; printf 'setup complete'"}}));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let state = control.request(serde_json::json!("Screen"));
+        if state["registry"]["projects"][0]["setup_command"].is_string() {
+            break;
+        }
+        assert!(Instant::now() < deadline, "{state}");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let request = uuid::Uuid::new_v4().to_string();
+    let folder = fixture.temp.path().join("setup workspace");
+    control.request(serde_json::json!({"CreateWorkspace":{"request":request,"project":project,"base":"main","branch":"workspace/setup","path":folder.as_os_str().as_bytes(),"agent":"Codex","start":false,"prompt":null}}));
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let settled = loop {
+        let state = control.request(serde_json::json!("Screen"));
+        if state["setup"]["records"][0]["phase"] == "Succeeded"
+            && state["setup"]["pending"] == false
+        {
+            break state;
+        }
+        assert!(Instant::now() < deadline, "{state}");
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    assert_eq!(
+        std::fs::read_to_string(folder.join("setup-count")).unwrap(),
+        "x"
+    );
+    assert_eq!(
+        std::fs::read_to_string(folder.join("setup-cwd"))
+            .unwrap()
+            .trim(),
+        folder.to_str().unwrap()
+    );
+    assert_eq!(settled["setup"]["records"][0]["output"], "setup complete");
+    assert!(settled["execution"].is_null());
+    control.request(serde_json::json!("Shutdown"));
+}
+
+struct SetupFixture {
+    fixture: Fixture,
+    owner: RegistryOwner,
+    control: Controller,
+    project: String,
+    launches: PathBuf,
+    tools: PathBuf,
+}
+impl SetupFixture {
+    fn new(command: &str) -> Self {
+        use std::os::unix::{ffi::OsStrExt, fs::PermissionsExt};
+        let fixture = Fixture::new();
+        assert!(
+            Command::new("git")
+                .arg("-C")
+                .arg(&fixture.repository)
+                .args([
+                    "-c",
+                    "user.name=Fixture",
+                    "-c",
+                    "user.email=fixture@example.invalid",
+                    "commit",
+                    "--allow-empty",
+                    "-m",
+                    "base"
+                ])
+                .status()
+                .unwrap()
+                .success()
+        );
+        let tools = fixture.temp.path().join("tools");
+        std::fs::create_dir(&tools).unwrap();
+        let launches = fixture.temp.path().join("native-launches");
+        let wrapper = tools.join("claude");
+        std::fs::write(
+            &wrapper,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$PWD\" >> '{}'\nexec '{}' --scripted-child\n",
+                launches.display(),
+                env!("CARGO_BIN_EXE_agent-terminal")
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let owner = Self::owner(&fixture, &tools);
+        let mut control = Controller::connect(&fixture);
+        control.request(serde_json::json!({"Register":fixture.repository.as_os_str().as_bytes()}));
+        let state = setup_wait(&mut control, &|s| {
+            s["registry_pending"] == false
+                && s["registry"]["projects"]
+                    .as_array()
+                    .is_some_and(|p| !p.is_empty())
+        });
+        let project = state["registry"]["projects"][0]["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        control
+            .request(serde_json::json!({"ConfigureSetup":{"project":project,"command":command}}));
+        setup_wait(&mut control, &|s| {
+            s["registry_pending"] == false
+                && s["registry"]["projects"][0]["setup_command"] == command
+        });
+        Self {
+            fixture,
+            owner,
+            control,
+            project,
+            launches,
+            tools,
+        }
+    }
+    fn owner(fixture: &Fixture, tools: &Path) -> RegistryOwner {
+        Self::owner_boot(fixture, tools, "setup-boot-one")
+    }
+    fn owner_boot(fixture: &Fixture, tools: &Path, boot: &str) -> RegistryOwner {
+        let path = std::env::join_paths([tools, Path::new("/usr/bin"), Path::new("/bin")]).unwrap();
+        let owner = RegistryOwner(
+            Command::new(env!("CARGO_BIN_EXE_agent-terminal"))
+                .arg("--supervisor")
+                .arg(fixture.state())
+                .env("PATH", path)
+                .env("RAT_PROOF_BOOT_ID", boot)
+                .spawn()
+                .unwrap(),
+        );
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !fixture.state().join("supervisor.sock").exists() {
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        owner
+    }
+    fn restart(&mut self, boot: &str) {
+        self.owner.0.kill().unwrap();
+        self.owner.0.wait().unwrap();
+        let _ = self.control.stream.shutdown(std::net::Shutdown::Both);
+        let _ = std::fs::remove_file(self.fixture.state().join("supervisor.sock"));
+        self.owner = Self::owner_boot(&self.fixture, &self.tools, boot);
+        self.control = Controller::connect(&self.fixture);
+    }
+    fn create(&mut self, start: bool) -> (String, PathBuf) {
+        use std::os::unix::ffi::OsStrExt;
+        let request = uuid::Uuid::new_v4().to_string();
+        let folder = self
+            .fixture
+            .temp
+            .path()
+            .join(format!("workspace-{}", &request[..8]));
+        self.control.request(serde_json::json!({"CreateWorkspace":{"request":request,"project":self.project,"base":"main","branch":format!("workspace/{}",&request[..8]),"path":folder.as_os_str().as_bytes(),"agent":"Claude","start":start,"prompt":"setup fixture prompt"}}));
+        (request, folder)
+    }
+    fn phase(&mut self, phase: &str) -> serde_json::Value {
+        setup_wait(&mut self.control, &|s| {
+            s["setup"]["pending"] == false
+                && s["setup"]["records"]
+                    .as_array()
+                    .and_then(|r| r.last())
+                    .is_some_and(|r| r["phase"] == phase)
+        })
+    }
+    fn finish(mut self) {
+        self.control.request_now(serde_json::json!("Shutdown"));
+        setup_wait(&mut self.control, &|s| s["stopped"] == true);
+        self.owner.0.wait().unwrap();
+    }
+}
+fn setup_wait(
+    control: &mut Controller,
+    predicate: &dyn Fn(&serde_json::Value) -> bool,
+) -> serde_json::Value {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let state = control.request_now(serde_json::json!("Screen"));
+        if predicate(&state) {
+            return state;
+        }
+        assert!(Instant::now() < deadline, "{state}");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[test]
+fn configured_setup_failure_retry_preserves_original_start_and_native_result() {
+    let mut f = SetupFixture::new(
+        "printf x >> attempts; if [ ! -f ready ]; then touch ready; printf 'first setup failed' >&2; exit 7; fi; printf 'second setup succeeded'",
+    );
+    let (request, folder) = f.create(true);
+    let failed = f.phase("Failed");
+    assert!(!f.launches.exists());
+    assert!(
+        failed["setup"]["records"][0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("7"),
+        "{failed}"
+    );
+    assert_eq!(failed["setup"]["armed_launches"][0], request);
+    let target = failed["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["task"] == request)
+        .unwrap()["target"]
+        .clone();
+    use std::os::unix::ffi::OsStrExt;
+    let alias = f.fixture.temp.path().join("setup-alias");
+    std::os::unix::fs::symlink(&folder, &alias).unwrap();
+    f.control
+        .request(serde_json::json!({"Adopt":alias.as_os_str().as_bytes()}));
+    setup_wait(&mut f.control, &|s| {
+        s["adoption_pending"] == false && s["control_target"] == target
+    });
+    // Explicit Start cannot bypass failed setup, even through another path alias.
+    let refused=f.control.request(serde_json::json!({"Session":{"target":target,"session":null,"command":{"LaunchClaude":"bypass-setup"}}}));
+    assert!(!f.launches.exists(), "{refused}");
+    f.control.request(serde_json::json!({"ConfigureSetup":{"project":f.project,"command":"printf changed > wrong-command"}}));
+    setup_wait(&mut f.control, &|s| {
+        s["registry_pending"] == false
+            && s["registry"]["projects"][0]["setup_command"] == "printf changed > wrong-command"
+    });
+    let attempt = failed["setup"]["records"][0]["attempt"].clone();
+    f.control.request(
+        serde_json::json!({"RecoverSetup":{"attempt":attempt,"retry":true,"informed":false}}),
+    );
+    let success = f.phase("Succeeded");
+    setup_wait(&mut f.control, &|s| {
+        s["creation"]["launches"].as_array().is_some_and(|r| {
+            r.iter().any(|r| {
+                r["request"] == request
+                    && r["result"]["identity"].is_string()
+                    && r["result"]["error"].is_null()
+            })
+        })
+    });
+    let marker = f.launches.clone();
+    setup_wait(&mut f.control, &|_| marker.exists());
+    assert_eq!(
+        std::fs::read_to_string(folder.join("attempts")).unwrap(),
+        "xx"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&f.launches)
+            .unwrap()
+            .lines()
+            .collect::<Vec<_>>(),
+        vec![folder.to_str().unwrap()]
+    );
+    assert_eq!(
+        success["setup"]["records"][0]["creation"]["intent"]["start"],
+        true
+    );
+    assert_ne!(success["setup"]["records"][1]["attempt"], attempt);
+    assert_eq!(success["setup"]["records"][0]["phase"], "Failed");
+    assert!(
+        !folder.join("wrong-command").exists(),
+        "retry freezes original command despite later project edits"
+    );
+    f.finish();
+}
+
+#[test]
+fn configured_setup_continue_states_launch_effect_and_stop_disarms_it() {
+    let mut f = SetupFixture::new("printf x >> attempts; printf 'cannot configure' >&2; exit 9");
+    let (first, first_folder) = f.create(true);
+    let failed = f.phase("Failed");
+    let attempt = failed["setup"]["records"][0]["attempt"].clone();
+    assert!(
+        failed["setup"]["armed_launches"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|id| id == &first)
+    );
+    f.control.request(
+        serde_json::json!({"RecoverSetup":{"attempt":attempt,"retry":false,"informed":false}}),
+    );
+    f.phase("Skipped");
+    let marker = f.launches.clone();
+    setup_wait(&mut f.control, &|_| marker.exists());
+    assert_eq!(
+        std::fs::read_to_string(&f.launches)
+            .unwrap()
+            .lines()
+            .count(),
+        1
+    );
+    assert_eq!(
+        std::fs::read_to_string(first_folder.join("attempts")).unwrap(),
+        "x"
+    );
+    let (second, second_folder) = f.create(true);
+    let failed = f.phase("Failed");
+    let entry = failed["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["task"] == second)
+        .unwrap();
+    f.control.request(serde_json::json!({"Session":{"target":entry["target"],"session":entry["session"],"command":"Stop"}}));
+    let stopped = setup_wait(&mut f.control, &|s| {
+        !s["setup"]["armed_launches"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|id| id == &second)
+    });
+    let attempt = stopped["setup"]["records"]
+        .as_array()
+        .unwrap()
+        .last()
+        .unwrap()["attempt"]
+        .clone();
+    f.control.request(
+        serde_json::json!({"RecoverSetup":{"attempt":attempt,"retry":false,"informed":false}}),
+    );
+    f.phase("Skipped");
+    assert_eq!(
+        std::fs::read_to_string(&f.launches)
+            .unwrap()
+            .lines()
+            .count(),
+        1
+    );
+    assert_eq!(
+        std::fs::read_to_string(second_folder.join("attempts")).unwrap(),
+        "x"
+    );
+    let state = f.control.request(serde_json::json!("Screen"));
+    let first_owner = state["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["task"] == first)
+        .unwrap();
+    assert_eq!(
+        first_owner["lifecycle"], "Running",
+        "unrelated native session survives targeted setup Stop"
+    );
+    f.finish();
+}
+
+#[test]
+fn configured_setup_stop_cancels_slow_flood_and_pending_native_launch() {
+    let mut f = SetupFixture::new(
+        "echo $$ > setup-pid; printf started > setup-started; while :; do printf 'stdout flood 0123456789'; printf 'stderr flood 0123456789' >&2; done",
+    );
+    let (request, folder) = f.create(true);
+    let started = folder.join("setup-started");
+    let running = setup_wait(&mut f.control, &|s| {
+        started.exists() && s["setup"]["records"][0]["discarded"].as_u64().unwrap_or(0) > 8192
+    });
+    assert!(
+        running["setup"]["records"][0]["output"]
+            .as_str()
+            .unwrap()
+            .len()
+            <= 8192
+    );
+    let entry = running["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["task"] == request)
+        .unwrap();
+    assert_eq!(entry["reserved"], true);
+    let start = Instant::now();
+    f.control.request(serde_json::json!({"Session":{"target":entry["target"],"session":entry["session"],"command":"Stop"}}));
+    let cancelled = f.phase("Cancelled");
+    assert!(start.elapsed() < Duration::from_secs(4));
+    assert!(
+        cancelled["setup"]["armed_launches"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(!f.launches.exists());
+    let pid: i32 = std::fs::read_to_string(folder.join("setup-pid"))
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    assert_ne!(
+        unsafe { libc::kill(pid, 0) },
+        0,
+        "setup leader must be reaped"
+    );
+    f.finish();
+}
+
+#[test]
+fn configured_setup_stop_remains_responsive_at_each_stalled_receipt() {
+    for (boundary, phase, executes) in [
+        ("setup-prepare", "Prepared", false),
+        ("setup-authorize", "Authorized", false),
+        ("setup-running", "Running", true),
+        ("setup-result", "Succeeded", true),
+    ] {
+        let command = if boundary == "setup-result" {
+            "echo $$ > setup-pid; printf x >> attempts"
+        } else {
+            "echo $$ > setup-pid; printf x >> attempts; sleep 30"
+        };
+        let mut f = SetupFixture::new(command);
+        let fault = f.fixture.state().join(format!("proof-storage-{boundary}"));
+        std::fs::write(&fault, "stall").unwrap();
+        let (request, folder) = f.create(true);
+        let state = setup_wait(&mut f.control, &|s| {
+            s["setup"]["records"][0]["phase"] == phase && s["setup"]["pending"] == true
+        });
+        assert_eq!(folder.join("attempts").exists(), executes, "{boundary}");
+        let entry = state["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["task"] == request)
+            .unwrap();
+        let start = Instant::now();
+        f.control.request_now(serde_json::json!({"Session":{"target":entry["target"],"session":entry["session"],"command":"Stop"}}));
+        let stopped = setup_wait(&mut f.control, &|s| {
+            s["setup"]["armed_launches"].as_array().unwrap().is_empty()
+        });
+        assert!(
+            start.elapsed() < Duration::from_secs(1),
+            "Stop routing stalled at {boundary}: {stopped}"
+        );
+        if executes && boundary != "setup-result" {
+            let pid: i32 = std::fs::read_to_string(folder.join("setup-pid"))
+                .unwrap()
+                .trim()
+                .parse()
+                .unwrap();
+            let deadline = Instant::now() + Duration::from_secs(4);
+            while unsafe { libc::kill(pid, 0) } == 0 {
+                assert!(
+                    Instant::now() < deadline,
+                    "owned setup still alive during {boundary} storage stall"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+        assert!(!f.launches.exists());
+        std::fs::remove_file(fault).unwrap();
+        f.phase(if boundary == "setup-result" {
+            "Succeeded"
+        } else {
+            "Cancelled"
+        });
+        assert!(
+            !f.launches.exists(),
+            "late {boundary} acknowledgement cannot authorize coding"
+        );
+        if executes {
+            assert_eq!(
+                std::fs::read_to_string(folder.join("attempts")).unwrap(),
+                "x"
+            );
+        }
+        f.finish();
+    }
+}
+
+#[test]
+fn configured_setup_result_storage_repair_and_reconnect_never_replay_command() {
+    let mut f = SetupFixture::new("printf x >> attempts; printf 'effect committed'");
+    let fault = f.fixture.state().join("proof-storage-setup-result");
+    std::fs::write(&fault, "error").unwrap();
+    let (request, folder) = f.create(true);
+    let failed = setup_wait(&mut f.control, &|s| {
+        s["setup"]["error"]
+            .as_str()
+            .is_some_and(|e| e.contains("not saved"))
+    });
+    let attempt = failed["setup"]["records"][0]["attempt"].clone();
+    assert_eq!(
+        std::fs::read_to_string(folder.join("attempts")).unwrap(),
+        "x"
+    );
+    assert!(!f.launches.exists());
+    drop(f.control);
+    f.control = Controller::connect(&f.fixture);
+    let reconnect = f.control.request(serde_json::json!("Screen"));
+    assert_eq!(reconnect["setup"]["records"][0]["attempt"], attempt);
+    std::fs::remove_file(fault).unwrap();
+    f.control.request(serde_json::json!("RetryStorage"));
+    f.phase("Succeeded");
+    let marker = f.launches.clone();
+    setup_wait(&mut f.control, &|_| marker.exists());
+    let state = setup_wait(&mut f.control, &|s| {
+        s["creation"]["launches"].as_array().is_some_and(|rs| {
+            rs.iter()
+                .any(|r| r["request"] == request && !r["result"].is_null())
+        })
+    });
+    assert_eq!(state["setup"]["records"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        std::fs::read_to_string(folder.join("attempts")).unwrap(),
+        "x"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&f.launches)
+            .unwrap()
+            .lines()
+            .count(),
+        1
+    );
+    f.finish();
+}
+
+#[test]
+fn configured_setup_restart_retains_uncertain_effects_until_explicit_reconciliation_and_retry() {
+    let mut f = SetupFixture::new("echo $$ > setup-pid; printf x >> attempts");
+    let fault = f.fixture.state().join("proof-storage-setup-result");
+    std::fs::write(&fault, "stall").unwrap();
+    let (_, folder) = f.create(true);
+    let completed = setup_wait(&mut f.control, &|s| {
+        s["setup"]["records"][0]["phase"] == "Succeeded" && s["setup"]["pending"] == true
+    });
+    let attempt = completed["setup"]["records"][0]["attempt"].clone();
+    let pid: i32 = std::fs::read_to_string(folder.join("setup-pid"))
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    assert_ne!(
+        unsafe { libc::kill(pid, 0) },
+        0,
+        "known command was cleaned before receipt loss"
+    );
+    // Kill while the storage worker was still stalled. Its saved Running receipt
+    // alone cannot establish the command result on the replacement supervisor.
+    f.restart("setup-boot-one");
+    std::fs::remove_file(fault).unwrap();
+    let uncertain = f.phase("Uncertain");
+    // Setup, archive and removal receipts load independently after reconnect.
+    // Wait for admission before testing setup's semantic uncertainty rules.
+    archive_wait16(&mut f.control, |s| {
+        s["removal"]["ready"] == true && s["archive"]["status"] == "Archive operation settled"
+    });
+    assert!(
+        uncertain["setup"]["armed_launches"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(!f.launches.exists());
+    assert_eq!(
+        std::fs::read_to_string(folder.join("attempts")).unwrap(),
+        "x"
+    );
+    f.control.request(
+        serde_json::json!({"RecoverSetup":{"attempt":attempt,"retry":true,"informed":false}}),
+    );
+    let refused = f.control.request(serde_json::json!("Screen"));
+    assert!(
+        refused["setup"]["error"]
+            .as_str()
+            .unwrap()
+            .contains("uncertain")
+    );
+    f.control.request(
+        serde_json::json!({"RecoverSetup":{"attempt":attempt,"retry":true,"informed":true}}),
+    );
+    let blocked = f.phase("Uncertain");
+    assert!(
+        blocked["setup"]["records"][0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("descendants"),
+        "{blocked}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(folder.join("attempts")).unwrap(),
+        "x"
+    );
+    let quit = f.control.request_now(serde_json::json!("Shutdown"));
+    assert_eq!(
+        quit["stopped"], false,
+        "uncertain restored setup survivors cannot be acknowledged as stopped"
+    );
+    let unconfirmed = setup_wait(&mut f.control, &|s| {
+        s["setup"]["error"]
+            .as_str()
+            .is_some_and(|e| e.contains("Stop unconfirmed"))
+    });
+    assert_eq!(unconfirmed["stopped"], false);
+    // A debug proof boot change exercises reboot evidence, not a real reboot.
+    f.restart("setup-boot-two");
+    f.phase("Uncertain");
+    archive_wait16(&mut f.control, |s| {
+        s["removal"]["ready"] == true && s["archive"]["status"] == "Archive operation settled"
+    });
+    f.control.request(
+        serde_json::json!({"RecoverSetup":{"attempt":attempt,"retry":true,"informed":true}}),
+    );
+    f.phase("Failed");
+    assert_eq!(
+        std::fs::read_to_string(folder.join("attempts")).unwrap(),
+        "x",
+        "reconciliation is read-only"
+    );
+    f.control.request(
+        serde_json::json!({"RecoverSetup":{"attempt":attempt,"retry":true,"informed":true}}),
+    );
+    let retried = f.phase("Succeeded");
+    assert_eq!(retried["setup"]["records"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        std::fs::read_to_string(folder.join("attempts")).unwrap(),
+        "xx"
+    );
+    assert!(
+        !f.launches.exists(),
+        "restore/informed retry never rearms original Create and start"
+    );
+    f.finish();
+}
+
+#[test]
+fn configured_setup_dashboard_labels_continue_launch_effect_at_normal_and_small_sizes() {
+    for (cols, rows) in [(160, 40), (60, 18)] {
+        for armed in [true, false] {
+            let mut f = SetupFixture::new("printf 'configuration failed' >&2; exit 3");
+            let (request, _) = f.create(true);
+            let failed = f.phase("Failed");
+            if !armed {
+                let entry = failed["sessions"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|s| s["task"] == request)
+                    .unwrap();
+                f.control.request(serde_json::json!({"Session":{"target":entry["target"],"session":entry["session"],"command":"Stop"}}));
+                setup_wait(&mut f.control, &|s| {
+                    s["setup"]["armed_launches"].as_array().unwrap().is_empty()
+                });
+            }
+            drop(f.control);
+            let deadline = Instant::now() + Duration::from_secs(6);
+            let mut dashboard = loop {
+                let mut d = Dashboard::open_geometry(
+                    &f.fixture.repository,
+                    &f.fixture.state(),
+                    None,
+                    None,
+                    rows,
+                    cols,
+                );
+                let screen =
+                    d.wait_any(&["Setup Failed", "Another dashboard controls this supervisor"]);
+                if screen.contains("Setup Failed") {
+                    break d;
+                }
+                d.kill();
+                assert!(Instant::now() < deadline, "controller release failed");
+            };
+            dashboard.send(b"O");
+            let screen = dashboard.wait(if armed {
+                "Continue will start"
+            } else {
+                "Continue keeps coding"
+            });
+            assert!(screen.contains("Setup Failed"), "{cols}x{rows}: {screen}");
+            assert!(
+                screen.contains("Retry") && screen.contains("Continue"),
+                "{screen}"
+            );
+            if let Some(directory) = std::env::var_os("RAT_SETUP_EVIDENCE") {
+                std::fs::create_dir_all(&directory).unwrap();
+                std::fs::write(
+                    Path::new(&directory).join(format!(
+                        "m2-10-setup-{cols}x{rows}-{}.txt",
+                        if armed { "armed" } else { "stopped" }
+                    )),
+                    &screen,
+                )
+                .unwrap();
+            }
+            dashboard.send(b"Y");
+            dashboard.wait("Setup Skipped");
+            if armed {
+                let deadline = Instant::now() + Duration::from_secs(5);
+                while !f.launches.exists() {
+                    assert!(Instant::now() < deadline);
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+            }
+            dashboard.send(b"q");
+            let deadline = Instant::now() + Duration::from_secs(8);
+            while dashboard.child.try_wait().unwrap().is_none() {
+                while dashboard.output.try_recv().is_ok() {}
+                assert!(Instant::now() < deadline, "dashboard quit did not settle");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            f.owner.0.wait().unwrap();
+            if armed {
+                assert!(f.launches.exists());
+            } else {
+                assert!(!f.launches.exists());
+            }
+        }
+    }
+}
+
+#[test]
+fn configured_setup_flood_keeps_unrelated_session_capture_and_input_owned() {
+    use std::os::unix::ffi::OsStrExt;
+    let mut f = SetupFixture::new(
+        "printf setup-started; while :; do printf 'setup-output-0123456789'; done",
+    );
+    f.control
+        .request(serde_json::json!({"Adopt":f.fixture.repository.as_os_str().as_bytes()}));
+    setup_wait(&mut f.control, &|s| {
+        s["adoption_pending"] == false && s["adopted"].is_string()
+    });
+    let original = f
+        .control
+        .request(serde_json::json!({"Launch":"setup-unrelated-session"}));
+    assert!(original["launch_result"]["error"].is_null(), "{original}");
+    let target = original["control_target"].clone();
+    let session = original["session_identity"]["session"].clone();
+    f.control.request(serde_json::json!({"Session":{"target":target,"session":session,"command":{"Input":b"stream\r".to_vec()}}}));
+    let (request, _) = f.create(true);
+    let running = setup_wait(&mut f.control, &|s| {
+        s["setup"]["records"][0]["discarded"].as_u64().unwrap_or(0) > 8192
+    });
+    assert_eq!(
+        running["control_target"], target,
+        "setup cannot steal navigation"
+    );
+    let entry = running["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["task"] == request)
+        .unwrap();
+    f.control.request(serde_json::json!({"Session":{"target":entry["target"],"session":entry["session"],"command":"Stop"}}));
+    f.phase("Cancelled");
+    f.control.request(serde_json::json!({"Session":{"target":target,"session":session,"command":{"Input":b"setup-control-survived\r".to_vec()}}}));
+    let captured = setup_wait(&mut f.control, &|s| {
+        s["screen"]
+            .as_str()
+            .is_some_and(|text| text.contains("received: setup-control-survived"))
+    });
+    assert_eq!(captured["lifecycle"], "Running");
+    assert!(captured["output_bytes"].as_u64().unwrap() > 1000);
+    assert!(
+        !f.launches.exists(),
+        "cancelled setup never launches its native wrapper"
+    );
+    f.finish();
+}
+
+#[test]
+fn keyboard_retained_search_opens_exact_passage_in_normal_and_small_ptys() {
+    for (cols, rows) in [(160, 40), (60, 18)] {
+        let fixture = Fixture::new();
+        let mut dashboard = Dashboard::open_geometry(
+            &fixture.repository,
+            &fixture.state(),
+            None,
+            None,
+            rows,
+            cols,
+        );
+        dashboard.wait("Discovery complete");
+        dashboard.send(b"a");
+        dashboard.wait("Adopted");
+        dashboard.send(b"l");
+        dashboard.wait("fixture>");
+        dashboard.send(b"keyboardneedle11\r");
+        dashboard.wait("received: keyboardneedle11");
+        dashboard.send(b"exit\r");
+        dashboard.wait_any(&["Process: Exited", "Exited · Scripted"]);
+        dashboard.send(b"S");
+        dashboard.wait("History:");
+        dashboard.send(b"keyboardneedle11\r");
+        dashboard.wait("exact words");
+        dashboard.wait("keyboardneedle11");
+        // Query text and the persistent matching-rule hint can render before
+        // asynchronous results; wait for the actual retained matching row.
+        dashboard.wait("fixture> received: keyboardneedle11");
+        dashboard.send(b"\r");
+        let screen = dashboard.wait("Committed passage v1");
+        assert!(screen.contains("keyboardneedle11"), "{screen}");
+        if let Some(directory) = std::env::var_os("RAT_SEARCH_EVIDENCE") {
+            let directory = PathBuf::from(directory);
+            std::fs::create_dir_all(&directory).unwrap();
+            std::fs::write(
+                directory.join(format!("11-keyboard-passage-{cols}x{rows}.txt")),
+                &screen,
+            )
+            .unwrap();
+        }
+        assert!(!screen.contains("Focus: session"));
+        dashboard.send(b"\x1b");
+        dashboard.wait("exact words");
+        dashboard.send(b"\x1b");
+        dashboard.wait_any(&["Process: Exited", "Exited · Scripted"]);
+        dashboard.send(b"B");
+        dashboard.wait("Sessions:");
+        dashboard.wait("history retained");
+        dashboard.send(b"\r");
+        dashboard.wait("Retained history");
+        dashboard.send(b"h");
+        dashboard.wait_any(&["Process: Exited", "Exited · Scripted"]);
+        dashboard.send(b"/");
+        dashboard.wait("Workspaces:");
+        dashboard.send(b"doesnotexist11\r");
+        dashboard.wait("No results");
+        dashboard.send(b"\x1b");
+        dashboard.wait("Focus: dashboard");
+        dashboard.send(b"q");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while dashboard.child.try_wait().unwrap().is_none() {
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+}
+
+#[test]
+fn active_capture_flushes_while_retained_search_replaces_and_cancels_queries() {
+    let fixture = Fixture::new();
+    let mut dashboard = fixture.open();
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted");
+    dashboard.send(b"l");
+    dashboard.wait("fixture>");
+    dashboard.kill();
+    let mut control = Controller::connect(&fixture);
+    let target = control.greeting["control_target"].clone();
+    let session = control.greeting["session_identity"]["session"].clone();
+    let expected = control.greeting["output_bytes"].as_u64().unwrap() + 3 * (200 * 14 + 9);
+    control.request(serde_json::json!({"Input":b"stream\rstream\rstream\r".to_vec()}));
+    let started = Instant::now();
+    let mut commits = std::collections::BTreeMap::new();
+    let mut searches = 0;
+    let mut max_search_ms = 0;
+    let mut saw_hit = false;
+    loop {
+        let request = uuid::Uuid::new_v4().to_string();
+        let sent = Instant::now();
+        let mut state=control.request(serde_json::json!({"Browse":{"request":request,"mode":"History","text":"stream","after":0,"workspace":null,"passage":null,"cancel":false}}));
+        loop {
+            if let Some(values) = state["durable_commits"].as_array() {
+                for value in values {
+                    commits.insert(value["sequence"].as_u64().unwrap(), value.clone());
+                }
+            }
+            assert_eq!(state["control_target"], target);
+            assert_eq!(state["session_identity"]["session"], session);
+            if state["browse"]["request"] == request && state["browse"]["preparing"] == false {
+                break;
+            }
+            assert!(sent.elapsed() < Duration::from_secs(2));
+            state = control.request(serde_json::json!("Screen"));
+        }
+        max_search_ms = max_search_ms.max(sent.elapsed().as_millis());
+        searches += 1;
+        saw_hit |= state["browse"]["rows"]
+            .as_array()
+            .is_some_and(|rows| !rows.is_empty());
+        // Closing a browser has its own identity and cannot publish an old hit afterwards.
+        let cancel = uuid::Uuid::new_v4().to_string();
+        state=control.request(serde_json::json!({"Browse":{"request":cancel,"mode":"History","text":"","after":0,"workspace":null,"passage":null,"cancel":true}}));
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while state["browse"]["request"] != cancel {
+            assert!(Instant::now() < deadline);
+            state = control.request(serde_json::json!("Screen"));
+        }
+        assert!(state["browse"]["rows"].as_array().unwrap().is_empty());
+        if state["output_bytes"].as_u64() == Some(expected)
+            && state["durable_bytes"].as_u64() == Some(expected)
+        {
+            break;
+        }
+        assert!(started.elapsed() < Duration::from_secs(12));
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(saw_hit);
+    assert!(searches >= 20);
+    assert!(commits.len() >= 8);
+    let mut previous = None;
+    let mut max_age = 0;
+    for (sequence, commit) in &commits {
+        if let Some(previous) = previous {
+            assert_eq!(*sequence, previous + 1, "missing durable receipt");
+        }
+        previous = Some(*sequence);
+        let age = commit["oldest_accepted_micros"].as_u64().unwrap();
+        max_age = max_age.max(age);
+        assert!(age < 1_000_000, "{commit}");
+    }
+    eprintln!(
+        "ticket11 fixture: searches={searches}, max_search_ms={max_search_ms}, durable_receipts={}, max_accepted_to_durable_us={max_age}, elapsed_ms={}",
+        commits.len(),
+        started.elapsed().as_millis()
+    );
+    control.request(serde_json::json!("Shutdown"));
+}
+
+#[test]
+fn configured_setup_empty_owner_stop_follows_original_handoff_but_never_later_conversation() {
+    let mut f = SetupFixture::new("exit 1");
+    let (request, _) = f.create(true);
+    let failed = f.phase("Failed");
+    let target = failed["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["task"] == request)
+        .unwrap()["target"]
+        .clone();
+    let attempt = failed["setup"]["records"][0]["attempt"].clone();
+    f.control.request(
+        serde_json::json!({"RecoverSetup":{"attempt":attempt,"retry":false,"informed":false}}),
+    );
+    f.phase("Skipped");
+    let marker = f.launches.clone();
+    setup_wait(&mut f.control, &|_| marker.exists());
+    setup_wait(&mut f.control, &|s| {
+        s["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["target"] == target && s["lifecycle"] == "Running")
+    });
+    let live = f.control.request_now(serde_json::json!("Screen"));
+    let live_id = live["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["target"] == target)
+        .unwrap()["session"]
+        .clone();
+    f.control.request(serde_json::json!({"Session":{"target":target,"session":live_id,"command":{"QueryLaunch":"unrelated-unknown-launch"}}}));
+    let retained = f.control.request(serde_json::json!("Screen"));
+    let receipt = retained["creation"]["launches"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["request"] == request)
+        .unwrap();
+    assert_eq!(receipt["result"]["request"], request);
+    assert!(
+        receipt["result"]["error"].is_null(),
+        "unrelated query cannot replace original native launch result"
+    );
+    // This is the identity captured when setup's coding owner was still empty.
+    f.control
+        .request(serde_json::json!({"Session":{"target":target,"session":null,"command":"Stop"}}));
+    let stopped =
+        setup_wait(&mut f.control, &|s| {
+            s["sessions"].as_array().unwrap().iter().any(|s| {
+                s["target"] == target && s["lifecycle"] == "Stopped" && s["reserved"] == false
+            })
+        });
+    let original = stopped["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["target"] == target)
+        .unwrap()["session"]
+        .clone();
+    f.control.request(serde_json::json!({"Session":{"target":target,"session":original,"command":{"LaunchClaude":"setup-later-independent-chat"}}}));
+    let later = setup_wait(&mut f.control, &|s| {
+        s["sessions"].as_array().unwrap().iter().any(|s| {
+            s["target"] == target && s["lifecycle"] == "Running" && s["session"] != original
+        })
+    });
+    let later_id = later["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["target"] == target)
+        .unwrap()["session"]
+        .clone();
+    f.control
+        .request(serde_json::json!({"Session":{"target":target,"session":null,"command":"Stop"}}));
+    f.control.request(serde_json::json!({"Session":{"target":target,"session":later_id,"command":{"QueryLaunch":request}}}));
+    let state = f.control.request(serde_json::json!("Screen"));
+    let owner = state["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["target"] == target)
+        .unwrap();
+    assert_eq!(owner["session"], later_id);
+    assert_eq!(
+        owner["lifecycle"], "Running",
+        "stale setup Stop cannot signal later conversation"
+    );
+    let receipt = state["creation"]["launches"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["request"] == request)
+        .unwrap();
+    assert_eq!(receipt["result"]["request"], request);
+    assert_eq!(
+        receipt["session"], original,
+        "original native binding must remain stable after later conversation"
+    );
+    assert_eq!(
+        receipt["lifecycle"], "Stopped",
+        "later Running cannot replace original stopped process"
+    );
+    f.control.request(
+        serde_json::json!({"Session":{"target":target,"session":later_id,"command":"Stop"}}),
+    );
+    setup_wait(&mut f.control, &|s| {
+        s["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["target"] == target && s["lifecycle"] == "Stopped" && s["reserved"] == false)
+    });
+    f.restart("setup-boot-one");
+    let restored = setup_wait(&mut f.control, &|s| {
+        s["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|s| s["reserved"] == false)
+            && s["creation"]["launches"].as_array().is_some_and(|rs| {
+                rs.iter().any(|r| {
+                    r["request"] == request
+                        && r["result"]["request"] == request
+                        && r["pending"] == false
+                })
+            })
+    });
+    let receipt = restored["creation"]["launches"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["request"] == request)
+        .unwrap();
+    assert_eq!(receipt["session"], original);
+    assert_eq!(
+        receipt["lifecycle"], "Stopped",
+        "typed historical final state survives restart without borrowing later lifecycle"
+    );
+    assert!(
+        !restored["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["session"] == original),
+        "historical receipt must not allocate an old runtime owner"
+    );
+    let selected = restored["control_target"].clone();
+    let observation = f.control.request(serde_json::json!("Screen"));
+    assert_eq!(
+        observation["control_target"], selected,
+        "receipt projection never changes selection"
+    );
+    assert!(
+        observation["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|s| s["reserved"] == false),
+        "read-only receipts create no execution/capture reservation"
+    );
+    f.finish();
+}
+
+#[test]
+fn selected_resume_uses_original_segment_tool_and_native_identity() {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = Fixture::new();
+    let tools = fixture.temp.path().join("selected-tools");
+    std::fs::create_dir(&tools).unwrap();
+    let python = Command::new("which").arg("python3").output().unwrap();
+    let python = String::from_utf8(python.stdout).unwrap();
+    let script = r#"import sys,os,json,re,shlex,subprocess,uuid
+args=sys.argv[1:]
+tool=os.path.basename(sys.argv[0])
+resumed=('resume' in args or '--resume' in args)
+if resumed: native=args[args.index('resume' if tool=='codex' else '--resume')+1]
+elif tool=='claude': native=args[args.index('--session-id')+1]
+else: native=str(uuid.uuid4())
+with open(sys.argv[0]+'.argv','a') as f: f.write(json.dumps({'args':args,'native':native,'cwd':os.getcwd()})+'\n')
+if tool=='codex':
+ for arg in args:
+  if arg.startswith('hooks.SessionStart='):
+   helper=json.loads(re.search(r'command=("(?:[^"\\]|\\.)*")',arg).group(1))
+   subprocess.run(shlex.split(helper),input=json.dumps({'hook_event_name':'SessionStart','session_id':native}).encode(),check=True)
+print('selected-native-ready',flush=True)
+for line in sys.stdin:
+ if line.strip()=='exit': break
+ print('context '+line.strip(),flush=True)
+"#;
+    for tool in ["claude", "codex"] {
+        let file = tools.join(tool);
+        std::fs::write(&file, format!("#!{}\n{script}", python.trim())).unwrap();
+        std::fs::set_permissions(file, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let path = std::env::join_paths(
+        std::iter::once(tools.clone())
+            .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+    )
+    .unwrap();
+    let mut dashboard =
+        Dashboard::open_with_path(&fixture.repository, &fixture.state(), Some(&path));
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted");
+    dashboard.kill();
+    let mut control = Controller::connect(&fixture);
+    std::fs::write(fixture.repository.join("tracked"), "initial").unwrap();
+    assert!(
+        Command::new("git")
+            .arg("-C")
+            .arg(&fixture.repository)
+            .args(["add", "tracked"])
+            .status()
+            .unwrap()
+            .success()
+    );
+    assert!(
+        Command::new("git")
+            .arg("-C")
+            .arg(&fixture.repository)
+            .args([
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=fixture@example.invalid",
+                "commit",
+                "-m",
+                "initial"
+            ])
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    std::fs::write(fixture.repository.join("tracked"), "staged").unwrap();
+    assert!(
+        Command::new("git")
+            .arg("-C")
+            .arg(&fixture.repository)
+            .args(["add", "tracked"])
+            .status()
+            .unwrap()
+            .success()
+    );
+    std::fs::write(fixture.repository.join("tracked"), "unstaged").unwrap();
+    std::fs::write(fixture.repository.join("untracked"), "unsaved").unwrap();
+    let git = |args: &[&str]| {
+        Command::new("git")
+            .arg("-C")
+            .arg(&fixture.repository)
+            .args(args)
+            .output()
+            .unwrap()
+            .stdout
+    };
+    let head = git(&["rev-parse", "HEAD"]);
+    let dirty = git(&["status", "--porcelain=v1"]);
+    let staged = git(&["diff", "--cached"]);
+    let working = git(&["diff"]);
+    let mut originals = Vec::new();
+    for (n, tool) in ["LaunchClaude", "LaunchCodex", "LaunchClaude"]
+        .into_iter()
+        .enumerate()
+    {
+        control.request(serde_json::json!({tool: format!("selected-original-{n}")}));
+        let running = cleanup_wait15(&mut control, |s| {
+            s["lifecycle"] == "Running"
+                && s["native_conversation"].is_string()
+                && s["screen"]
+                    .as_str()
+                    .unwrap_or("")
+                    .contains("selected-native-ready")
+        });
+        originals.push((
+            running["session_identity"]["session"]
+                .as_str()
+                .unwrap()
+                .to_owned(),
+            running["native_conversation"].clone(),
+            running["agent"].clone(),
+        ));
+        control.request(serde_json::json!({"Input":b"exit\r"}));
+        cleanup_wait15(&mut control, |s| {
+            s["lifecycle"] == "Exited" && s["metadata_pending"] == false
+        });
+        let deadline = Instant::now() + Duration::from_secs(8);
+        while cleanup_page15(&mut control)["cleanup"]["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["eligible"] != true)
+        {
+            assert!(Instant::now() < deadline);
+        }
+    }
+    let state = control.request(serde_json::json!("Screen"));
+    let workspace = state["registry"]["workspaces"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    control.request(serde_json::json!({"HistorySession":{"session":originals[1].0,"offset":0}}));
+    let original_history = cleanup_wait15(&mut control, |state| {
+        state["history"]["session"] == originals[1].0
+    })["history"]["text"]
+        .clone();
+    control.request(serde_json::json!({"ResumeSelected":{"request":"wrong-workspace","workspace":workspace,"session":uuid::Uuid::new_v4().to_string()}}));
+    let missing = cleanup_wait15(&mut control, |s| {
+        s["error"].as_str().unwrap_or("").contains("unavailable")
+    });
+    assert_eq!(missing["session_identity"], state["session_identity"]);
+    let pause = fixture.state().join("proof-storage-resume");
+    std::fs::write(&pause, "stall").unwrap();
+    control.request(serde_json::json!({"ResumeSelected":{"request":"cancelled-choice","workspace":workspace,"session":originals[0].0}}));
+    drop(control);
+    let mut control = Controller::connect(&fixture);
+    assert_eq!(control.greeting["launch_request"], "cancelled-choice");
+    assert_eq!(control.greeting["metadata_pending"], true);
+    control.request_now(serde_json::json!({"QueryLaunch":"cancelled-choice"}));
+    let stopped = control.request(serde_json::json!("Stop"));
+    assert_eq!(stopped["session_identity"], state["session_identity"]);
+    std::fs::remove_file(pause).unwrap();
+    cleanup_wait15(&mut control, |s| s["metadata_pending"] == false);
+    control.request(serde_json::json!({"ResumeSelected":{"request":"cancelled-choice","workspace":workspace,"session":originals[0].0}}));
+    let cancelled = cleanup_wait15(&mut control, |s| {
+        s["error"].as_str().unwrap_or("").contains("cancelled")
+    });
+    assert_eq!(cancelled["session_identity"], state["session_identity"]);
+    for (n, index) in [1usize, 0, 2, 1].into_iter().enumerate() {
+        let (source, native, agent) = &originals[index];
+        let request = format!("selected-resume-{n}");
+        let prepare_pause = fixture.state().join("proof-storage-prepare");
+        if n == 0 {
+            std::fs::write(&prepare_pause, "stall").unwrap();
+        }
+        control.request(serde_json::json!({"ResumeSelected":{"request":request,"workspace":workspace,"session":source}}));
+        if n == 0 {
+            let prepared = cleanup_wait15(&mut control, |s| {
+                s["session_identity"]["session"]
+                    .as_str()
+                    .is_some_and(|id| id != state["session_identity"]["session"].as_str().unwrap())
+            });
+            assert_eq!(&prepared["native_conversation"], native);
+            assert_eq!(&prepared["agent"], agent);
+            assert_eq!(prepared["metadata_pending"], true);
+            let replay=control.request(serde_json::json!({"ResumeSelected":{"request":request,"workspace":workspace,"session":originals[0].0}}));
+            assert_eq!(replay["session_identity"], prepared["session_identity"]);
+            assert_eq!(
+                replay["native_conversation"],
+                prepared["native_conversation"]
+            );
+            std::fs::remove_file(prepare_pause).unwrap();
+        }
+        let running = cleanup_wait15(&mut control, |s| {
+            s["lifecycle"] == "Running" && s["metadata_pending"] == false
+        });
+        assert_eq!(&running["native_conversation"], native);
+        assert_eq!(&running["agent"], agent);
+        assert_ne!(
+            running["session_identity"]["session"].as_str().unwrap(),
+            source
+        );
+        assert_eq!(
+            running["session_identity"]["task"],
+            state["session_identity"]["task"]
+        );
+        let occupied=control.request(serde_json::json!({"ResumeSelected":{"request":format!("occupied-{n}"),"workspace":workspace,"session":originals[2].0}}));
+        assert_eq!(occupied["session_identity"], running["session_identity"]);
+        assert!(occupied["error"].as_str().unwrap().contains("attach"));
+        // A changed source with the same request returns the recorded execution.
+        let replay=control.request(serde_json::json!({"ResumeSelected":{"request":request,"workspace":workspace,"session":originals[2].0}}));
+        assert_eq!(replay["session_identity"], running["session_identity"]);
+        control.request(serde_json::json!({"Input":b"exit\r"}));
+        cleanup_wait15(&mut control, |s| {
+            s["lifecycle"] == "Exited" && s["metadata_pending"] == false
+        });
+        let deadline = Instant::now() + Duration::from_secs(8);
+        while cleanup_page15(&mut control)["cleanup"]["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["eligible"] != true)
+        {
+            assert!(Instant::now() < deadline);
+        }
+    }
+    for tool in ["claude", "codex"] {
+        let log = std::fs::read_to_string(tools.join(format!("{tool}.argv"))).unwrap();
+        let records = log
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(records.len(), if tool == "claude" { 4 } else { 3 });
+        for record in records {
+            assert_eq!(record["cwd"], fixture.repository.to_str().unwrap());
+            let args = record["args"].as_array().unwrap();
+            if args.iter().any(|v| v == "resume" || v == "--resume") {
+                assert!(!args.iter().any(|v| v == "--session-id" || v == "--"));
+            }
+        }
+    }
+    control.request(serde_json::json!({"HistorySession":{"session":originals[1].0,"offset":0}}));
+    let retained = cleanup_wait15(&mut control, |s| s["history"]["session"] == originals[1].0);
+    assert_eq!(retained["history"]["text"], original_history);
+    assert_eq!(git(&["rev-parse", "HEAD"]), head);
+    assert_eq!(git(&["status", "--porcelain=v1"]), dirty);
+    assert_eq!(git(&["diff", "--cached"]), staged);
+    assert_eq!(git(&["diff"]), working);
+    assert_eq!(
+        std::fs::read(fixture.repository.join("untracked")).unwrap(),
+        b"unsaved"
+    );
+    let unavailable = fixture.temp.path().join("temporarily unavailable checkout");
+    std::fs::rename(&fixture.repository, &unavailable).unwrap();
+    control.request(serde_json::json!({"ResumeSelected":{"request":"checkout-unavailable","workspace":workspace,"session":originals[0].0}}));
+    let missing_checkout = cleanup_wait15(&mut control, |s| {
+        s["error"]
+            .as_str()
+            .unwrap_or("")
+            .contains("Checkout unavailable")
+            && s["metadata_pending"] == false
+    });
+    assert!(missing_checkout["execution"].is_null());
+    control.request(serde_json::json!({"HistorySession":{"session":originals[1].0,"offset":0}}));
+    let readable = cleanup_wait15(&mut control, |s| s["history"]["session"] == originals[1].0);
+    assert_eq!(readable["history"]["text"], original_history);
+    std::fs::rename(unavailable, &fixture.repository).unwrap();
+    // Missing native records and unsupported resume versions are native failures,
+    // retained in the attempted new segment; neither starts another conversation.
+    std::fs::write(tools.join("claude"),format!("#!{}\nimport sys\nprint('native conversation unavailable / unsupported resume version',flush=True)\nsys.exit(7)\n",python.trim())).unwrap();
+    control.request(serde_json::json!({"ResumeSelected":{"request":"native-record-unavailable","workspace":workspace,"session":originals[0].0}}));
+    let failed = cleanup_wait15(&mut control, |s| {
+        s["lifecycle"] == "Failed" && s["metadata_pending"] == false
+    });
+    assert_eq!(failed["native_conversation"], originals[0].1);
+    assert_eq!(failed["process_exit"]["code"], 7);
+    assert!(
+        failed["screen"]
+            .as_str()
+            .unwrap()
+            .contains("native conversation unavailable")
+    );
+    assert_ne!(failed["session_identity"]["session"], originals[0].0);
+    for _ in 0..5 {
+        assert_eq!(
+            control.request(serde_json::json!("Screen"))["session_identity"],
+            failed["session_identity"]
+        );
+    }
+    assert_no_owned_coding(&fixture);
+    control.request(serde_json::json!("Shutdown"));
+    cleanup_wait15(&mut control, |s| s["stopped"] == true);
+}
+
+#[test]
+fn configured_setup_creation_to_first_receipt_crash_retains_explicit_setup_choice() {
+    let mut f = SetupFixture::new("printf x >> attempts");
+    let fault = f.fixture.state().join("proof-storage-setup-prepare");
+    std::fs::write(&fault, "error").unwrap();
+    let (request, folder) = f.create(true);
+    let first = setup_wait(&mut f.control, &|s| {
+        s["setup"]["error"]
+            .as_str()
+            .is_some_and(|e| e.contains("not saved"))
+    });
+    assert!(!folder.join("attempts").exists());
+    assert!(!f.launches.exists());
+    let original = first["creation"]["records"][0]["intent"].clone();
+    f.control.request(serde_json::json!({"ConfigureSetup":{"project":f.project,"command":"printf changed > wrong-command"}}));
+    setup_wait(&mut f.control, &|s| {
+        s["registry_pending"] == false
+            && s["registry"]["projects"][0]["setup_command"] == "printf changed > wrong-command"
+    });
+    let duplicate = f
+        .control
+        .request(serde_json::json!({"CreateWorkspace":original}));
+    assert!(
+        duplicate["creation"]["error"].is_null(),
+        "same-request replay compares original client intent, not a changed private setup policy: {duplicate}"
+    );
+    assert_eq!(duplicate["creation"]["records"][0]["intent"], original);
+    std::fs::remove_file(fault).unwrap();
+    f.restart("setup-boot-one");
+    let restored = f.phase("Failed");
+    assert!(
+        restored["setup"]["records"][0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("never started")
+    );
+    assert!(
+        restored["setup"]["armed_launches"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    f.control
+        .request(serde_json::json!({"Adopt":folder.as_os_str().as_encoded_bytes()}));
+    let adopted = setup_wait(&mut f.control, &|s| {
+        s["adoption_pending"] == false && s["adopted"].is_string()
+    });
+    f.control.request(serde_json::json!({"Session":{"target":adopted["control_target"],"session":null,"command":{"LaunchClaude":"crash-gap-bypass"}}}));
+    assert!(!f.launches.exists());
+    assert!(!folder.join("attempts").exists());
+    let attempt = restored["setup"]["records"][0]["attempt"].clone();
+    f.control.request(
+        serde_json::json!({"RecoverSetup":{"attempt":attempt,"retry":true,"informed":false}}),
+    );
+    let done = f.phase("Succeeded");
+    assert_eq!(
+        done["setup"]["records"][0]["creation"]["intent"]["request"],
+        request
+    );
+    assert_eq!(
+        std::fs::read_to_string(folder.join("attempts")).unwrap(),
+        "x"
+    );
+    assert!(
+        !folder.join("wrong-command").exists(),
+        "restored setup obligation keeps original project policy"
+    );
+    assert!(
+        !f.launches.exists(),
+        "explicit setup retry after restore never implies Start"
+    );
+    f.finish();
+}
+
+fn archive_git16(repository: &Path, args: &[&str]) -> String {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repository)
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap().trim().to_owned()
+}
+fn archive_repo16(fixture: &Fixture) {
+    archive_git16(
+        &fixture.repository,
+        &["config", "user.name", "Archive fixture"],
+    );
+    archive_git16(
+        &fixture.repository,
+        &["config", "user.email", "archive@example.invalid"],
+    );
+    std::fs::write(fixture.repository.join("tracked"), "base\n").unwrap();
+    std::fs::write(fixture.repository.join(".gitignore"), "ignored\n").unwrap();
+    archive_git16(&fixture.repository, &["add", "."]);
+    archive_git16(&fixture.repository, &["commit", "-qm", "base"]);
+}
+fn archive_wait16(
+    control: &mut Controller,
+    predicate: impl Fn(&serde_json::Value) -> bool,
+) -> serde_json::Value {
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        let state = control.request_now(serde_json::json!("Screen"));
+        if predicate(&state) {
+            return state;
+        }
+        assert!(Instant::now() < deadline, "Archive did not settle: {state}");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+#[test]
+fn archive_stops_capture_saves_index_and_files_pins_code_after_history_deletion_and_replays_receipt()
+ {
+    let fixture = Fixture::new();
+    archive_repo16(&fixture);
+    let mut dashboard = fixture.open();
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted");
+    dashboard.send(b"l");
+    dashboard.wait("fixture>");
+    dashboard.kill();
+    let mut control = Controller::connect(&fixture);
+    let workspace = control.greeting["registry"]["selected"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let history = control.greeting["session_identity"]["session"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let before = archive_git16(&fixture.repository, &["rev-parse", "HEAD"]);
+    std::fs::write(fixture.repository.join("tracked"), "staged-only\n").unwrap();
+    archive_git16(&fixture.repository, &["add", "tracked"]);
+    std::fs::write(fixture.repository.join("tracked"), "working\n").unwrap();
+    std::fs::write(fixture.repository.join("new"), "new\n").unwrap();
+    std::fs::write(fixture.repository.join("ignored"), "private\n").unwrap();
+    // A final capture tail must settle before Git save, not just the stopped label.
+    control.request_now(serde_json::json!({"Input":b"stream\r".to_vec()}));
+    let request = uuid::Uuid::new_v4().to_string();
+    control.send(serde_json::json!({"Archive":{"workspace":workspace,"request":request}}));
+    // Drop the transport without reading the action acknowledgement.
+    drop(control);
+    let mut control = Controller::connect(&fixture);
+    let archived = archive_wait16(&mut control, |s| {
+        s["registry"]["archived"]
+            .as_array()
+            .is_some_and(|ids| ids.contains(&serde_json::json!(workspace)))
+    });
+    assert_eq!(archived["lifecycle"], "Stopped");
+    assert_eq!(archived["capture_pending_bytes"], 0);
+    let checkpoint = archive_git16(&fixture.repository, &["rev-parse", "HEAD"]);
+    assert_ne!(checkpoint, before);
+    assert_eq!(
+        archive_git16(&fixture.repository, &["show", "HEAD:tracked"]),
+        "working"
+    );
+    assert_eq!(
+        archive_git16(&fixture.repository, &["show", "HEAD:new"]),
+        "new"
+    );
+    let reference = format!("refs/rat/archive/{workspace}/{request}");
+    assert_eq!(
+        archive_git16(
+            &fixture.repository,
+            &["show", &format!("{reference}-index:tracked")]
+        ),
+        "staged-only"
+    );
+    assert_eq!(
+        archive_git16(&fixture.repository, &["status", "--porcelain"]),
+        ""
+    );
+    assert_eq!(
+        std::fs::read_to_string(fixture.repository.join("ignored")).unwrap(),
+        "private\n"
+    );
+    control.request_now(serde_json::json!({"Archive":{"workspace":workspace,"request":request}}));
+    archive_wait16(&mut control, |s| s["archive"]["pending"] == false);
+    assert_eq!(
+        archive_git16(&fixture.repository, &["rev-parse", "HEAD"]),
+        checkpoint
+    );
+    let blocked = control.request_now(serde_json::json!({"Launch":"archive-must-block"}));
+    assert!(
+        blocked["error"].as_str().unwrap().contains("archive"),
+        "{blocked}"
+    );
+    control.request_now(serde_json::json!({"DeleteHistory":{"id":history}}));
+    archive_wait16(&mut control, |s| {
+        s["cleanup_message"]
+            .as_str()
+            .is_some_and(|m| m.contains("deletion completed"))
+    });
+    archive_git16(
+        &fixture.repository,
+        &["reflog", "expire", "--expire=now", "--all"],
+    );
+    archive_git16(&fixture.repository, &["gc", "--prune=now"]);
+    assert_eq!(
+        archive_git16(&fixture.repository, &["rev-parse", &reference]),
+        checkpoint
+    );
+    control.request_now(serde_json::json!({"Unarchive":{"workspace":workspace,"request":request}}));
+    let returned = archive_wait16(&mut control, |s| {
+        s["registry"]["archived"]
+            .as_array()
+            .is_some_and(Vec::is_empty)
+    });
+    assert_eq!(returned["lifecycle"], "Stopped");
+    assert_eq!(returned["session_identity"]["session"], history);
+    control.request_now(serde_json::json!("Shutdown"));
+    archive_wait16(&mut control, |s| s["stopped"] == true);
+}
+
+#[test]
+fn archive_storage_result_failure_keeps_workspace_visible_and_retry_reconciles_checkpoint() {
+    let fixture = Fixture::new();
+    archive_repo16(&fixture);
+    let mut dashboard = fixture.open();
+    dashboard.wait("Discovery complete");
+    dashboard.send(b"a");
+    dashboard.wait("Adopted");
+    dashboard.kill();
+    let mut control = Controller::connect(&fixture);
+    let workspace = control.greeting["registry"]["selected"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    std::fs::write(fixture.repository.join("new"), "saved once\n").unwrap();
+    let fault = fixture.state().join("proof-storage-archive-result");
+    std::fs::write(&fault, "error").unwrap();
+    let request = uuid::Uuid::new_v4().to_string();
+    control.request_now(serde_json::json!({"Archive":{"workspace":workspace,"request":request}}));
+    let failed = archive_wait16(&mut control, |s| {
+        s["archive"]["error"]
+            .as_str()
+            .is_some_and(|m| m.contains("metadata not saved"))
+    });
+    assert!(
+        failed["registry"]["archived"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    let saved = archive_git16(&fixture.repository, &["rev-parse", "HEAD"]);
+    assert_eq!(
+        archive_git16(&fixture.repository, &["show", "HEAD:new"]),
+        "saved once"
+    );
+    std::fs::remove_file(fault).unwrap();
+    control.request_now(
+        serde_json::json!({"CancelArchive":{"workspace":workspace,"request":request}}),
+    );
+    archive_wait16(&mut control, |s| {
+        s["archive"]["pending"] == false
+            && s["archive"]["records"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|r| r["request"] == request && r["phase"] == "Cancelled")
+    });
+
+    control.request_now(serde_json::json!({"Archive":{"workspace":workspace,"request":request}}));
+    archive_wait16(&mut control, |s| {
+        s["registry"]["archived"]
+            .as_array()
+            .is_some_and(|ids| !ids.is_empty())
+    });
+    assert_eq!(
+        archive_git16(&fixture.repository, &["rev-parse", "HEAD"]),
+        saved
+    );
+    control.request_now(serde_json::json!("Shutdown"));
+    archive_wait16(&mut control, |s| s["stopped"] == true);
+}
+
+#[test]
+fn archive_keyboard_preview_receipt_and_return_are_usable_in_normal_and_small_layouts() {
+    let fixture = Fixture::new();
+    archive_repo16(&fixture);
+    for (cols, rows) in [(160, 40), (60, 18)] {
+        let mut dashboard = Dashboard::open_geometry(
+            &fixture.repository,
+            &fixture.state(),
+            None,
+            None,
+            rows,
+            cols,
+        );
+        dashboard.wait_any(&["Discovery complete", "Adopted:"]);
+        if cols == 160 {
+            dashboard.send(b"a");
+            dashboard.wait("Adopted");
+        }
+        dashboard.send(b"K");
+        dashboard.wait("Stop, save and archive");
+        dashboard.wait("Delete local branch on archive: off");
+        dashboard.wait("Target: refs/heads/main");
+        dashboard.send(b"b");
+        dashboard.wait("Delete local branch on archive: on");
+        if let Some(dir) = std::env::var_os("RAT_ARCHIVE_EVIDENCE") {
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(
+                Path::new(&dir).join(format!("archive-{cols}-preview.txt")),
+                dashboard.screen.screen().contents(),
+            )
+            .unwrap();
+        }
+        dashboard.send(b"\r");
+        dashboard.wait("Clean HEAD retained");
+        dashboard.wait("saved locally, not pushed");
+        dashboard.wait("Branch retained; cleanup incomplete");
+        if let Some(dir) = std::env::var_os("RAT_ARCHIVE_EVIDENCE") {
+            std::fs::write(
+                Path::new(&dir).join(format!("archive-{cols}-receipt.txt")),
+                dashboard.screen.screen().contents(),
+            )
+            .unwrap();
+        }
+        dashboard.send(b"\r");
+        let deadline = Instant::now() + Duration::from_secs(8);
+        loop {
+            let screen = dashboard.screen.screen().contents();
+            if !screen.contains("Archived · Enter") && !screen.contains("Clean HEAD retained") {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "Restore did not return dashboard: {screen}"
+            );
+            if let Ok(bytes) = dashboard.output.recv_timeout(Duration::from_millis(40)) {
+                dashboard.screen.process(&bytes);
+            }
+        }
+        if let Some(dir) = std::env::var_os("RAT_ARCHIVE_EVIDENCE") {
+            std::fs::write(
+                Path::new(&dir).join(format!("archive-{cols}-returned.txt")),
+                dashboard.screen.screen().contents(),
+            )
+            .unwrap();
+        }
+        dashboard.send(b"K");
+        dashboard.wait("Stop, save and archive");
+        dashboard.send(b"\x1b");
+        dashboard.send(b"q");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while dashboard.child.try_wait().unwrap().is_none() {
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+}
+
+#[test]
+fn archive_cancels_owned_setup_handoff_and_keeps_unrelated_live_work_intact() {
+    use std::os::unix::ffi::OsStrExt;
+    let mut f =
+        SetupFixture::new("printf 'setup tail'; echo $$ > setup-pid; while :; do sleep 1; done");
+    archive_git16(
+        &f.fixture.repository,
+        &["config", "user.name", "Archive fixture"],
+    );
+    archive_git16(
+        &f.fixture.repository,
+        &["config", "user.email", "archive@example.invalid"],
+    );
+    f.control
+        .request_now(serde_json::json!({"Adopt":f.fixture.repository.as_os_str().as_bytes()}));
+    archive_wait16(&mut f.control, |s| {
+        s["adoption_pending"] == false && s["adopted"].is_string()
+    });
+    let running = f
+        .control
+        .request(serde_json::json!({"Launch":"archive-unrelated-session"}));
+    let target = running["control_target"].clone();
+    let session = running["session_identity"]["session"].clone();
+    let (creation, folder) = f.create(true);
+    let setup = archive_wait16(&mut f.control, |s| {
+        s["setup"]["records"][0]["phase"] == "Running"
+    });
+    let workspace = setup["registry"]["workspaces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|w| w["task"] == creation)
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let request = uuid::Uuid::new_v4().to_string();
+    f.control
+        .request_now(serde_json::json!({"Archive":{"workspace":workspace,"request":request}}));
+    let archived = archive_wait16(&mut f.control, |s| {
+        s["registry"]["archived"]
+            .as_array()
+            .is_some_and(|ids| ids.contains(&serde_json::json!(workspace)))
+    });
+    assert_eq!(archived["setup"]["records"][0]["cleanup_confirmed"], true);
+    assert!(
+        !f.launches.exists(),
+        "Archive must cancel Create and start's native handoff"
+    );
+    let setup_pid: i32 = std::fs::read_to_string(folder.join("setup-pid"))
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    assert_ne!(unsafe { libc::kill(setup_pid, 0) }, 0);
+    let live = archived["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["target"] == target)
+        .unwrap();
+    assert_eq!(live["lifecycle"], "Running");
+    assert_eq!(live["session"], session);
+    f.control.request_now(serde_json::json!({"Session":{"target":target,"session":session,"command":{"Input":b"archive-unrelated-survived\r".to_vec()}}}));
+    archive_wait16(&mut f.control, |s| {
+        s["screen"]
+            .as_str()
+            .is_some_and(|text| text.contains("received: archive-unrelated-survived"))
+    });
+    let attempt = archived["setup"]["records"][0]["attempt"].clone();
+    let blocked = f.control.request_now(
+        serde_json::json!({"RecoverSetup":{"attempt":attempt,"retry":true,"informed":true}}),
+    );
+    assert!(
+        blocked["setup"]["error"]
+            .as_str()
+            .unwrap()
+            .contains("Archive")
+    );
+    f.finish();
+}
+
+#[test]
+fn archive_disarms_pending_selected_resume_and_reopens_saved_receipt_without_execution() {
+    use std::os::unix::{ffi::OsStrExt, fs::PermissionsExt};
+    let fixture = Fixture::new();
+    archive_repo16(&fixture);
+    let tools = fixture.temp.path().join("archive-resume-tools");
+    std::fs::create_dir(&tools).unwrap();
+    let marker = fixture.temp.path().join("resumed-must-not-exist");
+    let script = tools.join("claude");
+    std::fs::write(&script,format!("#!/bin/sh\ncase \" $* \" in *' --resume '*) printf resumed > '{}' ;; esac\nprintf 'archive-native-ready\\n'\nwhile IFS= read -r line; do test \"$line\" = exit && exit 0; done\n",marker.display())).unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let mut owner = SetupFixture::owner(&fixture, &tools);
+    let mut control = Controller::connect(&fixture);
+    control.request_now(serde_json::json!({"Adopt":fixture.repository.as_os_str().as_bytes()}));
+    let adopted = archive_wait16(&mut control, |s| {
+        s["adoption_pending"] == false && s["registry"]["selected"].is_string()
+    });
+    let workspace = adopted["registry"]["selected"].as_str().unwrap().to_owned();
+    control.request(serde_json::json!({"LaunchClaude":"archive-original-conversation"}));
+    let running = archive_wait16(&mut control, |s| {
+        s["lifecycle"] == "Running"
+            && s["native_conversation"].is_string()
+            && s["screen"]
+                .as_str()
+                .is_some_and(|t| t.contains("archive-native-ready"))
+    });
+    let original = running["session_identity"]["session"].clone();
+    control.request_now(serde_json::json!("Stop"));
+    archive_wait16(&mut control, |s| {
+        s["lifecycle"] == "Stopped"
+            && s["metadata_pending"] == false
+            && s["sessions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|o| o["reserved"] == false)
+    });
+    let pause = fixture.state().join("proof-storage-resume");
+    std::fs::write(&pause, "stall").unwrap();
+    control.request_now(serde_json::json!({"ResumeSelected":{"request":"archive-pending-resume","workspace":workspace,"session":original}}));
+    let waiting = archive_wait16(&mut control, |s| {
+        s["metadata_pending"] == true && s["launch_request"] == "archive-pending-resume"
+    });
+    assert_eq!(waiting["session_identity"]["session"], original);
+    let before = archive_git16(&fixture.repository, &["rev-parse", "HEAD"]);
+    std::fs::write(
+        fixture.repository.join("new"),
+        "archive-after-resume-cancel\n",
+    )
+    .unwrap();
+    let request = uuid::Uuid::new_v4().to_string();
+    control.request_now(serde_json::json!({"Archive":{"workspace":workspace,"request":request}}));
+    let pending = archive_wait16(&mut control, |s| s["archive"]["pending"] == true);
+    assert!(
+        pending["registry"]["archived"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        archive_git16(&fixture.repository, &["rev-parse", "HEAD"]),
+        before
+    );
+    let refused = control.request_now(serde_json::json!({"ResumeSelected":{"request":"archive-while-pending","workspace":workspace,"session":original}}));
+    assert!(
+        refused["error"]
+            .as_str()
+            .is_some_and(|m| m.contains("folder removal is pending")),
+        "{refused}"
+    );
+    assert_eq!(refused["session_identity"]["session"], original);
+    assert!(!marker.exists());
+    std::fs::remove_file(pause).unwrap();
+    let archived = archive_wait16(&mut control, |s| {
+        s["registry"]["archived"]
+            .as_array()
+            .is_some_and(|ids| !ids.is_empty())
+    });
+    assert_eq!(archived["session_identity"]["session"], original);
+    assert!(
+        !marker.exists(),
+        "Late async lookup must never launch after archive began"
+    );
+    let saved = archive_git16(&fixture.repository, &["rev-parse", "HEAD"]);
+    control.request_now(serde_json::json!("Shutdown"));
+    archive_wait16(&mut control, |s| s["stopped"] == true);
+    owner.0.wait().unwrap();
+    drop(control);
+    let mut owner = SetupFixture::owner(&fixture, &tools);
+    let mut control = Controller::connect(&fixture);
+    let restored = archive_wait16(&mut control, |s| {
+        s["archive"]["records"]
+            .as_array()
+            .is_some_and(|rs| rs.iter().any(|r| r["request"] == request))
+    });
+    assert!(
+        restored["registry"]["archived"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!(workspace))
+    );
+    assert_eq!(
+        archive_git16(&fixture.repository, &["rev-parse", "HEAD"]),
+        saved
+    );
+    assert!(!marker.exists());
+    control.request_now(serde_json::json!({"ResumeSelected":{"request":"archive-block-new-resume","workspace":workspace,"session":original}}));
+    let refused = archive_wait16(&mut control, |s| {
+        s["error"]
+            .as_str()
+            .is_some_and(|m| m.contains("archived; Return/unarchive"))
+    });
+    assert_eq!(refused["session_identity"]["session"], original);
+    control.request_now(serde_json::json!("Shutdown"));
+    archive_wait16(&mut control, |s| s["stopped"] == true);
+    owner.0.wait().unwrap();
+}
+
+#[test]
+fn archive_refuses_restored_uncertain_setup_despite_exited_process_and_cancels_without_mutation() {
+    let mut f = SetupFixture::new("echo $$ > setup-pid; printf x > setup-result");
+    archive_git16(
+        &f.fixture.repository,
+        &["config", "user.name", "Archive fixture"],
+    );
+    archive_git16(
+        &f.fixture.repository,
+        &["config", "user.email", "archive@example.invalid"],
+    );
+    let fault = f.fixture.state().join("proof-storage-setup-result");
+    std::fs::write(&fault, "stall").unwrap();
+    let (creation, folder) = f.create(true);
+    let complete = archive_wait16(&mut f.control, |s| {
+        s["setup"]["records"][0]["phase"] == "Succeeded" && s["setup"]["pending"] == true
+    });
+    let pid: i32 = std::fs::read_to_string(folder.join("setup-pid"))
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    assert_ne!(
+        unsafe { libc::kill(pid, 0) },
+        0,
+        "Fixture has real proof the owned setup exited before losing its receipt"
+    );
+    let workspace = complete["registry"]["workspaces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|w| w["task"] == creation)
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    f.restart("setup-boot-one");
+    std::fs::remove_file(fault).unwrap();
+    let uncertain = f.phase("Uncertain");
+    // Setup's restored phase does not establish archive/removal receipt readiness.
+    archive_wait16(&mut f.control, |s| {
+        s["removal"]["ready"] == true && s["archive"]["status"] == "Archive operation settled"
+    });
+    assert_eq!(uncertain["setup"]["records"][0]["cleanup_confirmed"], false);
+    let before = archive_git16(&folder, &["rev-parse", "HEAD"]);
+    let request = uuid::Uuid::new_v4().to_string();
+    f.control
+        .request_now(serde_json::json!({"Archive":{"workspace":workspace,"request":request}}));
+    let waiting = archive_wait16(&mut f.control, |s| {
+        s["archive"]["records"].as_array().is_some_and(|rs| {
+            rs.iter()
+                .any(|r| r["request"] == request && r["phase"] == "Waiting")
+        })
+    });
+    assert!(
+        waiting["registry"]["archived"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(archive_git16(&folder, &["rev-parse", "HEAD"]), before);
+    assert!(!f.launches.exists());
+    f.control.request_now(
+        serde_json::json!({"CancelArchive":{"workspace":workspace,"request":request}}),
+    );
+    archive_wait16(&mut f.control, |s| {
+        s["archive"]["pending"] == false
+            && s["archive"]["records"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|r| r["request"] == request && r["phase"] == "Cancelled")
+    });
+    assert_eq!(archive_git16(&folder, &["rev-parse", "HEAD"]), before);
+    let attempt = uncertain["setup"]["records"][0]["attempt"].clone();
+    // Only this fixture's changed boot evidence permits read-only reconciliation;
+    // this is not an actual reboot qualification.
+    f.restart("setup-boot-two");
+    archive_wait16(&mut f.control, |s| s["removal"]["ready"] == true);
+    f.control.request_now(
+        serde_json::json!({"RecoverSetup":{"attempt":attempt,"retry":false,"informed":true}}),
+    );
+    f.phase("Failed");
+    f.control.request_now(
+        serde_json::json!({"RecoverSetup":{"attempt":attempt,"retry":false,"informed":true}}),
+    );
+    f.phase("Skipped");
+    assert!(!f.launches.exists());
+    f.finish();
+}
+
+#[test]
+fn archive_checkpoint_survives_supervisor_loss_before_metadata_and_same_request_reconciles() {
+    use std::os::unix::ffi::OsStrExt;
+    let fixture = Fixture::new();
+    archive_repo16(&fixture);
+    let tools = fixture.temp.path().join("unused-tools");
+    std::fs::create_dir(&tools).unwrap();
+    let mut owner = SetupFixture::owner(&fixture, &tools);
+    let mut control = Controller::connect(&fixture);
+    control.request_now(serde_json::json!({"Adopt":fixture.repository.as_os_str().as_bytes()}));
+    let adopted = archive_wait16(&mut control, |s| {
+        s["adoption_pending"] == false && s["registry"]["selected"].is_string()
+    });
+    let workspace = adopted["registry"]["selected"].as_str().unwrap().to_owned();
+    let request = uuid::Uuid::new_v4().to_string();
+    let fault = fixture.state().join("proof-storage-archive-result");
+    std::fs::write(&fault, "stall").unwrap();
+    std::fs::write(
+        fixture.repository.join("new"),
+        "saved-before-supervisor-loss\n",
+    )
+    .unwrap();
+    control.request_now(serde_json::json!({"Archive":{"workspace":workspace,"request":request}}));
+    let reference = format!("refs/rat/archive/{workspace}/{request}");
+    archive_wait16(&mut control, |s| {
+        s["archive"]["pending"] == true
+            && Command::new("git")
+                .arg("-C")
+                .arg(&fixture.repository)
+                .args(["rev-parse", "--verify", &reference])
+                .output()
+                .unwrap()
+                .status
+                .success()
+    });
+    // The result storage fault is reached only after index normalization and Git
+    // ref verification, and before SQLite records archived visibility.
+    archive_wait16(&mut control, |s| {
+        s["archive"]["status"]
+            .as_str()
+            .is_some_and(|status| status.contains("waiting for durable archive metadata"))
+    });
+    let saved = archive_git16(&fixture.repository, &["rev-parse", "HEAD"]);
+    owner.0.kill().unwrap();
+    owner.0.wait().unwrap();
+    drop(control);
+    std::fs::remove_file(fault).unwrap();
+    std::fs::remove_file(fixture.state().join("supervisor.sock")).unwrap();
+    let mut owner = SetupFixture::owner(&fixture, &tools);
+    let mut control = Controller::connect(&fixture);
+    let restored = archive_wait16(&mut control, |s| {
+        s["archive"]["records"].as_array().is_some_and(|rs| {
+            rs.iter()
+                .any(|r| r["request"] == request && r["phase"] == "Prepared")
+        })
+    });
+    assert!(
+        restored["registry"]["archived"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        archive_git16(&fixture.repository, &["rev-parse", "HEAD"]),
+        saved
+    );
+    assert_eq!(
+        restored["archive"]["pending"], false,
+        "No automatic Git retry or execution on restart"
+    );
+    control.request_now(
+        serde_json::json!({"CancelArchive":{"workspace":workspace,"request":request}}),
+    );
+    archive_wait16(&mut control, |s| {
+        s["archive"]["pending"] == false
+            && s["archive"]["records"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|r| r["request"] == request && r["phase"] == "Cancelled")
+    });
+    control.request_now(serde_json::json!({"Archive":{"workspace":workspace,"request":request}}));
+    archive_wait16(&mut control, |s| {
+        !s["registry"]["archived"].as_array().unwrap().is_empty()
+    });
+    assert_eq!(
+        archive_git16(&fixture.repository, &["rev-parse", "HEAD"]),
+        saved
+    );
+    assert_eq!(
+        archive_git16(&fixture.repository, &["rev-list", "--count", "HEAD"]),
+        "2"
+    );
+    control.request_now(serde_json::json!("Shutdown"));
+    archive_wait16(&mut control, |s| s["stopped"] == true);
+    owner.0.wait().unwrap();
+}
+
+#[test]
+fn archive_branch_default_cleanup_reuse_gc_and_restore_are_durable_without_coding() {
+    if !archive_branch_qualified17() {
+        return;
+    }
+    let mut f = SetupFixture::new("true");
+    let (creation, folder) = f.create(false);
+    let state = f.phase("Succeeded");
+    let workspace = state["registry"]["workspaces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|w| w["task"] == creation)
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let branch = archive_git16(&folder, &["symbolic-ref", "--short", "HEAD"]);
+    archive_git16(&folder, &["config", "user.name", "Archive fixture"]);
+    archive_git16(
+        &folder,
+        &["config", "user.email", "archive@example.invalid"],
+    );
+    std::fs::write(folder.join(".gitignore"), "ignored\n").unwrap();
+    std::fs::write(folder.join("ignored"), "private\n").unwrap();
+    std::fs::write(folder.join("new"), "saved local work\n").unwrap();
+    let request = uuid::Uuid::new_v4().to_string();
+    f.control
+        .request_now(serde_json::json!({"Archive":{"workspace":workspace,"request":request}}));
+    let archived = archive_wait16(&mut f.control, |s| {
+        s["archive"]["pending"] == false
+            && s["archive"]["records"].as_array().is_some_and(|rs| {
+                rs.iter()
+                    .any(|r| r["request"] == request && r["branch_phase"] == "Cleaned")
+            })
+    });
+    let receipt = archived["archive"]["records"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["request"] == request)
+        .unwrap();
+    let saved = receipt["saved"].as_str().unwrap().to_owned();
+    assert_eq!(receipt["delete_target"], format!("refs/heads/{branch}"));
+    assert_eq!(receipt["owned_branch"], receipt["delete_target"]);
+    assert_eq!(
+        archive_git16(&folder, &["rev-parse", "--symbolic-full-name", "HEAD"]),
+        "HEAD"
+    );
+    assert_eq!(
+        std::fs::read_to_string(folder.join("ignored")).unwrap(),
+        "private\n"
+    );
+    // An external actor reuses the old name. Returning must create a different
+    // branch from the exact recovery point and leave this ref alone.
+    let external = archive_git16(&f.fixture.repository, &["rev-parse", "HEAD"]);
+    archive_git16(&f.fixture.repository, &["branch", &branch, &external]);
+    archive_git16(&folder, &["reflog", "expire", "--expire=now", "--all"]);
+    archive_git16(&folder, &["gc", "--prune=now"]);
+    f.restart("setup-boot-one");
+    archive_wait16(&mut f.control, |s| {
+        s["archive"]["records"]
+            .as_array()
+            .is_some_and(|r| !r.is_empty())
+    });
+    assert!(!f.launches.exists());
+    let fault = f
+        .fixture
+        .state()
+        .join("proof-storage-archive-restore-result");
+    std::fs::write(&fault, "error").unwrap();
+    f.control
+        .request_now(serde_json::json!({"Unarchive":{"workspace":workspace,"request":request}}));
+    let failed = archive_wait16(&mut f.control, |s| {
+        s["archive"]["error"]
+            .as_str()
+            .is_some_and(|e| e.contains("metadata not saved"))
+    });
+    assert!(
+        failed["registry"]["archived"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!(workspace))
+    );
+    let restored = archive_git16(&folder, &["symbolic-ref", "--short", "HEAD"]);
+    assert_ne!(restored, branch);
+    assert_eq!(archive_git16(&folder, &["rev-parse", "HEAD"]), saved);
+    assert_eq!(
+        archive_git16(&folder, &["rev-parse", &format!("refs/heads/{branch}")]),
+        external
+    );
+    std::fs::remove_file(fault).unwrap();
+    f.restart("setup-boot-one");
+    archive_wait16(&mut f.control, |s| {
+        s["archive"]["records"]
+            .as_array()
+            .is_some_and(|r| !r.is_empty())
+    });
+    f.control
+        .request_now(serde_json::json!({"Unarchive":{"workspace":workspace,"request":request}}));
+    let returned = archive_wait16(&mut f.control, |s| {
+        s["archive"]["pending"] == false
+            && s["registry"]["archived"]
+                .as_array()
+                .is_some_and(Vec::is_empty)
+    });
+    assert_eq!(
+        archive_git16(&folder, &["symbolic-ref", "--short", "HEAD"]),
+        restored
+    );
+    assert_eq!(
+        returned["archive"]["records"][0]["branch_phase"],
+        "Restored"
+    );
+    assert!(!f.launches.exists(), "Return must never start coding");
+    std::fs::write(folder.join("later-dirty"), "user work after return").unwrap();
+    f.control
+        .request_now(serde_json::json!({"Unarchive":{"workspace":workspace,"request":request}}));
+    let repeated = archive_wait16(&mut f.control, |s| s["archive"]["pending"] == false);
+    assert!(
+        repeated["registry"]["archived"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "Duplicate Return must not rearchive dirty active work"
+    );
+    assert_eq!(
+        std::fs::read_to_string(folder.join("later-dirty")).unwrap(),
+        "user work after return"
+    );
+    let next_request = uuid::Uuid::new_v4().to_string();
+    f.control
+        .request_now(serde_json::json!({"Archive":{"workspace":workspace,"request":next_request}}));
+    archive_wait16(&mut f.control, |s| {
+        s["archive"]["pending"] == false
+            && s["registry"]["archived"]
+                .as_array()
+                .is_some_and(|ids| ids.contains(&serde_json::json!(workspace)))
+    });
+    f.control
+        .request_now(serde_json::json!({"Unarchive":{"workspace":workspace,"request":request}}));
+    let stale = archive_wait16(&mut f.control, |s| {
+        s["archive"]["error"]
+            .as_str()
+            .is_some_and(|e| e.contains("revision changed"))
+    });
+    assert!(
+        stale["registry"]["archived"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!(workspace))
+    );
+    f.finish();
+}
+
+#[test]
+fn archive_branch_guard_retains_tip_advanced_after_last_check_before_delete() {
+    if !archive_branch_qualified17() {
+        return;
+    }
+    use std::os::unix::fs::PermissionsExt;
+    let mut f = SetupFixture::new("true");
+    let (creation, folder) = f.create(false);
+    let state = f.phase("Succeeded");
+    let workspace = state["registry"]["workspaces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|w| w["task"] == creation)
+        .unwrap()["id"]
+        .clone();
+    let branch = archive_git16(&folder, &["symbolic-ref", "--short", "HEAD"]);
+    let wrapper = f.tools.join("git");
+    std::fs::write(&wrapper,r#"#!/bin/sh
+case " $* " in
+  *' branch -D -- '*)
+    root=
+    previous=
+    for arg in "$@"; do
+      if [ "$previous" = '-C' ]; then root=$arg; fi
+      previous=$arg
+    done
+    saved=$(/usr/bin/git -C "$root" rev-parse HEAD) || exit 1
+    advanced=$(/usr/bin/git -C "$root" -c user.name=Race -c user.email=race@example.invalid commit-tree 'HEAD^{tree}' -p "$saved" -m external-advance) || exit 1
+    /usr/bin/git -C "$root" update-ref "refs/heads/$previous" "$advanced" "$saved" || exit 1
+    printf '%s\n' "$advanced" > "$root/../advanced-ref"
+    ;;
+esac
+exec /usr/bin/git "$@"
+"#).unwrap();
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700)).unwrap();
+    // The guard must be installed through raw Unix path bytes. A lossy display
+    // of core.hooksPath silently disables it when TMPDIR is not UTF-8.
+    use std::os::unix::ffi::OsStrExt;
+    let mut raw_tmp = f
+        .fixture
+        .temp
+        .path()
+        .join(std::ffi::OsStr::from_bytes(b"guard-temp-\xff"));
+    if let Err(error) = std::fs::create_dir(&raw_tmp) {
+        assert_eq!(
+            error.raw_os_error(),
+            Some(libc::EILSEQ),
+            "Unexpected raw-path fixture error: {error}"
+        );
+        eprintln!(
+            "Filesystem rejects non-UTF8 names; guard path exercised with spaces/Unicode instead; raw-byte native case unverified"
+        );
+        raw_tmp = f.fixture.temp.path().join("guard temp ✓");
+        std::fs::create_dir(&raw_tmp).unwrap();
+    }
+    f.owner.0.kill().unwrap();
+    f.owner.0.wait().unwrap();
+    let _ = f.control.stream.shutdown(std::net::Shutdown::Both);
+    std::fs::remove_file(f.fixture.state().join("supervisor.sock")).unwrap();
+    let path = std::env::join_paths([f.tools.as_path(), Path::new("/usr/bin"), Path::new("/bin")])
+        .unwrap();
+    f.owner = RegistryOwner(
+        Command::new(env!("CARGO_BIN_EXE_agent-terminal"))
+            .arg("--supervisor")
+            .arg(f.fixture.state())
+            .env("PATH", path)
+            .env("TMPDIR", &raw_tmp)
+            .env("RAT_PROOF_BOOT_ID", "setup-boot-one")
+            .spawn()
+            .unwrap(),
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !f.fixture.state().join("supervisor.sock").exists() {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    f.control = Controller::connect(&f.fixture);
+    archive_wait16(&mut f.control, |s| {
+        s["archive"]["status"] == "Archive operation settled"
+    });
+    let request = uuid::Uuid::new_v4().to_string();
+    f.control
+        .request_now(serde_json::json!({"Archive":{"workspace":workspace,"request":request}}));
+    let archived = archive_wait16(&mut f.control, |s| {
+        s["archive"]["pending"] == false
+            && s["archive"]["records"].as_array().is_some_and(|rs| {
+                rs.iter()
+                    .any(|r| r["request"] == request && r["branch_phase"] == "Retained")
+            })
+    });
+    let r = &archived["archive"]["records"][0];
+    let advanced = std::fs::read_to_string(folder.parent().unwrap().join("advanced-ref")).unwrap();
+    assert_eq!(
+        archive_git16(&folder, &["rev-parse", &format!("refs/heads/{branch}")]),
+        advanced.trim()
+    );
+    assert_ne!(r["saved"], advanced.trim());
+    assert!(
+        r["branch_message"]
+            .as_str()
+            .unwrap()
+            .contains("ref updates aborted by hook"),
+        "{r}"
+    );
+    assert_eq!(
+        archive_git16(&folder, &["rev-parse", r["reference"].as_str().unwrap()]),
+        r["saved"].as_str().unwrap()
+    );
+    assert!(
+        archived["registry"]["archived"]
+            .as_array()
+            .unwrap()
+            .contains(&workspace)
+    );
+    assert!(!f.launches.exists());
+    f.finish();
+}
+
+#[test]
+fn archive_branch_cleanup_crash_keeps_durable_archive_and_preserves_replaced_ref_on_retry() {
+    if !archive_branch_qualified17() {
+        return;
+    }
+    let mut f = SetupFixture::new("true");
+    let (creation, folder) = f.create(false);
+    let created = f.phase("Succeeded");
+    let workspace = created["registry"]["workspaces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|w| w["task"] == creation)
+        .unwrap()["id"]
+        .clone();
+    let branch = archive_git16(&folder, &["symbolic-ref", "--short", "HEAD"]);
+    let request = uuid::Uuid::new_v4().to_string();
+    let fault = f
+        .fixture
+        .state()
+        .join("proof-storage-archive-branch-result");
+    std::fs::write(&fault, "stall").unwrap();
+    f.control
+        .request_now(serde_json::json!({"Archive":{"workspace":workspace,"request":request}}));
+    archive_wait16(&mut f.control, |s| {
+        s["archive"]["pending"] == true
+            && s["registry"]["archived"]
+                .as_array()
+                .is_some_and(|ids| ids.contains(&workspace))
+            && !Command::new("git")
+                .arg("-C")
+                .arg(&folder)
+                .args(["show-ref", "--verify", &format!("refs/heads/{branch}")])
+                .output()
+                .unwrap()
+                .status
+                .success()
+    });
+    archive_wait16(&mut f.control, |s| {
+        s["archive"]["status"]
+            .as_str()
+            .is_some_and(|v| v.contains("waiting for durable archive metadata"))
+    });
+    f.owner.0.kill().unwrap();
+    f.owner.0.wait().unwrap();
+    let _ = f.control.stream.shutdown(std::net::Shutdown::Both);
+    std::fs::remove_file(fault).unwrap();
+    std::fs::remove_file(f.fixture.state().join("supervisor.sock")).unwrap();
+    f.owner = SetupFixture::owner(&f.fixture, &f.tools);
+    f.control = Controller::connect(&f.fixture);
+    let recovered = archive_wait16(&mut f.control, |s| {
+        // Archive records can arrive before removal admission is ready.
+        s["removal"]["ready"] == true
+            && s["archive"]["records"]
+                .as_array()
+                .is_some_and(|rs| rs.iter().any(|r| r["request"] == request))
+    });
+    assert_eq!(recovered["archive"]["pending"], false);
+    assert!(
+        recovered["registry"]["archived"]
+            .as_array()
+            .unwrap()
+            .contains(&workspace)
+    );
+    // Absence alone is not attributed deletion proof. Reconciliation is explicit.
+    f.control
+        .request_now(serde_json::json!({"Archive":{"workspace":workspace,"request":request}}));
+    let absent = archive_wait16(&mut f.control, |s| {
+        s["archive"]["pending"] == false && s["archive"]["records"][0]["branch_phase"] == "Retained"
+    });
+    assert!(
+        absent["archive"]["records"][0]["branch_message"]
+            .as_str()
+            .unwrap()
+            .contains("absent")
+    );
+    archive_git16(
+        &f.fixture.repository,
+        &[
+            "-c",
+            "user.name=External",
+            "-c",
+            "user.email=external@example.invalid",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "external-new",
+        ],
+    );
+    let external = archive_git16(&f.fixture.repository, &["rev-parse", "HEAD"]);
+    archive_git16(&f.fixture.repository, &["branch", &branch, &external]);
+    // The completed exact request does not become permission to delete a newly
+    // reused name. Unarchive creates a different branch from recovery.
+    f.control
+        .request_now(serde_json::json!({"Archive":{"workspace":workspace,"request":request}}));
+    archive_wait16(&mut f.control, |s| s["archive"]["pending"] == false);
+    assert_eq!(archive_git16(&folder, &["rev-parse", &branch]), external);
+    f.control
+        .request_now(serde_json::json!({"Unarchive":{"workspace":workspace,"request":request}}));
+    archive_wait16(&mut f.control, |s| {
+        s["archive"]["pending"] == false
+            && s["registry"]["archived"]
+                .as_array()
+                .is_some_and(Vec::is_empty)
+    });
+    assert_ne!(
+        archive_git16(&folder, &["symbolic-ref", "--short", "HEAD"]),
+        branch
+    );
+    assert_eq!(archive_git16(&folder, &["rev-parse", &branch]), external);
+    assert!(!f.launches.exists());
+    f.finish();
+}
+
+#[test]
+fn archive_branch_cancel_during_durable_intents_never_rearms_cleanup_or_return() {
+    let mut f = SetupFixture::new("true");
+    let (creation, folder) = f.create(false);
+    let created = f.phase("Succeeded");
+    let workspace = created["registry"]["workspaces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|w| w["task"] == creation)
+        .unwrap()["id"]
+        .clone();
+    let branch = archive_git16(&folder, &["symbolic-ref", "--short", "HEAD"]);
+    let request = uuid::Uuid::new_v4().to_string();
+    let fault = f.fixture.state().join("proof-storage-archive-result");
+    std::fs::write(&fault, "stall").unwrap();
+    f.control
+        .request_now(serde_json::json!({"Archive":{"workspace":workspace,"request":request}}));
+    archive_wait16(&mut f.control, |s| {
+        s["archive"]["status"]
+            .as_str()
+            .is_some_and(|v| v.contains("waiting for durable archive metadata"))
+    });
+    f.control.request_now(
+        serde_json::json!({"CancelArchive":{"workspace":workspace,"request":request}}),
+    );
+    std::fs::remove_file(fault).unwrap();
+    let cancelled = archive_wait16(&mut f.control, |s| {
+        s["archive"]["pending"] == false && s["archive"]["records"][0]["branch_phase"] == "Retained"
+    });
+    assert!(
+        cancelled["registry"]["archived"]
+            .as_array()
+            .unwrap()
+            .contains(&workspace)
+    );
+    assert_eq!(
+        archive_git16(&folder, &["symbolic-ref", "--short", "HEAD"]),
+        branch
+    );
+    let fault = f
+        .fixture
+        .state()
+        .join("proof-storage-archive-restore-intent");
+    std::fs::write(&fault, "stall").unwrap();
+    f.control
+        .request_now(serde_json::json!({"Unarchive":{"workspace":workspace,"request":request}}));
+    archive_wait16(&mut f.control, |s| s["archive"]["pending"] == true);
+    f.control.request_now(
+        serde_json::json!({"CancelArchive":{"workspace":workspace,"request":request}}),
+    );
+    std::fs::remove_file(fault).unwrap();
+    let cancelled = archive_wait16(&mut f.control, |s| {
+        s["archive"]["pending"] == false
+            && s["archive"]["records"][0]["branch_phase"] == "RestoreFailed"
+    });
+    assert!(
+        cancelled["registry"]["archived"]
+            .as_array()
+            .unwrap()
+            .contains(&workspace)
+    );
+    assert_eq!(
+        archive_git16(&folder, &["symbolic-ref", "--short", "HEAD"]),
+        branch
+    );
+    assert!(!f.launches.exists());
+    f.finish();
+}
+
+fn archive_branch_qualified17() -> bool {
+    let qualified = Command::new("/usr/bin/git")
+        .arg("--version")
+        .output()
+        .is_ok_and(|out| out.status.success() && out.stdout.starts_with(b"git version 2.50."));
+    if !qualified {
+        eprintln!(
+            "Git 2.50/files deletion qualification unavailable; deletion-specific scenario skipped. Public Git tests verify conservative retention."
+        );
+    }
+    qualified
+}
+
+fn removal_record18<'a>(
+    state: &'a serde_json::Value,
+    request: &str,
+) -> Option<&'a serde_json::Value> {
+    state["removal"]["records"]
+        .as_array()?
+        .iter()
+        .find(|r| r["request"] == request)
+}
+fn removal_preview18(control: &mut Controller, workspace: &str) -> serde_json::Value {
+    let request = uuid::Uuid::new_v4().to_string();
+    control.request_now(
+        serde_json::json!({"PreviewRemoval":{"workspace":workspace,"request":request}}),
+    );
+    let state = archive_wait16(control, |s| {
+        s["removal"]["pending"] == false && removal_record18(s, &request).is_some()
+    });
+    removal_record18(&state, &request).unwrap().clone()
+}
+fn removal_confirm18(record: &serde_json::Value, ack: bool) -> serde_json::Value {
+    serde_json::json!({"ConfirmRemoval":{"workspace":record["workspace"],"request":record["request"],"head":record["snapshot"]["head"],"reference":record["snapshot"]["reference"],"local_ack":ack}})
+}
+
+#[test]
+fn folder_removal_retains_exact_detached_code_branches_and_history_after_lost_ack_restart_and_gc() {
+    use std::os::unix::ffi::OsStrExt;
+    let mut f = SetupFixture::new("true");
+    let (creation, folder) = f.create(false);
+    let created = f.phase("Succeeded");
+    let workspace = created["registry"]["workspaces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|w| w["task"] == creation)
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    archive_git16(&folder, &["config", "user.name", "Removal fixture"]);
+    archive_git16(&folder, &["config", "user.email", "remove@example.invalid"]);
+    std::fs::write(folder.join("saved"), "saved local code\n").unwrap();
+    archive_git16(&folder, &["add", "saved"]);
+    archive_git16(&folder, &["commit", "-qm", "local only"]);
+    let head = archive_git16(&folder, &["rev-parse", "HEAD"]);
+    let branch = archive_git16(&folder, &["symbolic-ref", "HEAD"]);
+    let old_ref = format!("refs/rat/archive/{workspace}/prior");
+    archive_git16(&folder, &["update-ref", &old_ref, "HEAD~1"]);
+    archive_git16(&folder, &["switch", "--detach"]);
+    f.control
+        .request_now(serde_json::json!({"Adopt":folder.as_os_str().as_bytes()}));
+    archive_wait16(&mut f.control, |s| {
+        s["adoption_pending"] == false && s["adopted"] == folder.to_str().unwrap()
+    });
+    f.control
+        .request(serde_json::json!({"Launch":"removal-history-fixture"}));
+    let running = archive_wait16(&mut f.control, |s| {
+        s["screen"].as_str().is_some_and(|t| t.contains("fixture>"))
+    });
+    let session = running["session_identity"]["session"].clone();
+    f.control
+        .request_now(serde_json::json!({"Input":b"retained removal history\r".to_vec()}));
+    archive_wait16(&mut f.control, |s| {
+        s["screen"]
+            .as_str()
+            .is_some_and(|t| t.contains("received: retained removal history"))
+    });
+    f.control.request_now(serde_json::json!("Stop"));
+    archive_wait16(&mut f.control, |s| {
+        s["lifecycle"] == "Stopped"
+            && s["capture_pending_bytes"] == 0
+            && s["metadata_pending"] == false
+            && s["sessions"]
+                .as_array()
+                .is_some_and(|ss| ss.iter().all(|s| s["reserved"] == false))
+    });
+    let preview = removal_preview18(&mut f.control, &workspace);
+    assert_eq!(
+        preview["snapshot"]["blockers"],
+        serde_json::json!([]),
+        "{preview}"
+    );
+    assert_eq!(preview["snapshot"]["head"], head);
+    assert!(preview["snapshot"]["local_only"].as_bool().unwrap());
+    f.control.request_now(removal_confirm18(&preview, false));
+    let refused = archive_wait16(&mut f.control, |s| {
+        s["removal"]["error"]
+            .as_str()
+            .is_some_and(|e| e.contains("acknowledgement"))
+    });
+    assert_eq!(
+        removal_record18(&refused, preview["request"].as_str().unwrap()).unwrap()["phase"],
+        "Preview"
+    );
+    assert!(folder.exists());
+    f.control.send(removal_confirm18(&preview, true));
+    f.control.stream.shutdown(std::net::Shutdown::Both).unwrap();
+    let mut replacement = Controller::connect(&f.fixture); // discard acknowledgement; same operation, no replay
+    std::mem::swap(&mut f.control, &mut replacement);
+    drop(replacement);
+    let removed = archive_wait16(&mut f.control, |s| {
+        removal_record18(s, preview["request"].as_str().unwrap())
+            .is_some_and(|r| r["phase"] == "Removed")
+            && s["removal"]["pending"] == false
+    });
+    assert!(!folder.exists(), "{removed}");
+    let reference = preview["snapshot"]["reference"].as_str().unwrap();
+    archive_git16(
+        &f.fixture.repository,
+        &["reflog", "expire", "--expire=now", "--all"],
+    );
+    archive_git16(&f.fixture.repository, &["gc", "--prune=now"]);
+    assert_eq!(
+        archive_git16(
+            &f.fixture.repository,
+            &["show", &format!("{reference}:saved")]
+        ),
+        "saved local code"
+    );
+    assert_eq!(
+        archive_git16(&f.fixture.repository, &["rev-parse", &branch]),
+        head
+    );
+    assert_eq!(
+        archive_git16(&f.fixture.repository, &["cat-file", "-t", &old_ref]),
+        "commit"
+    );
+    f.control
+        .request_now(serde_json::json!({"HistorySession":{"session":session,"offset":0}}));
+    let history = archive_wait16(&mut f.control, |s| s["history"]["session"] == session);
+    assert!(
+        history["history"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("retained removal history")
+    );
+    f.restart("setup-boot-one");
+    archive_wait16(&mut f.control, |s| {
+        removal_record18(s, preview["request"].as_str().unwrap())
+            .is_some_and(|r| r["phase"] == "Removed")
+    });
+    f.control.request_now(removal_confirm18(&preview, true));
+    archive_wait16(&mut f.control, |s| {
+        s["removal"]["error"]
+            .as_str()
+            .is_some_and(|e| e.contains("cannot be replayed"))
+    });
+    f.control.request_now(serde_json::json!({"ReconcileRemoval":{"workspace":workspace,"request":preview["request"]}}));
+    archive_wait16(&mut f.control, |s| {
+        s["removal"]["pending"] == false
+            && removal_record18(s, preview["request"].as_str().unwrap())
+                .is_some_and(|r| r["phase"] == "Removed")
+    });
+    assert!(!f.launches.exists());
+    f.finish();
+}
+
+#[test]
+fn unavailable_archive_receipts_keep_start_frozen_with_loading_guidance() {
+    let mut f = SetupFixture::new("true");
+    let (creation, _) = f.create(false);
+    let created = f.phase("Succeeded");
+    let workspace = created["registry"]["workspaces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|w| w["task"] == creation)
+        .unwrap()["id"]
+        .clone();
+    let request = uuid::Uuid::new_v4().to_string();
+    f.control.request_now(serde_json::json!({"Archive":{"workspace":workspace,"request":request,"branch_policy":"Keep"}}));
+    let archived = archive_wait16(&mut f.control, |s| {
+        s["archive"]["pending"] == false
+            && s["registry"]["archived"]
+                .as_array()
+                .is_some_and(|ids| ids.contains(&workspace))
+    });
+    f.control.request_now(serde_json::json!("Shutdown"));
+    archive_wait16(&mut f.control, |s| s["stopped"] == true);
+    f.owner.0.wait().unwrap();
+    // An unreadable on-disk receipt must never turn the archived registry label
+    // into proof that archive/recovery loading has completed.
+    let db = rusqlite::Connection::open(f.fixture.state().join("history.sqlite3")).unwrap();
+    db.execute("UPDATE workspace_archives SET record='{'", [])
+        .unwrap();
+    drop(db);
+    let _ = f.control.stream.shutdown(std::net::Shutdown::Both);
+    f.owner = SetupFixture::owner(&f.fixture, &f.tools);
+    f.control = Controller::connect(&f.fixture);
+    archive_wait16(&mut f.control, |s| {
+        s["archive"]["error"].is_string() && s["removal"]["ready"] == true
+    });
+    let refused = f
+        .control
+        .request_now(serde_json::json!({"LaunchClaude":"must-not-start-with-unreadable-receipts"}));
+    assert!(
+        refused["error"]
+            .as_str()
+            .is_some_and(|m| m.contains("recovery is loading")),
+        "{refused}"
+    );
+    assert_eq!(refused["session_identity"], archived["session_identity"]);
+    assert!(refused["execution"].is_null());
+    assert!(!f.launches.exists());
+    f.finish();
+}
+
+#[test]
+fn settled_archived_removed_checkout_refuses_resume_with_recovery_guidance_without_new_segment() {
+    use std::os::unix::ffi::OsStrExt;
+    let mut f = SetupFixture::new("true");
+    let (creation, folder) = f.create(false);
+    let created = f.phase("Succeeded");
+    let workspace = created["registry"]["workspaces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|w| w["task"] == creation)
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    f.control
+        .request_now(serde_json::json!({"Adopt":folder.as_os_str().as_bytes()}));
+    archive_wait16(&mut f.control, |s| {
+        s["adoption_pending"] == false && s["adopted"] == folder.to_str().unwrap()
+    });
+    f.control
+        .request_now(serde_json::json!({"LaunchClaude":"removed-native-original"}));
+    let running = archive_wait16(&mut f.control, |s| {
+        s["lifecycle"] == "Running"
+            && s["native_conversation"].is_string()
+            && s["screen"].as_str().is_some_and(|t| t.contains("fixture>"))
+    });
+    let original = running["session_identity"].clone();
+    let native = running["native_conversation"].clone();
+    f.control.request_now(serde_json::json!("Stop"));
+    archive_wait16(&mut f.control, |s| {
+        s["lifecycle"] == "Stopped"
+            && s["metadata_pending"] == false
+            && s["sessions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|s| s["reserved"] == false)
+    });
+    let request = uuid::Uuid::new_v4().to_string();
+    f.control.request_now(serde_json::json!({"Archive":{"workspace":workspace,"request":request,"branch_policy":"Keep"}}));
+    archive_wait16(&mut f.control, |s| {
+        s["archive"]["pending"] == false
+            && s["registry"]["archived"]
+                .as_array()
+                .is_some_and(|ids| ids.contains(&serde_json::json!(workspace)))
+    });
+    let preview = removal_preview18(&mut f.control, &workspace);
+    assert_eq!(preview["snapshot"]["blockers"], serde_json::json!([]));
+    f.control.request_now(removal_confirm18(&preview, true));
+    let removed = archive_wait16(&mut f.control, |s| {
+        s["removal"]["pending"] == false
+            && removal_record18(s, preview["request"].as_str().unwrap())
+                .is_some_and(|r| r["phase"] == "Removed")
+    });
+    assert!(!folder.exists());
+    let sessions = removed["sessions"].clone();
+    for command in [
+        serde_json::json!({"ResumeSelected":{"request":"removed-explicit-resume","workspace":workspace,"session":original["session"]}}),
+        serde_json::json!({"LaunchClaude":"removed-must-not-launch"}),
+    ] {
+        let refused = f.control.request_now(command);
+        let message = refused["error"].as_str().unwrap();
+        assert!(message.contains("Workspace folder removed;"), "{message}");
+        assert!(
+            message.contains("recovery reference") && message.contains("adopt"),
+            "{message}"
+        );
+        assert!(
+            !message.contains("pending") && !message.contains("settle"),
+            "{message}"
+        );
+        assert_eq!(refused["sessions"], sessions);
+        assert_eq!(refused["session_identity"], original);
+        assert_eq!(refused["native_conversation"], native);
+        assert!(refused["execution"].is_null());
+        assert_eq!(
+            std::fs::read_to_string(&f.launches)
+                .unwrap()
+                .lines()
+                .count(),
+            1
+        );
+    }
+    f.finish();
+}
+
+#[test]
+fn folder_removal_durable_boundary_blocks_alias_launch_and_restart_never_replays_deletion() {
+    use std::os::unix::ffi::OsStrExt;
+    let mut f = SetupFixture::new("true");
+    let (creation, folder) = f.create(false);
+    let created = f.phase("Succeeded");
+    let workspace = created["registry"]["workspaces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|w| w["task"] == creation)
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let alias = f.fixture.temp.path().join("canonical alias");
+    std::os::unix::fs::symlink(&folder, &alias).unwrap();
+    f.control
+        .request_now(serde_json::json!({"Adopt":alias.as_os_str().as_bytes()}));
+    archive_wait16(&mut f.control, |s| {
+        s["adoption_pending"] == false
+            && s["adopted"] == folder.to_str().unwrap()
+            && s["metadata_pending"] == false
+    });
+    let preview = removal_preview18(&mut f.control, &workspace);
+    assert_eq!(
+        preview["snapshot"]["blockers"],
+        serde_json::json!([]),
+        "{preview}"
+    );
+    let fault = f.fixture.state().join("proof-storage-removal-before-git");
+    std::fs::write(&fault, "stall").unwrap();
+    f.control.request_now(removal_confirm18(&preview, true));
+    let reference = preview["snapshot"]["reference"].as_str().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(6);
+    while !Command::new("git")
+        .arg("-C")
+        .arg(&folder)
+        .args(["show-ref", "--verify", reference])
+        .output()
+        .unwrap()
+        .status
+        .success()
+    {
+        assert!(
+            Instant::now() < deadline,
+            "recovery reference not created before durable intent wait"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(folder.exists());
+    let blocked = f
+        .control
+        .request_now(serde_json::json!({"Launch":"must-not-start-during-removal"}));
+    assert!(
+        blocked["error"]
+            .as_str()
+            .is_some_and(|e| e.contains("owns this checkout")),
+        "{blocked}"
+    );
+    assert!(blocked["execution"].is_null());
+    f.control.request_now(serde_json::json!({"Archive":{"workspace":workspace,"request":uuid::Uuid::new_v4().to_string()}}));
+    archive_wait16(&mut f.control, |s| {
+        s["archive"]["error"]
+            .as_str()
+            .is_some_and(|e| e.contains("Folder removal owns"))
+    });
+    f.restart("setup-boot-one");
+    std::fs::remove_file(&fault).unwrap();
+    let restored = archive_wait16(&mut f.control, |s| {
+        removal_record18(s, preview["request"].as_str().unwrap()).is_some()
+    });
+    assert_eq!(
+        removal_record18(&restored, preview["request"].as_str().unwrap()).unwrap()["phase"],
+        "Intent"
+    );
+    for _ in 0..5 {
+        f.control.request_now(serde_json::json!("Screen"));
+        assert!(
+            folder.exists(),
+            "restart may inspect but cannot replay deletion"
+        );
+    }
+    f.control.request_now(removal_confirm18(&preview, true));
+    archive_wait16(&mut f.control, |s| {
+        s["removal"]["error"]
+            .as_str()
+            .is_some_and(|e| e.contains("cannot be replayed"))
+    });
+    f.control.request_now(serde_json::json!({"ReconcileRemoval":{"workspace":workspace,"request":preview["request"]}}));
+    archive_wait16(&mut f.control, |s| {
+        s["removal"]["pending"] == false
+            && removal_record18(s, preview["request"].as_str().unwrap())
+                .is_some_and(|r| r["phase"] == "Failed")
+    });
+    assert!(folder.exists());
+    assert_eq!(
+        archive_git16(&folder, &["rev-parse", reference]),
+        preview["snapshot"]["head"]
+    );
+    assert!(!f.launches.exists());
+    f.finish();
+}
+
+#[test]
+fn folder_removal_keyboard_blockers_confirmation_and_result_are_usable_at_normal_and_small_sizes() {
+    use std::os::unix::ffi::OsStrExt;
+    let mut f = SetupFixture::new("true");
+    for (cols, rows) in [(160, 40), (60, 18)] {
+        let (creation, folder) = f.create(false);
+        archive_wait16(&mut f.control, |s| {
+            s["setup"]["pending"] == false
+                && s["setup"]["records"].as_array().is_some_and(|rs| {
+                    rs.iter().any(|r| {
+                        r["creation"]["intent"]["request"] == creation && r["phase"] == "Succeeded"
+                    })
+                })
+        });
+        archive_git16(
+            &folder,
+            &["config", "user.name", "Removal keyboard fixture"],
+        );
+        archive_git16(&folder, &["config", "user.email", "remove@example.invalid"]);
+        std::fs::write(folder.join(".gitignore"), "ignored\n").unwrap();
+        archive_git16(&folder, &["add", ".gitignore"]);
+        archive_git16(&folder, &["commit", "-qm", "ignore fixture"]);
+        std::fs::write(folder.join("ignored"), "private unsaved content\n").unwrap();
+        f.control
+            .request_now(serde_json::json!({"Adopt":folder.as_os_str().as_bytes()}));
+        archive_wait16(&mut f.control, |s| {
+            s["adoption_pending"] == false
+                && s["adopted"] == folder.to_str().unwrap()
+                && s["metadata_pending"] == false
+        });
+        f.control.stream.shutdown(std::net::Shutdown::Both).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(8);
+        let mut dashboard = loop {
+            let mut d =
+                Dashboard::open_geometry(&folder, &f.fixture.state(), None, None, rows, cols);
+            let screen = d.wait_any(&[
+                "Discovery complete",
+                "Adopted:",
+                "Another dashboard controls this supervisor",
+            ]);
+            if !screen.contains("Another dashboard controls this supervisor") {
+                break d;
+            }
+            d.kill();
+            assert!(
+                Instant::now() < deadline,
+                "previous controller not released"
+            );
+        };
+        dashboard.send(b"M");
+        dashboard.wait("Preview: Preview only");
+        if let Some(dir) = std::env::var_os("RAT_REMOVAL_EVIDENCE") {
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(
+                Path::new(&dir).join(format!("remove-{cols}-preview.txt")),
+                dashboard.screen.screen().contents(),
+            )
+            .unwrap();
+        }
+        if cols == 60 {
+            dashboard.send(b"jjjjjjjjjjjjjj");
+        }
+        dashboard.wait("BLOCKED:");
+        if let Some(dir) = std::env::var_os("RAT_REMOVAL_EVIDENCE") {
+            std::fs::write(
+                Path::new(&dir).join(format!("remove-{cols}-blocker.txt")),
+                dashboard.screen.screen().contents(),
+            )
+            .unwrap();
+        }
+        dashboard.send(b" y\r");
+        assert!(
+            folder.join("ignored").exists(),
+            "blocked preview never confirms deletion"
+        );
+        std::fs::remove_file(folder.join("ignored")).unwrap();
+        dashboard.send(b"n");
+        dashboard.wait("Preview: Preview only");
+        if cols == 60 {
+            dashboard.send(b"jjjjjjjjjjjj");
+        }
+        dashboard.wait("y: Confirm removal");
+        if let Some(dir) = std::env::var_os("RAT_REMOVAL_EVIDENCE") {
+            std::fs::write(
+                Path::new(&dir).join(format!("remove-{cols}-confirm.txt")),
+                dashboard.screen.screen().contents(),
+            )
+            .unwrap();
+        }
+        dashboard.send(b" y");
+        dashboard.wait("Removed: Workspace folder removed.");
+        assert!(!folder.exists());
+        if let Some(dir) = std::env::var_os("RAT_REMOVAL_EVIDENCE") {
+            std::fs::write(
+                Path::new(&dir).join(format!("remove-{cols}-result.txt")),
+                dashboard.screen.screen().contents(),
+            )
+            .unwrap();
+        }
+        dashboard.send(b"d");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while dashboard.child.try_wait().unwrap().is_none() {
+            assert!(Instant::now() < deadline);
+            while dashboard.output.try_recv().is_ok() {}
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        drop(dashboard);
+        f.control = Controller::connect(&f.fixture);
+    }
+    f.finish();
+}
+
+#[test]
+fn folder_removal_storage_failures_keep_code_and_require_read_only_reconciliation() {
+    let mut f = SetupFixture::new("true");
+    for boundary in ["removal-intent", "removal-before-git", "removal-result"] {
+        let (creation, folder) = f.create(false);
+        let created = archive_wait16(&mut f.control, |s| {
+            s["setup"]["pending"] == false
+                && s["setup"]["records"].as_array().is_some_and(|rs| {
+                    rs.iter().any(|r| {
+                        r["creation"]["intent"]["request"] == creation && r["phase"] == "Succeeded"
+                    })
+                })
+        });
+        let workspace = created["registry"]["workspaces"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|w| w["task"] == creation)
+            .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let preview = removal_preview18(&mut f.control, &workspace);
+        assert_eq!(preview["snapshot"]["blockers"], serde_json::json!([]));
+        let fault = f.fixture.state().join(format!("proof-storage-{boundary}"));
+        std::fs::write(&fault, "error").unwrap();
+        f.control.request_now(removal_confirm18(&preview, true));
+        archive_wait16(&mut f.control, |s| {
+            s["removal"]["pending"] == false
+                && s["removal"]["error"]
+                    .as_str()
+                    .is_some_and(|e| e.contains("not durable"))
+        });
+        assert_eq!(folder.exists(), boundary != "removal-result");
+        if boundary != "removal-intent" {
+            assert_eq!(
+                archive_git16(
+                    &f.fixture.repository,
+                    &[
+                        "rev-parse",
+                        preview["snapshot"]["reference"].as_str().unwrap()
+                    ]
+                ),
+                preview["snapshot"]["head"]
+            );
+        }
+        std::fs::remove_file(fault).unwrap();
+        f.control.request_now(serde_json::json!("RetryStorage"));
+        archive_wait16(&mut f.control, |s| {
+            s["removal"]["pending"] == false
+                && removal_record18(s, preview["request"].as_str().unwrap())
+                    .is_some_and(|r| r["phase"] == "Uncertain")
+        });
+        f.control.request_now(serde_json::json!({"ReconcileRemoval":{"workspace":workspace,"request":preview["request"]}}));
+        archive_wait16(&mut f.control, |s| {
+            s["removal"]["pending"] == false
+                && removal_record18(s, preview["request"].as_str().unwrap()).is_some_and(|r| {
+                    r["phase"]
+                        == if boundary == "removal-result" {
+                            "Removed"
+                        } else {
+                            "Failed"
+                        }
+                })
+        });
+        assert_eq!(folder.exists(), boundary != "removal-result");
+    }
+    assert!(!f.launches.exists());
+    f.finish();
+}
+
+#[test]
+fn folder_removal_blocks_pending_resume_lookup_and_active_coding_without_stopping_them() {
+    let mut f = SetupFixture::new("true");
+    let (creation, folder) = f.create(true);
+    let live = archive_wait16(&mut f.control, |s| {
+        s["sessions"].as_array().is_some_and(|ss| {
+            ss.iter()
+                .any(|r| r["task"] == creation && r["lifecycle"] == "Running")
+        })
+    });
+    let target = live["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["task"] == creation)
+        .unwrap()["target"]
+        .clone();
+    f.control
+        .request_now(serde_json::json!({"SelectSession":target}));
+    let running = archive_wait16(&mut f.control, |s| {
+        s["lifecycle"] == "Running" && s["screen"].as_str().is_some_and(|t| t.contains("fixture>"))
+    });
+    let workspace = running["registry"]["workspaces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|w| w["task"] == creation)
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let segment = running["session_identity"]["session"].clone();
+    let active = removal_preview18(&mut f.control, &workspace);
+    assert!(
+        active["snapshot"]["blockers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|b| b.as_str().unwrap().contains("Active/uncertain")),
+        "{active}"
+    );
+    let head = archive_git16(&folder, &["rev-parse", "HEAD"]);
+    f.control.request_now(removal_confirm18(&active, true));
+    assert_eq!(archive_git16(&folder, &["rev-parse", "HEAD"]), head);
+    assert_eq!(
+        f.control.request_now(serde_json::json!("Screen"))["lifecycle"],
+        "Running"
+    );
+    f.control.request_now(serde_json::json!("Stop"));
+    archive_wait16(&mut f.control, |s| {
+        s["lifecycle"] == "Stopped"
+            && s["metadata_pending"] == false
+            && s["sessions"]
+                .as_array()
+                .is_some_and(|rs| rs.iter().all(|r| r["reserved"] == false))
+    });
+    let clean = removal_preview18(&mut f.control, &workspace);
+    assert_eq!(clean["snapshot"]["blockers"], serde_json::json!([]));
+    let fault = f.fixture.state().join("proof-storage-resume");
+    std::fs::write(&fault, "stall").unwrap();
+    f.control.request_now(serde_json::json!({"ResumeSelected":{"request":"removal-late-resume","workspace":workspace,"session":segment}}));
+    f.control.request_now(removal_confirm18(&clean, true));
+    archive_wait16(&mut f.control, |s| {
+        s["removal"]["error"]
+            .as_str()
+            .is_some_and(|e| e.contains("Active/uncertain"))
+    });
+    assert!(folder.exists());
+    // Removal does not implicitly Stop an occupied or resolving conversation.
+    f.control.request_now(serde_json::json!("Stop"));
+    std::fs::remove_file(fault).unwrap();
+    archive_wait16(&mut f.control, |s| {
+        s["sessions"]
+            .as_array()
+            .is_some_and(|rs| rs.iter().all(|r| r["reserved"] == false))
+    });
+    assert_eq!(archive_git16(&folder, &["rev-parse", "HEAD"]), head);
+    f.finish();
+}
+
+#[test]
+fn folder_removal_excludes_setup_execution_without_implicitly_cancelling_it() {
+    let mut f = SetupFixture::new("while :; do sleep 1; done");
+    let (creation, folder) = f.create(false);
+    let running = archive_wait16(&mut f.control, |s| {
+        s["setup"]["records"].as_array().is_some_and(|rs| {
+            rs.iter()
+                .any(|r| r["creation"]["intent"]["request"] == creation && r["phase"] == "Running")
+        })
+    });
+    let workspace = running["registry"]["workspaces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|w| w["task"] == creation)
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let preview = removal_preview18(&mut f.control, &workspace);
+    assert!(
+        preview["snapshot"]["blockers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|b| b.as_str().unwrap().contains("Setup or creation")),
+        "{preview}"
+    );
+    f.control.request_now(removal_confirm18(&preview, true));
+    let retained = f.control.request_now(serde_json::json!("Screen"));
+    assert_eq!(retained["setup"]["records"][0]["phase"], "Running");
+    assert!(folder.exists());
+    f.finish();
+}
+
+#[test]
+fn folder_removal_excludes_incomplete_archive_branch_mutation_after_restart() {
+    let mut f = SetupFixture::new("true");
+    let (creation, folder) = f.create(false);
+    let created = f.phase("Succeeded");
+    let workspace = created["registry"]["workspaces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|w| w["task"] == creation)
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let branch = archive_git16(&folder, &["symbolic-ref", "HEAD"]);
+    let fault = f
+        .fixture
+        .state()
+        .join("proof-storage-archive-branch-result");
+    std::fs::write(&fault, "stall").unwrap();
+    f.control.request_now(serde_json::json!({"Archive":{"workspace":workspace,"request":uuid::Uuid::new_v4().to_string()}}));
+    archive_wait16(&mut f.control, |s| {
+        s["registry"]["archived"]
+            .as_array()
+            .is_some_and(|ids| ids.contains(&serde_json::json!(workspace)))
+            && s["archive"]["pending"] == true
+            && !Command::new("git")
+                .arg("-C")
+                .arg(&folder)
+                .args(["show-ref", "--verify", &branch])
+                .output()
+                .unwrap()
+                .status
+                .success()
+    });
+    f.restart("setup-boot-one");
+    std::fs::remove_file(fault).unwrap();
+    archive_wait16(&mut f.control, |s| {
+        s["archive"]["records"].as_array().is_some_and(|rs| {
+            rs.iter()
+                .any(|r| r["workspace"] == workspace && r["branch_phase"] == "CleanupPending")
+        })
+    });
+    let preview = removal_preview18(&mut f.control, &workspace);
+    assert!(
+        preview["snapshot"]["blockers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|b| b.as_str().unwrap().contains("Incomplete archive/branch")),
+        "{preview}"
+    );
+    f.control.request_now(removal_confirm18(&preview, true));
+    assert!(folder.exists());
+    assert!(!f.launches.exists());
+    f.finish();
+}
+
+// Explicit whole-milestone fixture qualification. This is deliberately ignored
+// by the ordinary suite: it owns six streaming PTYs and must have the machine's
+// runtime measurement lane exclusively, with prebuilt, source-pinned binaries.
+#[test]
+#[ignore = "serial macOS six-stream qualification; RAT_MEASURE19_DIR is required"]
+fn six_stream_coordination_measurement19() {
+    use std::{
+        collections::BTreeMap,
+        os::unix::{ffi::OsStrExt, fs::MetadataExt},
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicBool, Ordering},
+        },
+    };
+    let fixture = Fixture::new();
+    let evidence =
+        PathBuf::from(std::env::var_os("RAT_MEASURE19_DIR").expect("set a new evidence directory"));
+    std::fs::create_dir(&evidence).unwrap();
+    let _failure = FailedMeasurementEvidence {
+        state: fixture.state(),
+        evidence: evidence.clone(),
+    };
+    let log_file = Arc::new(Mutex::new(
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(evidence.join("observations.jsonl"))
+            .unwrap(),
+    ));
+    let log = |value: serde_json::Value| writeln!(log_file.lock().unwrap(), "{value}").unwrap();
+    let git = |repo: &Path, args: &[&str]| {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+    // Two checkouts in each of three independent common directories. The first
+    // project keeps the normal root/other branch pair for visible key navigation.
+    let mut folders = Vec::new();
+    for project in 0..3 {
+        let repo = if project == 0 {
+            fixture.repository.clone()
+        } else {
+            let path = fixture.temp.path().join(format!("project-{project}"));
+            std::fs::create_dir(&path).unwrap();
+            git(&path, &["init", "-b", "main"]);
+            path
+        };
+        git(
+            &repo,
+            &[
+                "-c",
+                "user.name=Measurement",
+                "-c",
+                "user.email=proof@example.invalid",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "six streams",
+            ],
+        );
+        let other = fixture.temp.path().join(format!("project-{project}-other"));
+        git(
+            &repo,
+            &["worktree", "add", "-b", "other19", other.to_str().unwrap()],
+        );
+        std::fs::write(
+            repo.join("comparison.txt"),
+            format!("project {project} root diff\n"),
+        )
+        .unwrap();
+        std::fs::write(
+            other.join("comparison.txt"),
+            format!("project {project} linked diff\n"),
+        )
+        .unwrap();
+        folders.extend([repo, other]);
+    }
+    std::os::unix::fs::DirBuilderExt::mode(&mut std::fs::DirBuilder::new(), 0o700)
+        .create(fixture.state())
+        .unwrap();
+    std::fs::write(fixture.state().join("proof-storage-ledger"), "enabled").unwrap();
+    log(
+        serde_json::json!({"kind":"manifest","source":String::from_utf8_lossy(&Command::new("git").args(["rev-parse","HEAD"]).output().unwrap().stdout).trim(),"dirty":!Command::new("git").args(["diff","HEAD","--quiet"]).status().unwrap().success(),"binary_sha256":String::from_utf8_lossy(&Command::new("shasum").args(["-a","256",env!("CARGO_BIN_EXE_agent-terminal")]).output().unwrap().stdout),"coding_only":true,"native_agents":false,"projects":3,"streams":6,"offered_bytes_per_second_per_stream":65536,"producer_duration_ms":120000,"record_bytes":1024,"style":"cursor overwrite, green SGR, lambda/CJK UTF8, X padding","healthy_controller_seconds":30,"navigation_samples":60,"healthy_attach_samples":18,"healthy_attach_owners":[0,1,2,3,4,5],"healthy_attach_samples_per_owner":3,"attach_scope":"Controller selects a retained running owner before each exact-folder dashboard; UUID-verified prepared-session attachment, selection latency excluded","fault":"session-scoped debug ENOSPC marker, not physical exhaustion","outer_terminal":"portable-pty + continuously consumed vt100 parsed cells 160x40; no pixel latency","instrumentation":"single Controller selects each owner; bounded durable-commit rings retained separately; per-owner snapshots; 1s ps/disk sampling; monotonic input-to-parsed-visible timestamps"}),
+    );
+    for (command, args) in [
+        ("sw_vers", vec![]),
+        ("uname", vec!["-mrs"]),
+        ("rustc", vec!["-Vv"]),
+        ("cargo", vec!["-V"]),
+        (
+            "sysctl",
+            vec!["-n", "hw.model", "hw.memsize", "hw.logicalcpu"],
+        ),
+        ("ps", vec!["-Ao", "pid,ppid,pgid,rss,lstart,comm"]),
+    ] {
+        let output = Command::new(command).args(args).output().unwrap();
+        log(
+            serde_json::json!({"kind":"environment","command":command,"stdout":String::from_utf8_lossy(&output.stdout),"stderr":String::from_utf8_lossy(&output.stderr)}),
+        );
+    }
+    let mut dashboard = fixture.open();
+    dashboard.wait("Discovery complete");
+    dashboard.kill();
+    drop(dashboard);
+    let mut control = Controller::connect(&fixture);
+    let owner_pid = fixture_peer_pid(&control.stream).unwrap();
+    let owner_identity = measurement_process_identity(owner_pid).unwrap();
+    assert_eq!(
+        owner_identity.2,
+        std::fs::canonicalize(env!("CARGO_BIN_EXE_agent-terminal"))
+            .unwrap()
+            .as_os_str()
+            .as_bytes()
+    );
+    log(
+        serde_json::json!({"kind":"owner-identity","authenticated_peer_pid":owner_pid,"start_seconds":owner_identity.0,"start_microseconds":owner_identity.1,"executable":owner_identity.2}),
+    );
+    let mut streams = Vec::new();
+    for (index, folder) in folders.iter().enumerate() {
+        control.request(serde_json::json!({"Adopt":folder.as_os_str().as_bytes()}));
+        cleanup_wait15(&mut control, |s| {
+            s["adoption_pending"] == false
+                && s["adopted"] == folder.to_str().unwrap()
+                && s["registry_pending"] == false
+        });
+        let state = control.request(serde_json::json!({"Launch":format!("six-stream-{index}")}));
+        let target = state["control_target"].as_str().unwrap().to_owned();
+        let session = state["session_identity"]["session"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let workspace = state["registry"]["selected"].as_str().unwrap().to_owned();
+        let pid = state["execution"]["pid"].as_u64().unwrap();
+        cleanup_wait15(&mut control, |s| {
+            s["screen"].as_str().is_some_and(|s| s.contains("fixture>"))
+        });
+        log(
+            serde_json::json!({"kind":"stream-identity","index":index,"project":index/2,"folder":folder,"target":target,"session":session,"workspace":workspace,"pid":pid}),
+        );
+        streams.push((target, session, workspace, pid));
+    }
+    assert_eq!(
+        streams
+            .iter()
+            .map(|s| &s.0)
+            .collect::<std::collections::BTreeSet<_>>()
+            .len(),
+        6
+    );
+    assert_eq!(
+        streams
+            .iter()
+            .map(|s| &s.1)
+            .collect::<std::collections::BTreeSet<_>>()
+            .len(),
+        6
+    );
+    assert_eq!(
+        control.request(serde_json::json!("Screen"))["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|s| s["lifecycle"] == "Running")
+            .count(),
+        6
+    );
+    let target_command = |index: usize, command: serde_json::Value| serde_json::json!({"Session":{"target":streams[index].0,"session":streams[index].1,"command":command}});
+    let mut pids = vec![std::process::id().to_string(), owner_pid.to_string()];
+    pids.extend(streams.iter().map(|s| s.3.to_string()));
+    let dashboard_pid = Arc::new(std::sync::atomic::AtomicU32::new(0));
+    let sampler_done = Arc::new(AtomicBool::new(false));
+    struct Sampler19 {
+        done: Arc<AtomicBool>,
+        join: Option<std::thread::JoinHandle<()>>,
+    }
+    impl Drop for Sampler19 {
+        fn drop(&mut self) {
+            self.done.store(true, Ordering::Relaxed);
+            if let Some(join) = self.join.take() {
+                join.join().unwrap();
+            }
+        }
+    }
+    let sampler = Sampler19 {
+        done: sampler_done.clone(),
+        join: Some({
+            let file = log_file.clone();
+            let done = sampler_done.clone();
+            let directory = fixture.state();
+            let pids = pids.join(",");
+            let dashboard_pid = dashboard_pid.clone();
+            std::thread::spawn(move || {
+                while !done.load(Ordering::Relaxed) {
+                    let before = measurement_clock();
+                    let dashboard = dashboard_pid.load(Ordering::Relaxed);
+                    let sampled_pids = if dashboard == 0 {
+                        pids.clone()
+                    } else {
+                        format!("{pids},{dashboard}")
+                    };
+                    let output = Command::new("ps")
+                        .args(["-p", &sampled_pids, "-o", "pid=,ppid=,rss=,etime=,command="])
+                        .output()
+                        .unwrap();
+                    let mut files = Vec::new();
+                    for entry in std::fs::read_dir(&directory).unwrap().flatten() {
+                        if let Ok(metadata) = entry.metadata()
+                            && metadata.is_file()
+                        {
+                            files.push(serde_json::json!({"name":entry.file_name().to_string_lossy(),"bytes":metadata.len(),"allocated_bytes":metadata.blocks()*512}));
+                        }
+                    }
+                    writeln!(file.lock().unwrap(),"{}",serde_json::json!({"kind":"resources","sample_ns":before,"sampler_us":measurement_clock().saturating_sub(before)/1000,"ps":String::from_utf8_lossy(&output.stdout),"files":files})).unwrap();
+                    std::thread::sleep(Duration::from_secs(1));
+                }
+            })
+        }),
+    };
+    let mut stream_after_sequences = Vec::new();
+    for (index, _) in streams.iter().enumerate() {
+        let before = control.request(serde_json::json!({"SelectSession":streams[index].0}));
+        stream_after_sequences.push(
+            before["durable_commits"]
+                .as_array()
+                .unwrap()
+                .last()
+                .map_or(0, |receipt| receipt["sequence"].as_u64().unwrap()),
+        );
+        control.request(target_command(index,serde_json::json!({"Input":format!("pace17 {} 120000 65536\r",1900+index).into_bytes()})));
+    }
+    let started_ns = measurement_clock();
+    let mut commits: Vec<BTreeMap<u64, serde_json::Value>> =
+        (0..6).map(|_| BTreeMap::new()).collect();
+    let mut failures = Vec::new();
+    let mut sample_state = |index: usize, phase: &str, state: &serde_json::Value| {
+        assert_eq!(state["control_target"], streams[index].0);
+        assert_eq!(state["session_identity"]["session"], streams[index].1);
+        if let Some(ring) = state["durable_commits"].as_array() {
+            for receipt in ring {
+                commits[index].insert(receipt["sequence"].as_u64().unwrap(), receipt.clone());
+            }
+        }
+        log(
+            serde_json::json!({"kind":"stream-snapshot","phase":phase,"index":index,"sample_ns":measurement_clock(),"lifecycle":state["lifecycle"],"accepted":state["accepted_bytes"],"written":state["written_bytes"],"durable":state["durable_bytes"],"capture_pending":state["capture_pending_bytes"],"capture_high_water":state["capture_high_water"],"backpressure_count":state["capture_backpressure_count"],"backpressure_us":state["capture_backpressure_micros"],"subscriber_frame_high_water":state["subscriber_frame_high_water"],"storage_error":state["storage_error"],"durable_commits":state["durable_commits"]}),
+        );
+    };
+    // The storage worker must retain fair capture/flush progress while global
+    // retained searches and actual Git comparisons are repeatedly requested.
+    let healthy_start = Instant::now();
+    let mut cycle = 0;
+    while healthy_start.elapsed() < Duration::from_secs(30) {
+        for (index, _) in streams.iter().enumerate() {
+            let state = control.request(serde_json::json!({"SelectSession":streams[index].0}));
+            sample_state(index, "healthy-search-diff", &state);
+            let request = format!("m219-search-{cycle}-{index}");
+            let since = measurement_clock();
+            control.request(serde_json::json!({"Browse":{"request":request,"mode":"History","text":"pace17","after":0,"workspace":null,"passage":null,"cancel":false}}));
+            let result = cleanup_wait15(&mut control, |s| {
+                s["browse"]["request"] == request && s["browse"]["preparing"] == false
+            });
+            log(
+                serde_json::json!({"kind":"search","index":index,"request":request,"us":measurement_clock().saturating_sub(since)/1000,"response":result["browse"]}),
+            );
+            let request = format!("m219-diff-{cycle}-{index}");
+            let since = measurement_clock();
+            control.request(serde_json::json!({"InspectWorking":{"request":request,"workspace":streams[index].2,"selected":null}}));
+            let state = cleanup_wait15(&mut control, |s| s["working_diff"]["request"] == request);
+            assert!(
+                state["working_diff"]["result"]["Ok"]["content"]
+                    .as_str()
+                    .is_some_and(|t| t.contains("diff")),
+                "{state}"
+            );
+            log(
+                serde_json::json!({"kind":"diff","index":index,"request":request,"us":measurement_clock().saturating_sub(since)/1000}),
+            );
+            sample_state(index, "healthy-search-diff", &state);
+        }
+        cycle += 1;
+    }
+    assert!(cycle >= 2, "must exercise repeated search/diff scheduling");
+    for (index, _) in streams.iter().enumerate() {
+        let state = control.request(serde_json::json!({"SelectSession":streams[index].0}));
+        sample_state(index, "healthy-before-ui", &state);
+        assert!(
+            state["durable_bytes"].as_u64().unwrap() > 500000,
+            "stream {index} starved: {state}"
+        );
+        assert!(state["capture_high_water"].as_u64().unwrap() <= 270336);
+    }
+    control.request(serde_json::json!({"SelectSession":streams[0].0}));
+    drop(control);
+    let mut dashboard = LiveDashboard::new(fixture.reopen_after_release("Process: Running"));
+    dashboard_pid.store(
+        dashboard.dashboard.child.process_id().unwrap(),
+        Ordering::Relaxed,
+    );
+    dashboard.send(&[0x1d]);
+    dashboard.wait("Focus: dashboard");
+    dashboard.wait("Branch: main");
+    for sample in 0..60 {
+        let (key, expected) = if sample % 2 == 0 {
+            (b"j", "Branch: other19")
+        } else {
+            (b"k", "Branch: main")
+        };
+        let before = measurement_clock();
+        dashboard.send(key);
+        let visible = dashboard.wait(expected).1;
+        let us = visible.saturating_sub(before) / 1000;
+        log(
+            serde_json::json!({"kind":"navigation","phase":"six-stream-healthy","sample":sample,"injected_ns":before,"visible_ns":visible,"us":us}),
+        );
+        if us >= 100000 {
+            failures.push(format!("healthy navigation {sample}: {us}us"));
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    drop(dashboard);
+    dashboard_pid.store(0, Ordering::Relaxed);
+    let mut control = Controller::connect(&fixture);
+    // Candidate j/k navigation above does not adopt a runtime. Explicitly select
+    // each retained owner before opening its exact checkout dashboard. Selection
+    // and dashboard startup are outside the prepared-session attach measurement.
+    for (index, _) in streams.iter().enumerate() {
+        control.request(serde_json::json!({"SelectSession":streams[index].0}));
+        let selected = cleanup_wait15(&mut control, |state| {
+            state["control_target"] == streams[index].0
+                && state["session_identity"]["session"] == streams[index].1
+                && state["lifecycle"] == "Running"
+        });
+        sample_state(index, "healthy-selected-for-attach", &selected);
+        drop(control);
+        let deadline = Instant::now() + Duration::from_secs(8);
+        let reopened = loop {
+            let mut candidate = Dashboard::open(&folders[index], &fixture.state());
+            let screen = candidate.wait_any(&[
+                "Process: Running",
+                "Another dashboard controls this supervisor",
+            ]);
+            if screen.contains("Process: Running") {
+                break candidate;
+            }
+            candidate.kill();
+            assert!(Instant::now() < deadline, "controller EOF was not released");
+        };
+        let mut dashboard = LiveDashboard::new(reopened);
+        dashboard_pid.store(
+            dashboard.dashboard.child.process_id().unwrap(),
+            Ordering::Relaxed,
+        );
+        dashboard.wait(&streams[index].1);
+        dashboard.send(&[0x1d]);
+        dashboard.wait("Focus: dashboard");
+        for local_sample in 0..3 {
+            let sample = index * 3 + local_sample;
+            assert!(
+                dashboard
+                    .latest
+                    .lock()
+                    .unwrap()
+                    .0
+                    .contains(&streams[index].1),
+                "wrong current managed session before timed attach {sample}"
+            );
+            let before = measurement_clock();
+            dashboard.send(b"\r");
+            dashboard.wait("Focus: session");
+            let nonce = format!("m219-{sample:03}");
+            dashboard.send(format!("ack17 {nonce}\r").as_bytes());
+            let visible = dashboard.observe(&format!("ACK17 {nonce} "), Duration::from_secs(2));
+            let us = visible
+                .as_ref()
+                .map(|screen| screen.1.saturating_sub(before) / 1000);
+            if let Some((screen, _)) = &visible {
+                assert!(
+                    screen.contains(&streams[index].1),
+                    "ACK appeared for wrong managed session: intended {}: {screen}",
+                    streams[index].1
+                );
+            }
+            log(
+                serde_json::json!({"kind":"attach","phase":"six-stream-healthy","sample":sample,"owner_index":index,"expected_target":streams[index].0,"expected_session":streams[index].1,"nonce":nonce,"injected_ns":before,"visible_ns":visible.as_ref().map(|screen|screen.1),"us":us,"screen":visible.as_ref().map(|screen|&screen.0)}),
+            );
+            if us.is_none_or(|us| us >= 1000000) {
+                failures.push(format!("healthy owner {index} attach {sample}: {us:?}us"));
+            }
+            dashboard.send(&[0x1d]);
+            dashboard.wait("Focus: dashboard");
+        }
+        drop(dashboard);
+        dashboard_pid.store(0, Ordering::Relaxed);
+        control = Controller::connect(&fixture);
+        assert_eq!(
+            control.greeting["session_identity"]["session"],
+            streams[index].1
+        );
+        sample_state(index, "healthy-after-attach", &control.greeting);
+    }
+    for (index, _) in streams.iter().enumerate() {
+        let state = control.request(serde_json::json!({"SelectSession":streams[index].0}));
+        sample_state(index, "healthy-after-ui", &state);
+    }
+    let mut healthy_end_sequences = Vec::new();
+    for (index, _) in streams.iter().enumerate() {
+        let state = control.request(serde_json::json!({"SelectSession":streams[index].0}));
+        healthy_end_sequences.push(
+            state["durable_commits"].as_array().unwrap().last().unwrap()["sequence"]
+                .as_u64()
+                .unwrap(),
+        );
+        sample_state(index, "healthy-end", &state);
+    }
+    let fault_start_ns = measurement_clock();
+    std::fs::write(fixture.state().join("proof-storage-session"), &streams[0].1).unwrap();
+    std::fs::write(fixture.state().join("proof-storage-write"), "error").unwrap();
+    control.request(serde_json::json!({"SelectSession":streams[0].0}));
+    let fault = cleanup_wait15(&mut control, |s| {
+        s["storage_error"].is_string() && s["capture_pending_bytes"].as_u64().unwrap_or(0) > 0
+    });
+    sample_state(0, "fault-start", &fault);
+    let mut healthy_baseline = Vec::new();
+    for (index, _) in streams.iter().enumerate().skip(1) {
+        let state = control.request(serde_json::json!({"SelectSession":streams[index].0}));
+        healthy_baseline.push(state["durable_bytes"].as_u64().unwrap());
+    }
+    let fault_since = Instant::now();
+    while fault_since.elapsed() < Duration::from_secs(8) {
+        for (index, _) in streams.iter().enumerate() {
+            let state = control.request(serde_json::json!({"SelectSession":streams[index].0}));
+            sample_state(index, "one-stream-enospc", &state);
+            let request = uuid::Uuid::new_v4().to_string();
+            let since = measurement_clock();
+            control.request(serde_json::json!({"Browse":{"request":request,"mode":"History","text":"pace17","after":0,"workspace":null,"passage":null,"cancel":false}}));
+            let result = cleanup_wait15(&mut control, |s| {
+                s["browse"]["request"] == request && s["browse"]["preparing"] == false
+            });
+            log(
+                serde_json::json!({"kind":"search","phase":"one-stream-enospc","index":index,"request":request,"us":measurement_clock().saturating_sub(since)/1000,"response":result["browse"]}),
+            );
+            let request = uuid::Uuid::new_v4().to_string();
+            let since = measurement_clock();
+            control.request(serde_json::json!({"InspectWorking":{"request":request,"workspace":streams[index].2,"selected":null}}));
+            let state = cleanup_wait15(&mut control, |s| s["working_diff"]["request"] == request);
+            assert!(state["working_diff"]["result"]["Ok"].is_object(), "{state}");
+            log(
+                serde_json::json!({"kind":"diff","phase":"one-stream-enospc","index":index,"request":request,"us":measurement_clock().saturating_sub(since)/1000}),
+            );
+            sample_state(index, "one-stream-enospc", &state);
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+    for (index, _) in streams.iter().enumerate().skip(1) {
+        let state = control.request(serde_json::json!({"SelectSession":streams[index].0}));
+        assert!(
+            state["storage_error"].is_null(),
+            "fault leaked into stream {index}: {state}"
+        );
+        assert!(
+            state["durable_bytes"].as_u64().unwrap() > healthy_baseline[index - 1] + 65536,
+            "healthy stream {index} starved during peer failure: {state}"
+        );
+    }
+    control.request(serde_json::json!({"SelectSession":streams[0].0}));
+    let saturated = cleanup_wait15(&mut control, |s| {
+        s["capture_backpressure_count"].as_u64().unwrap_or(0) > 0
+    });
+    sample_state(0, "fault-saturated", &saturated);
+    drop(control);
+    let mut dashboard = LiveDashboard::new(fixture.reopen_after_release("Process: Running"));
+    dashboard_pid.store(
+        dashboard.dashboard.child.process_id().unwrap(),
+        Ordering::Relaxed,
+    );
+    dashboard.send(&[0x1d]);
+    dashboard.wait("Focus: dashboard");
+    dashboard.wait("Branch: main");
+    dashboard.wait(&streams[0].1);
+    for sample in 0..20 {
+        let (key, expected) = if sample % 2 == 0 {
+            (b"j", "Branch: other19")
+        } else {
+            (b"k", "Branch: main")
+        };
+        let before = measurement_clock();
+        dashboard.send(key);
+        let visible = dashboard.wait(expected).1;
+        let us = visible.saturating_sub(before) / 1000;
+        log(
+            serde_json::json!({"kind":"navigation","phase":"one-stream-enospc","sample":sample,"injected_ns":before,"visible_ns":visible,"us":us}),
+        );
+        if us >= 100000 {
+            failures.push(format!("fault navigation {sample}: {us}us"));
+        }
+    }
+    // Full-storage usable attachment is measured as censored/failing when its
+    // visible ACK cannot arrive. Receipt/focus alone never counts as a pass.
+    let before = measurement_clock();
+    dashboard.send(b"\r");
+    dashboard.wait("Focus: session");
+    dashboard.send(b"ack17 m219-fault\r");
+    let visible = dashboard.observe("ACK17 m219-fault ", Duration::from_secs(2));
+    if let Some((screen, _)) = &visible {
+        assert!(
+            screen.contains(&streams[0].1),
+            "fault ACK belongs to another managed session: {screen}"
+        );
+    }
+    assert!(dashboard.latest.lock().unwrap().0.contains(&streams[0].1));
+    log(
+        serde_json::json!({"kind":"attach","phase":"one-stream-enospc","owner_index":0,"expected_target":streams[0].0,"expected_session":streams[0].1,"injected_ns":before,"visible_ns":visible.as_ref().map(|s|s.1),"censor_ns":measurement_clock(),"usable":visible.is_some(),"screen":dashboard.latest.lock().unwrap().0}),
+    );
+    dashboard.send(&[0x1d]);
+    dashboard.wait("Focus: dashboard");
+    let before = measurement_clock();
+    dashboard.send(b"s");
+    let stopped = dashboard.wait("Process: Stopped").1;
+    log(
+        serde_json::json!({"kind":"stop","index":0,"injected_ns":before,"visible_ns":stopped,"us":stopped.saturating_sub(before)/1000}),
+    );
+    drop(dashboard);
+    dashboard_pid.store(0, Ordering::Relaxed);
+    std::fs::remove_file(fixture.state().join("proof-storage-write")).unwrap();
+    let repair_ns = measurement_clock();
+    let mut control = Controller::connect(&fixture);
+    control.request(target_command(0, serde_json::json!("RetryStorage")));
+    cleanup_wait15(&mut control, |s| {
+        s["capture_pending_bytes"] == 0
+            && s["accepted_bytes"] == s["durable_bytes"]
+            && s["metadata_pending"] == false
+    });
+    for (index, _) in streams.iter().enumerate().skip(1) {
+        control.request(target_command(index, serde_json::json!("Stop")));
+    }
+    for (index, _) in streams.iter().enumerate() {
+        control.request(serde_json::json!({"SelectSession":streams[index].0}));
+        let final_state = cleanup_wait15(&mut control, |s| {
+            s["lifecycle"] == "Stopped"
+                && s["capture_pending_bytes"] == 0
+                && s["accepted_bytes"] == s["durable_bytes"]
+                && s["metadata_pending"] == false
+        });
+        sample_state(index, "final-stopped-durable", &final_state);
+        assert_eq!(final_state["written_bytes"], final_state["durable_bytes"]);
+        assert!(final_state["capture_high_water"].as_u64().unwrap() <= 1318912);
+        assert!(final_state["subscriber_frame_high_water"].as_u64().unwrap() <= 4194304);
+        std::fs::write(
+            evidence.join(format!("final-stream-{index}.json")),
+            serde_json::to_vec_pretty(&final_state).unwrap(),
+        )
+        .unwrap();
+    }
+    log(
+        serde_json::json!({"kind":"windows","all_six_started_ns":started_ns,"fault_start_ns":fault_start_ns,"repair_ns":repair_ns,"finished_ns":measurement_clock()}),
+    );
+    // Every receipt must be present. Check the full healthy interval rather than
+    // a last-value sample. The peer-fault interval is excluded only for stream 0.
+    for (index, ring) in commits.iter().enumerate() {
+        assert!(
+            ring.len() >= 20,
+            "stream {index} has too few real durable completions"
+        );
+        assert_eq!(
+            *ring.first_key_value().unwrap().0,
+            1,
+            "stream {index} lost initial receipt"
+        );
+        let mut previous = None;
+        let mut previous_completed = None;
+        for (&sequence, receipt) in ring {
+            if let Some(last) = previous {
+                assert_eq!(sequence, last + 1, "stream {index} missed a receipt");
+            }
+            previous = Some(sequence);
+            // completed_micros is storage-worker-relative, not CLOCK_MONOTONIC.
+            // Exclude pre-stream idle time; the pre-fault sequence ends stream 0's
+            // healthy window. Full-ring continuity remains checked above.
+            if sequence > stream_after_sequences[index]
+                && (index != 0 || sequence <= healthy_end_sequences[index])
+            {
+                let completed = receipt["completed_micros"].as_u64().unwrap();
+                if let Some(prior) = previous_completed
+                    && completed - prior >= 1000000
+                {
+                    failures.push(format!(
+                        "healthy stream {index} durable gap {}us receipt {sequence}",
+                        completed - prior
+                    ));
+                }
+                previous_completed = Some(completed);
+                let age = receipt["oldest_accepted_micros"].as_u64().unwrap();
+                if age >= 1000000 {
+                    failures.push(format!(
+                        "healthy stream {index} durable age {age}us receipt {sequence}"
+                    ));
+                }
+            }
+        }
+        log(
+            serde_json::json!({"kind":"all-commits","index":index,"stream_after_sequence":stream_after_sequences[index],"healthy_end_sequence":healthy_end_sequences[index],"commits":ring.values().collect::<Vec<_>>()}),
+        );
+    }
+    let shutdown = measurement_shutdown(&mut control);
+    log(serde_json::json!({"kind":"shutdown","state":shutdown}));
+    drop(control);
+    measurement_wait_endpoint_exit(&fixture);
+    drop(sampler);
+    // Socket unlink precedes process teardown. Query only this run's freshly
+    // authenticated peer; never copy a database while its writer can survive.
+    let exit_deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        match measurement_process_identity(owner_pid) {
+            Ok(actual) => assert_eq!(
+                actual, owner_identity,
+                "peer PID was reused before exit verification"
+            ),
+            Err(error) if error.raw_os_error() == Some(libc::ESRCH) => break,
+            Err(error) => panic!("Cannot establish authenticated peer exit: {error}"),
+        }
+        assert!(
+            Instant::now() < exit_deadline,
+            "authenticated owner has not exited"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    log(
+        serde_json::json!({"kind":"owner-exit","authenticated_peer_pid":owner_pid,"identity":owner_identity,"query":"Darwin process identity returned ESRCH; no signal sent"}),
+    );
+    for entry in std::fs::read_dir(fixture.state()).unwrap().flatten() {
+        if entry.file_type().unwrap().is_file() {
+            std::fs::copy(entry.path(), evidence.join(entry.file_name())).unwrap();
+        }
+    }
+    // Retain the exact cold DB/sidecars before SQLite performs any rollback.
+    // Only the separate analysis copy is writable; no journal is manually deleted.
+    let raw_sqlite = evidence.join("sqlite-before-recovery");
+    std::fs::create_dir(&raw_sqlite).unwrap();
+    let sha = |path: &Path| {
+        let output = Command::new("shasum")
+            .args(["-a", "256"])
+            .arg(path)
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .split_whitespace()
+            .next()
+            .unwrap()
+            .to_owned()
+    };
+    let mut cold_files = Vec::new();
+    for entry in std::fs::read_dir(fixture.state()).unwrap().flatten() {
+        if entry
+            .file_name()
+            .to_string_lossy()
+            .starts_with("history.sqlite3")
+        {
+            let bytes = std::fs::read(entry.path()).unwrap();
+            assert_eq!(
+                bytes,
+                std::fs::read(evidence.join(entry.file_name())).unwrap(),
+                "cold SQLite copy changed"
+            );
+            std::fs::write(raw_sqlite.join(entry.file_name()), &bytes).unwrap();
+            assert_eq!(
+                bytes,
+                std::fs::read(entry.path()).unwrap(),
+                "exited owner's SQLite files changed"
+            );
+            let source_sha = sha(&entry.path());
+            let copy_sha = sha(&evidence.join(entry.file_name()));
+            let raw_sha = sha(&raw_sqlite.join(entry.file_name()));
+            assert_eq!(source_sha, copy_sha);
+            assert_eq!(source_sha, raw_sha);
+            cold_files.push(serde_json::json!({"name":entry.file_name().to_string_lossy(),"bytes":bytes.len(),"source_and_copy_equal":true,"source_sha256":source_sha,"analysis_copy_sha256":copy_sha,"untouched_raw_sha256":raw_sha}));
+        }
+    }
+    let journal_before = std::fs::read(raw_sqlite.join("history.sqlite3-journal")).ok();
+    let recovery = rusqlite::Connection::open_with_flags(
+        evidence.join("history.sqlite3"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE,
+    )
+    .unwrap();
+    let integrity: String = recovery
+        .query_row("PRAGMA integrity_check", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(integrity, "ok");
+    drop(recovery);
+    log(
+        serde_json::json!({"kind":"sqlite-analysis-copy","cold_files":cold_files,"raw_preserved":"sqlite-before-recovery","recovery":"SQLite rollback allowed only on separate analysis copy","integrity_check":integrity,"journal_after_verified_exit":journal_before.as_ref().map(|bytes| serde_json::json!({"bytes":bytes.len(),"first_eight_bytes":bytes.iter().take(8).copied().collect::<Vec<_>>()})),"analysis_journal_after_recovery":evidence.join("history.sqlite3-journal").exists()}),
+    );
+    let index_db = rusqlite::Connection::open_with_flags(
+        evidence.join("history.sqlite3"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap();
+    for (index, (_, session, _, _)) in streams.iter().enumerate() {
+        let (frontier, ordinal, sealed, durable): (u64, u64, bool, u64) = index_db.query_row(
+            "SELECT p.frontier,p.ordinal,p.sealed,s.durable FROM history_projection p JOIN sessions s ON s.id=p.session WHERE p.session=?1",
+            [session], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        ).unwrap();
+        assert!(
+            frontier > 0 && frontier <= durable && ordinal > 0,
+            "stream {index} has no valid committed index progress"
+        );
+        log(
+            serde_json::json!({"kind":"index-frontier","index":index,"session":session,"committed_frontier":frontier,"passages":ordinal,"projection_sealed":sealed,"durable_raw_prefix":durable,"caught_up":frontier == durable,"fully_sealed":frontier == durable && sealed,"scope":"cold SQLite after authenticated peer identity exited; raw DB/sidecars preserved; analysis copy integrity checked after SQLite recovery; raw durability is independent of derivative indexing"}),
+        );
+        let mut chunks: Vec<_> = std::fs::read_dir(&evidence)
+            .unwrap()
+            .flatten()
+            .filter(|entry| {
+                entry.file_name().to_string_lossy().starts_with(session)
+                    && entry.path().extension().is_some_and(|e| e == "transcript")
+            })
+            .collect();
+        chunks.sort_by_key(|entry| entry.file_name());
+        let bytes: Vec<u8> = chunks
+            .iter()
+            .flat_map(|entry| std::fs::read(entry.path()).unwrap())
+            .collect();
+        let state: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(evidence.join(format!("final-stream-{index}.json"))).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(bytes.len() as u64, state["durable_bytes"].as_u64().unwrap());
+        // Shared multi-process producer ledgers are diagnostic only. This gate
+        // binds each quiescent retained raw extent to its reported durable prefix.
+        log(
+            serde_json::json!({"kind":"retained-raw","index":index,"durable_raw_bytes":bytes.len()}),
+        );
+    }
+    log(serde_json::json!({"kind":"result","failures":failures,"search_diff_cycles":cycle}));
+    assert!(
+        failures.is_empty(),
+        "six-stream measurement gate failed: {failures:?}; retained evidence {}",
+        evidence.display()
+    );
 }
