@@ -161,7 +161,13 @@ def code_snapshot(registry):
         item = {"id": workspace["id"], "path": workspace["path"], "present": os.path.isdir(root)}
         if item["present"]:
             item["head"] = output(["git", "-C", root, "rev-parse", "HEAD"]).decode().strip()
+            index = output(["git", "-C", root, "ls-files", "--stage", "-z"])
+            item["index_entries_sha256"] = hashlib.sha256(index).hexdigest()
+            item["index_entries"] = [list(entry) for entry in index.split(b"\0") if entry]
             paths = output(["git", "-C", root, "ls-files", "-z", "--cached", "--others", "--exclude-standard"]).split(b"\0")
+            ignored = output(["git", "-C", root, "ls-files", "-z", "--others", "--ignored", "--exclude-standard"]).split(b"\0")
+            item["ignored_paths"] = [list(path) for path in ignored if path]
+            paths.extend(ignored)
             files = []
             for relative in sorted(set(paths)-{b""}):
                 path = os.path.join(os.fsencode(root), relative)
@@ -285,7 +291,10 @@ def main():
               "projects_unchanged": data["database"]["projects"] == previous["database"]["projects"],
               "workspaces_unchanged": data["database"]["workspaces"] == previous["database"]["workspaces"],
               "membership_unchanged": data["database"]["membership"] == previous["database"]["membership"],
-              "code_and_recovery_refs_unchanged": data["code"] == previous["code"]}
+              "code_and_recovery_refs_unchanged": data["code"] == previous["code"],
+              "all_code_file_contents_verified": not any("unverified" in file
+                  for snapshot in [previous["code"], data["code"]]
+                  for workspace in snapshot["workspaces"] for file in workspace.get("files", []))}
     before = {row["id"]: row for row in previous["database"]["sessions"]}
     after = {row["id"]: row for row in data["database"]["sessions"]}
     checks["no_new_managed_segments"] = before.keys() == after.keys()
