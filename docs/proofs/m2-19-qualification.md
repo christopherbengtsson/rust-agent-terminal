@@ -1,7 +1,8 @@
 # Milestone 2 integrated qualification
 
-Ticket 19 remains **Resolved: no**. This record will distinguish checks completed
-on one frozen source/binary set from outstanding gates. Prior feature proofs are
+Ticket 19 is **Resolved: yes** for the recorded macOS coding-only workload. This
+record distinguishes source-pinned checks and their historical open gates from
+the subsequent actual sleep/wake and reboot completion. Prior feature proofs are
 supporting evidence with their original source/tool boundaries; they are not a
 new integrated qualification.
 
@@ -30,16 +31,15 @@ failure even when a later focused check succeeds.
   physical reboot recovery with no duplicate or automatically restarted coding.
 - Normal 160×40 and compact 60×18 captures compared with the vision image.
 
-## Open external gates
+## Physical gates and their completion
 
-No physical reboot is authorized or performed by this record. The spec requires
-explicit user permission before reboot. A durable handoff must identify retained
-state, source/binaries, session/native IDs and the exact post-boot checks before
-that action is requested. Injected boot fixtures do not satisfy this gate.
-The later actual sleep/wake follow-up below is now verified with OS power
-evidence and unchanged prepared identities/state. Physical reboot remains
-unverified; neither prior feature proofs nor injected boots satisfy it. C6 and
-milestone completion remain unclaimed while that required case is open.
+At the original non-physical checkpoint, sleep/wake and reboot were open and
+no physical transition was inferred from fixtures. The user later performed
+[actual sleep/wake](m2-19-sleep-wake.md) and the separately arranged
+[physical reboot](m2-19-reboot.md). Reviewed source `59fed09` retained all
+required identities/code/history, started no coding on owner-only restore, and
+passed explicit original-ID recall followed by cold cleanup. Those later records
+close C6; earlier open-gate statements below remain chronological evidence.
 
 This ticket does not qualify GitHub review automation, publishing, task PR
 continuation, notifications or the combined release workload.
@@ -296,3 +296,23 @@ unchanged. Code, refs, membership, selected context and committed history prefix
 verified; an immediate pre-reboot checkpoint was refreshed. This supersedes the
 earlier sleep/wake-open status only. **Physical reboot remains unverified, so
 C6, ticket 19 and milestone acceptance remain open.**
+
+## Physical reboot and ticket completion
+
+The user-reported, kernel-verified [actual reboot](m2-19-reboot.md) closes the
+remaining physical gate. All 18 owner-only restore checks passed before any
+manual native action. Explicit recovery/resume then recalled both original
+conversation markers, preserving the original native IDs and adding exactly
+two requested managed segments. Existing reconciliation released the restored
+reservations without PID signals; explicit Stop, final durability and ordinary
+authenticated Shutdown completed. Current owner/native trees and endpoints are
+absent; code/index/ignored/untracked witnesses, recovery refs and old committed
+transcript prefixes remain intact.
+
+Ticket 19 and the M2 spec are resolved for this declared macOS/source/tool
+boundary. Final code checks remain the frozen `59fed09` pass (278 passed, eight
+intentional ignores); subsequent changes are qualification/tracker documentation
+only. Existing limitations remain: version-qualified native status (default
+Claude319 Unknown), partial indexing under sustained output, clipped long labels,
+snapshot-based external-Git protection and no hardware power-loss claim. Later
+GitHub/reviewer/notification or combined-release gates are not claimed.

@@ -1,4 +1,12 @@
-# Ticket 19 physical-transition preparation plan
+# Historical ticket 19 physical-transition preparation plan
+
+This original a56 plan is retained for provenance. The later reviewed-source
+preparation used a fresh validated state copy and different unblocked live
+workspaces, preserving the crash reservation. Actual user-performed transitions
+and final outcomes are recorded in [the reboot proof](m2-19-reboot.md); do not
+execute this historical table as a current instruction.
+
+## Original plan (before physical execution)
 
 This is a reviewable future plan, not an executed reboot checkpoint. The delivered native state is cold; no coding or supervisor should be left running for integration checks. Real sleep/wake and physical reboot remain open, and ticket 19 remains unresolved. Only the user's explicit authorization permits a physical reboot. Do not invoke any reboot/sleep command during preparation.
 

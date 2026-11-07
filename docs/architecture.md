@@ -1551,8 +1551,9 @@ The process-local lease excludes cooperating application workers, not arbitrary
 external editors/Git. Final checks and ordinary Git refusal bound observed safety;
 there is no universal external-write atomicity or physical power-loss guarantee.
 Git filters/LFS retain ordinary Git semantics for external resources. See
-[ticket 18 evidence](proofs/m2-18-removal.md). Full native/combined-workload,
-sleep/wake and physical reboot qualification remains ticket 19.
+[ticket 18 evidence](proofs/m2-18-removal.md). Declared M2 coding-only native/workload,
+sleep/wake and physical reboot qualification is recorded in ticket 19
+and the [actual reboot evidence](proofs/m2-19-reboot.md).
 
 
 ## Integrated coding qualification corrections (Milestone 2 ticket 19)
@@ -1580,6 +1581,10 @@ first aggregate, regression evidence and clean corrected aggregate, separate
 fixture/native boundaries, real archive/removal/local recovery, and exact
 version limits. Native crash restoration can retain a conservative same-boot
 Interrupted reservation after its processes are gone; the proof preserves it
-rather than clearing ownership from saved PIDs. Actual sleep/wake and physical
-reboot remain open, as do final integration review/checks. C6 and full milestone
-completion are not claimed.
+rather than clearing ownership from saved PIDs. Final review/fixes and the frozen
+all-target integration passed. Actual user-performed sleep/wake and reboot then
+verified identity/code/history preservation and zero automatic coding. Restored
+reservations required existing explicit reconciliation before original-ID resumes;
+no saved PID was signalled. Both marker recalls, Stop/durability and ordinary
+authenticated Shutdown passed. The recorded M2 C6 gate is complete; later release
+gates and version/workload limitations remain separate.

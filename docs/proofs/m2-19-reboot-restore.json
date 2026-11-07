@@ -1,0 +1,72 @@
+{
+  "qualified_source": "59fed09a8c13505b68d93dd10e5612419a3d08d5",
+  "product_sha256": "b50530e0e859eb23fd7c61d4442d5fc8dd47c11aaffe39615897be76df460faf",
+  "user_report": "rebooted",
+  "before_boot": {
+    "kern.bootsessionuuid": "29BAFBA1-DCA5-4B2B-8CC4-458DC32D50D5",
+    "kern.boottime": "{ sec = 1789719069, usec = 491914 } Fri Sep 18 10:11:09 2026"
+  },
+  "after_boot": {
+    "kern.bootsessionuuid": "3B5D74F5-B7DE-441B-B4B2-1BE5A773F691",
+    "kern.boottime": "{ sec = 1794042411, usec = 61279 } Sat Nov  7 10:06:51 2026"
+  },
+  "initial_readonly": {
+    "checks": {
+      "actual_boot_uuid_changed": true,
+      "actual_boottime_changed": true,
+      "binary_unchanged": true,
+      "source_commit_object_present": true,
+      "projects_unchanged": true,
+      "workspaces_unchanged": true,
+      "membership_unchanged": true,
+      "code_and_recovery_refs_unchanged": true,
+      "all_code_file_contents_verified": true,
+      "no_new_managed_segments": true,
+      "no_unexpected_live_checkout_processes": true,
+      "original_session_native_ids_preserved": true,
+      "original_committed_prefixes_preserved": true,
+      "no_automatic_running_coding_observed": null,
+      "public_registry_identities_preserved": null,
+      "public_latest_segments_restored": null,
+      "public_selected_native_id_preserved": null
+    },
+    "failed_checks": [],
+    "unverified_checks": [
+      "no_automatic_running_coding_observed",
+      "public_registry_identities_preserved",
+      "public_latest_segments_restored",
+      "public_selected_native_id_preserved"
+    ],
+    "all_required_checks_passed": false
+  },
+  "explicit_owner_only": {
+    "checks": {
+      "actual_boot_uuid_changed": true,
+      "actual_boottime_changed": true,
+      "binary_unchanged": true,
+      "source_commit_object_present": true,
+      "projects_unchanged": true,
+      "workspaces_unchanged": true,
+      "membership_unchanged": true,
+      "code_and_recovery_refs_unchanged": true,
+      "all_code_file_contents_verified": true,
+      "no_new_managed_segments": true,
+      "no_unexpected_live_checkout_processes": true,
+      "original_session_native_ids_preserved": true,
+      "original_committed_prefixes_preserved": true,
+      "no_automatic_running_coding_observed": true,
+      "public_registry_identities_preserved": true,
+      "public_latest_segments_restored": true,
+      "public_selected_native_id_preserved": true
+    },
+    "failed_checks": [],
+    "unverified_checks": [],
+    "all_required_checks_passed": true
+  },
+  "scope": "All restore checks were captured before the separately explicit native resumes. Initial readonly had no owner; four public observations were correctly unverified. Owner-only startup passed all checks without native coding.",
+  "private_artifact_sha256": {
+    "actual-after-wake-immediate-pre-reboot-02.json": "2c01ca42bc50d82d3fb59665cdac197b8762d45b58b7ea8866a4a13d0180bec2",
+    "actual-postboot-readonly-01.json": "32a156e5ffe3c2639e6eac2c987083acf62ac321708e79bfa4d8d94a6d9fc99a",
+    "actual-postboot-explicit-owner-01.json": "164bd86c3e5eec0ed2d8263d080b64658cef80aed7b7b3e0ef189aa0d6826923"
+  }
+}

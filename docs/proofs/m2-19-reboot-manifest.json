@@ -1,0 +1,54 @@
+{
+  "scope": "Explicit allowlist; no raw state/auth/native profiles/full native argv/host process inventory",
+  "files": {
+    "postboot-shareable/POSTBOOT-NATIVE-BRIEF.md": {
+      "bytes": 3705,
+      "sha256": "9f264537c31465e164e8370ecabe2df551f0631f2be90165e677d16e330e0745"
+    },
+    "postboot-shareable/actual-postboot-summary-01-failed-attempt.json": {
+      "bytes": 412,
+      "sha256": "c2815b280b84c7e79dcc9bd7b0e6cec215f7fb5edd34f13d55cbccaba34516d0"
+    },
+    "postboot-shareable/amber-fresh-recall.cells.json": {
+      "bytes": 588644,
+      "sha256": "2c0baa15e8660ff67702483131465fb23711a0e5bc9ddddb05c4ca1129e51884"
+    },
+    "postboot-shareable/amber-recall-observation.json": {
+      "bytes": 231876,
+      "sha256": "5e3e892938ce7c70043f54a2e07e678504bb6bf530e67e631cb1969a4ab144a5"
+    },
+    "postboot-shareable/amber-recall-plan.json": {
+      "bytes": 1004,
+      "sha256": "0180cd26a64c5ba3ddbd376e65deb84545dd6010b7cca9c1535a84262dd1e11b"
+    },
+    "postboot-shareable/cleanup-confirmation.json": {
+      "bytes": 5056,
+      "sha256": "4f45b66c5dc25abec69d8cd2b3f41c19ec579a6e2c355d034e63197cfc5a82b4"
+    },
+    "postboot-shareable/curation-failed-attempt.json": {
+      "bytes": 209,
+      "sha256": "aa2f9fac49d288c7a8e78aa2d60fdbea51d84a4b105d03c6d164b329314c5587"
+    },
+    "postboot-shareable/native-tool-boundary.json": {
+      "bytes": 844,
+      "sha256": "5ba36904db15a61ef9958f1970a923d6c8f9e8704dfe62bc8f5ac51eb073204a"
+    },
+    "postboot-shareable/postboot-native-summary.json": {
+      "bytes": 8402,
+      "sha256": "dffdf8f351d24fa254d3d44a2440e454591db678b904efae451ecfdc49bcf0d8"
+    },
+    "postboot-shareable/violet-fresh-recall.cells.json": {
+      "bytes": 589709,
+      "sha256": "41c5a88d3d35172b5b65f0a6605f23eeac31944f82d030708b37d53dd36e7bf1"
+    },
+    "postboot-shareable/violet-recall-observation.json": {
+      "bytes": 229149,
+      "sha256": "5981f89d8ab74aaf22ac368bcf97e4f1b031653ddd2eda5999ca685af369527a"
+    },
+    "postboot-shareable/violet-recall-plan.json": {
+      "bytes": 826,
+      "sha256": "d949d1fa60003edf14d93404e527e4e4e484858997eaa217fc6a857d5d6abd3a"
+    }
+  },
+  "archive_sha256": "65766f23011c4510298f0f99e084b4c26a974792da5fb82415c81e811859cafe"
+}

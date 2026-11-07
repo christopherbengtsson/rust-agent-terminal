@@ -1,7 +1,7 @@
 # Milestone 2 — coding coordination
 
 Status: ready-for-agent
-Resolved: no
+Resolved: yes
 
 ## Problem Statement
 
@@ -365,3 +365,18 @@ history prefixes. An immediate pre-reboot checkpoint was refreshed. This
 supersedes the earlier sleep/wake-open status; physical reboot remains an open
 required gate awaiting explicit user arrangement. Ticket 19, this spec and C6
 remain unresolved/unclaimed.
+
+
+## Completion — 2026-11-07
+
+All 19 implementation tickets are resolved on the integration branch created
+from `55f1e17`. Independent standards/spec findings were fixed and verified;
+final stable locked build/format/Clippy and frozen all-target checks passed
+(278 passed, eight intentional ignores, unchanged binaries/source at `59fed09`).
+The separately user-performed [sleep/wake](../../docs/proofs/m2-19-sleep-wake.md)
+and [physical reboot](../../docs/proofs/m2-19-reboot.md) checks passed. Owner-only
+restore started no coding; explicit original-ID recalls and cold cleanup passed.
+The [qualification record](../../docs/proofs/m2-19-qualification.md) preserves
+exact source/tool/workload boundaries, failed attempts and remaining limitations.
+This closes the declared M2 C1–C7 scope, not later GitHub/reviewer/notification
+or combined-release gates. Earlier open-status paragraphs are historical.

@@ -1,7 +1,7 @@
 # 19: Complete the Milestone 2 coordination evidence
 
 Status: ready-for-agent
-Resolved: no
+Resolved: yes
 Blocked by: 12, 15, 18
 
 **What to build:** Demonstrate C1–C7 together with both native agents, editors, concurrent projects and honest recovery/resource evidence on macOS.
@@ -9,7 +9,7 @@ Blocked by: 12, 15, 18
 - [x] Run the integrated keyboard workflow across three projects and six concurrent coding sessions, including creation/setup/search/resume/diffs/editor/archive/branch cleanup/removal; preserve one active session per worktree.
 - [x] Record native versions and actual prompt/approval/Ctrl-C/resize/attach/quit/reconnect behavior for Claude and Codex on final relevant source. Retain original-ID history and unavailable-recovery cases.
 - [x] Measure input-to-visible navigation against 100 ms and usable attach against under one second, plus fair per-session durability/queue/memory/disk behavior during searches/diffs and storage faults. Separate fixture/native evidence.
-- [ ] Exercise detach, normal quit, dashboard loss, supervisor crash, sleep/wake and real reboot recovery without duplicates/automatic coding restart. Arrange physical reboot explicitly with the user and retain unverified cases as open gates.
+- [x] Exercise detach, normal quit, dashboard loss, supervisor crash, sleep/wake and real reboot recovery without duplicates/automatic coding restart. Arrange physical reboot explicitly with the user and retain unverified cases as open gates.
 - [x] Run stable locked build, formatting, warnings-denied all-target Clippy and all-target tests. Compare normal/small terminal captures to the vision, align working instructions and report limitations. Do not claim later GitHub/reviewer or notification release gates.
 
 ## Comments
@@ -59,3 +59,20 @@ implementation or new validation evidence is claimed by this ticket.
 - Physical reboot is still unverified and requires separate explicit user
   arrangement. The combined lifecycle checkbox, C6, this ticket and the spec
   remain open; no reboot result is claimed.
+
+
+2026-11-07 actual reboot completion:
+
+- The user performed the separately arranged real reboot. Kernel boot UUID and
+  boottime changed; all 18 owner-only restore checks passed before native coding.
+- Both original Codex167 and Claude318 conversations then recalled their markers
+  after explicit recovery/resume, with original native IDs and fresh managed
+  segments. Existing explicit recovery released reservations without launching
+  coding; no old PID was signalled or reservation manually cleared.
+- Explicit Stop, durability and ordinary authenticated Shutdown passed. Current
+  owned processes/endpoints are absent; code/index/witnesses/refs and every old
+  identity/committed prefix survive. Exactly two authorized segments were added.
+- [Actual reboot evidence](../../../docs/proofs/m2-19-reboot.md), its 12-file
+  curated archive and the qualification record close C6 and this ticket for the
+  recorded macOS coding-only scope. Earlier failed/open checkpoints are retained.
+  Later release gates and existing limitations remain outside this claim.

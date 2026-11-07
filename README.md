@@ -16,9 +16,10 @@ fixture tests do not establish native-agent compatibility.
 Local multi-project coordination, independent workspace creation/setup, retained
 search, selected native resume, Working/Whole workspace diffs, external editors,
 archive recovery, branch cleanup and separate folder removal are implemented.
-The [Milestone 2 qualification record](docs/proofs/m2-19-qualification.md) tracks
-the combined acceptance gates. Milestone 2 remains incomplete until those gates,
-including explicitly authorized physical reboot recovery, have been demonstrated.
+The [Milestone 2 qualification record](docs/proofs/m2-19-qualification.md) records
+completed C1–C7 coding-only checks for its declared macOS/tool/workload scope,
+including user-performed sleep/wake and physical reboot recovery. Native version
+limits and later GitHub/reviewer/notification release gates remain explicit.
 
 The [integrated Milestone 1 evidence](docs/proofs/18-milestone-evidence.md) records
 exact native versions, measured capacity and limits. The discovered default
