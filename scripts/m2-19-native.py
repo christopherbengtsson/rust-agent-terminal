@@ -102,7 +102,7 @@ def drive(args):
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
     argv = [str(args.binary.resolve()), str(args.repo.resolve()),
             "--state-dir", str(args.state.resolve())]
-    env = dict(os.environ)
+    env = dict(os.environ, TERM="xterm-256color")
     if "editor" in plan:
         env["RAT_EDITOR_JSON"] = json.dumps(plan["editor"])
     def claim_terminal():
