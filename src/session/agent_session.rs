@@ -815,8 +815,14 @@ impl AgentSession {
                 self.state.error = Some("Worktree occupied or prior capture/setup is unsettled; attach to its running session, or explicitly Stop and wait for settled capture before resuming another conversation".into());
                 return;
             }
-            if request.is_empty() || request.len() > 128 {
-                self.state.error = Some("Invalid resume request identity".into());
+            if request.is_empty()
+                || request.len() > 128
+                || workspace.is_empty()
+                || workspace.len() > 128
+                || session.len() > 36
+                || uuid::Uuid::parse_str(session).is_err()
+            {
+                self.state.error = Some("Invalid resume request, workspace or managed segment identity; readable history retained".into());
                 return;
             }
             match storage

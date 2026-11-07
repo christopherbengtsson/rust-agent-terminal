@@ -2147,6 +2147,41 @@ mod concurrent_tests {
                 .native,
             native
         );
+        for (agent, native_id, message) in [
+            ("Claude Code", None, "native conversation UUID is missing"),
+            (
+                "unsupported tool",
+                Some(native.to_owned()),
+                "tool is unsupported or missing",
+            ),
+        ] {
+            let mut unavailable = state.clone();
+            let unavailable_session = uuid::Uuid::new_v4().to_string();
+            unavailable.session_identity.as_mut().unwrap().session = unavailable_session.clone();
+            unavailable.agent = Some(agent.into());
+            unavailable.native_conversation = native_id;
+            let snapshot = Snapshot::new(&unavailable, None, &task);
+            let operation = snapshot.operation.clone();
+            worker.commands.send(Command::Save(snapshot)).unwrap();
+            loop {
+                if let Completion::Committed(done) =
+                    worker.events.recv_timeout(Duration::from_secs(3)).unwrap()
+                    && done == operation
+                {
+                    break;
+                }
+            }
+            assert!(
+                resolve(
+                    &worker,
+                    &uuid::Uuid::new_v4().to_string(),
+                    &unavailable_session
+                )
+                .err()
+                .unwrap()
+                .contains(message)
+            );
+        }
         worker
             .commands
             .send(Command::Seal(Operation::new(&state, Purpose::Seal)))

@@ -2138,6 +2138,17 @@ os.execv(sys.argv[0]+'.child',[sys.argv[0]+'.child'])
     dashboard.wait("Process: Exited");
     dashboard.send(b"h");
     dashboard.send(b"n");
+    let original_segment = old_identity
+        .as_str()
+        .unwrap()
+        .split("session=")
+        .nth(1)
+        .unwrap()
+        .split_whitespace()
+        .next()
+        .unwrap();
+    dashboard.wait(original_segment);
+    dashboard.send(b"\r");
     dashboard.wait("received: original-readable-context-16");
     dashboard.kill();
     let mut control = Controller::connect(&fixture);
@@ -2209,7 +2220,7 @@ fn unavailable_native_recovery_retains_history_until_explicit_new_conversation()
     dashboard.send(b"exit\r");
     dashboard.wait("Process: Exited");
     dashboard.send(b"v");
-    dashboard.wait("Native resume unavailable: no supported saved conversation identity");
+    dashboard.wait("Native resume unavailable: original tool is unsupported or missing");
     dashboard.send(b"h");
     dashboard.wait("received: independent-history-16");
     dashboard.send(b"h");
@@ -9309,6 +9320,21 @@ for line in sys.stdin:
         std::fs::read(fixture.repository.join("untracked")).unwrap(),
         b"unsaved"
     );
+    let unavailable = fixture.temp.path().join("temporarily unavailable checkout");
+    std::fs::rename(&fixture.repository, &unavailable).unwrap();
+    control.request(serde_json::json!({"ResumeSelected":{"request":"checkout-unavailable","workspace":workspace,"session":originals[0].0}}));
+    let missing_checkout = cleanup_wait15(&mut control, |s| {
+        s["error"]
+            .as_str()
+            .unwrap_or("")
+            .contains("Checkout unavailable")
+            && s["metadata_pending"] == false
+    });
+    assert!(missing_checkout["execution"].is_null());
+    control.request(serde_json::json!({"HistorySession":{"session":originals[1].0,"offset":0}}));
+    let readable = cleanup_wait15(&mut control, |s| s["history"]["session"] == originals[1].0);
+    assert_eq!(readable["history"]["text"], original_history);
+    std::fs::rename(unavailable, &fixture.repository).unwrap();
     // Missing native records and unsupported resume versions are native failures,
     // retained in the attempted new segment; neither starts another conversation.
     std::fs::write(tools.join("claude"),format!("#!{}\nimport sys\nprint('native conversation unavailable / unsupported resume version',flush=True)\nsys.exit(7)\n",python.trim())).unwrap();
