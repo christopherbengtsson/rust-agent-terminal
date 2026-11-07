@@ -3919,6 +3919,52 @@ impl Drop for FailedMeasurementEvidence {
     }
 }
 
+#[cfg(target_os = "macos")]
+fn measurement_process_identity(pid: i32) -> std::io::Result<(u64, u64, Vec<u8>)> {
+    let start = || {
+        let mut info = unsafe { std::mem::zeroed::<libc::proc_bsdinfo>() };
+        let size = std::mem::size_of_val(&info) as i32;
+        if unsafe {
+            libc::proc_pidinfo(
+                pid,
+                libc::PROC_PIDTBSDINFO,
+                0,
+                (&mut info as *mut libc::proc_bsdinfo).cast(),
+                size,
+            )
+        } != size
+        {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok((info.pbi_start_tvsec, info.pbi_start_tvusec))
+    };
+    let before = start()?;
+    let mut executable = vec![0; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
+    if unsafe { libc::proc_pidpath(pid, executable.as_mut_ptr().cast(), executable.len() as u32) }
+        <= 0
+    {
+        return Err(std::io::Error::last_os_error());
+    }
+    executable.truncate(
+        executable
+            .iter()
+            .position(|b| *b == 0)
+            .unwrap_or(executable.len()),
+    );
+    if start()? != before {
+        return Err(std::io::Error::other(
+            "Measurement peer identity changed during inspection",
+        ));
+    }
+    Ok((before.0, before.1, executable))
+}
+#[cfg(not(target_os = "macos"))]
+fn measurement_process_identity(_: i32) -> std::io::Result<(u64, u64, Vec<u8>)> {
+    Err(std::io::Error::other(
+        "This explicit measurement requires macOS process identity",
+    ))
+}
+
 fn measurement_shutdown(control: &mut Controller) -> serde_json::Value {
     let mut state = control.request(serde_json::json!("Shutdown"));
     let until = Instant::now() + Duration::from_secs(10);
@@ -9878,6 +9924,15 @@ fn archive_disarms_pending_selected_resume_and_reopens_saved_receipt_without_exe
         archive_git16(&fixture.repository, &["rev-parse", "HEAD"]),
         before
     );
+    let refused = control.request_now(serde_json::json!({"ResumeSelected":{"request":"archive-while-pending","workspace":workspace,"session":original}}));
+    assert!(
+        refused["error"]
+            .as_str()
+            .is_some_and(|m| m.contains("folder removal is pending")),
+        "{refused}"
+    );
+    assert_eq!(refused["session_identity"]["session"], original);
+    assert!(!marker.exists());
     std::fs::remove_file(pause).unwrap();
     let archived = archive_wait16(&mut control, |s| {
         s["registry"]["archived"]
@@ -9916,7 +9971,7 @@ fn archive_disarms_pending_selected_resume_and_reopens_saved_receipt_without_exe
     let refused = archive_wait16(&mut control, |s| {
         s["error"]
             .as_str()
-            .is_some_and(|m| m.contains("archive owns"))
+            .is_some_and(|m| m.contains("archived; Return/unarchive"))
     });
     assert_eq!(refused["session_identity"]["session"], original);
     control.request_now(serde_json::json!("Shutdown"));
@@ -10741,6 +10796,143 @@ fn folder_removal_retains_exact_detached_code_branches_and_history_after_lost_ac
 }
 
 #[test]
+fn unavailable_archive_receipts_keep_start_frozen_with_loading_guidance() {
+    let mut f = SetupFixture::new("true");
+    let (creation, _) = f.create(false);
+    let created = f.phase("Succeeded");
+    let workspace = created["registry"]["workspaces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|w| w["task"] == creation)
+        .unwrap()["id"]
+        .clone();
+    let request = uuid::Uuid::new_v4().to_string();
+    f.control.request_now(serde_json::json!({"Archive":{"workspace":workspace,"request":request,"branch_policy":"Keep"}}));
+    let archived = archive_wait16(&mut f.control, |s| {
+        s["archive"]["pending"] == false
+            && s["registry"]["archived"]
+                .as_array()
+                .is_some_and(|ids| ids.contains(&workspace))
+    });
+    f.control.request_now(serde_json::json!("Shutdown"));
+    archive_wait16(&mut f.control, |s| s["stopped"] == true);
+    f.owner.0.wait().unwrap();
+    // An unreadable on-disk receipt must never turn the archived registry label
+    // into proof that archive/recovery loading has completed.
+    let db = rusqlite::Connection::open(f.fixture.state().join("history.sqlite3")).unwrap();
+    db.execute("UPDATE workspace_archives SET record='{'", [])
+        .unwrap();
+    drop(db);
+    let _ = f.control.stream.shutdown(std::net::Shutdown::Both);
+    f.owner = SetupFixture::owner(&f.fixture, &f.tools);
+    f.control = Controller::connect(&f.fixture);
+    archive_wait16(&mut f.control, |s| {
+        s["archive"]["error"].is_string() && s["removal"]["ready"] == true
+    });
+    let refused = f
+        .control
+        .request_now(serde_json::json!({"LaunchClaude":"must-not-start-with-unreadable-receipts"}));
+    assert!(
+        refused["error"]
+            .as_str()
+            .is_some_and(|m| m.contains("recovery is loading")),
+        "{refused}"
+    );
+    assert_eq!(refused["session_identity"], archived["session_identity"]);
+    assert!(refused["execution"].is_null());
+    assert!(!f.launches.exists());
+    f.finish();
+}
+
+#[test]
+fn settled_archived_removed_checkout_refuses_resume_with_recovery_guidance_without_new_segment() {
+    use std::os::unix::ffi::OsStrExt;
+    let mut f = SetupFixture::new("true");
+    let (creation, folder) = f.create(false);
+    let created = f.phase("Succeeded");
+    let workspace = created["registry"]["workspaces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|w| w["task"] == creation)
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    f.control
+        .request_now(serde_json::json!({"Adopt":folder.as_os_str().as_bytes()}));
+    archive_wait16(&mut f.control, |s| {
+        s["adoption_pending"] == false && s["adopted"] == folder.to_str().unwrap()
+    });
+    f.control
+        .request_now(serde_json::json!({"LaunchClaude":"removed-native-original"}));
+    let running = archive_wait16(&mut f.control, |s| {
+        s["lifecycle"] == "Running"
+            && s["native_conversation"].is_string()
+            && s["screen"].as_str().is_some_and(|t| t.contains("fixture>"))
+    });
+    let original = running["session_identity"].clone();
+    let native = running["native_conversation"].clone();
+    f.control.request_now(serde_json::json!("Stop"));
+    archive_wait16(&mut f.control, |s| {
+        s["lifecycle"] == "Stopped"
+            && s["metadata_pending"] == false
+            && s["sessions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|s| s["reserved"] == false)
+    });
+    let request = uuid::Uuid::new_v4().to_string();
+    f.control.request_now(serde_json::json!({"Archive":{"workspace":workspace,"request":request,"branch_policy":"Keep"}}));
+    archive_wait16(&mut f.control, |s| {
+        s["archive"]["pending"] == false
+            && s["registry"]["archived"]
+                .as_array()
+                .is_some_and(|ids| ids.contains(&serde_json::json!(workspace)))
+    });
+    let preview = removal_preview18(&mut f.control, &workspace);
+    assert_eq!(preview["snapshot"]["blockers"], serde_json::json!([]));
+    f.control.request_now(removal_confirm18(&preview, true));
+    let removed = archive_wait16(&mut f.control, |s| {
+        s["removal"]["pending"] == false
+            && removal_record18(s, preview["request"].as_str().unwrap())
+                .is_some_and(|r| r["phase"] == "Removed")
+    });
+    assert!(!folder.exists());
+    let sessions = removed["sessions"].clone();
+    for command in [
+        serde_json::json!({"ResumeSelected":{"request":"removed-explicit-resume","workspace":workspace,"session":original["session"]}}),
+        serde_json::json!({"LaunchClaude":"removed-must-not-launch"}),
+    ] {
+        let refused = f.control.request_now(command);
+        let message = refused["error"].as_str().unwrap();
+        assert!(message.contains("Workspace folder removed;"), "{message}");
+        assert!(
+            message.contains("recovery reference") && message.contains("adopt"),
+            "{message}"
+        );
+        assert!(
+            !message.contains("pending") && !message.contains("settle"),
+            "{message}"
+        );
+        assert_eq!(refused["sessions"], sessions);
+        assert_eq!(refused["session_identity"], original);
+        assert_eq!(refused["native_conversation"], native);
+        assert!(refused["execution"].is_null());
+        assert_eq!(
+            std::fs::read_to_string(&f.launches)
+                .unwrap()
+                .lines()
+                .count(),
+            1
+        );
+    }
+    f.finish();
+}
+
+#[test]
 fn folder_removal_durable_boundary_blocks_alias_launch_and_restart_never_replays_deletion() {
     use std::os::unix::ffi::OsStrExt;
     let mut f = SetupFixture::new("true");
@@ -11314,6 +11506,17 @@ fn six_stream_coordination_measurement19() {
     drop(dashboard);
     let mut control = Controller::connect(&fixture);
     let owner_pid = fixture_peer_pid(&control.stream).unwrap();
+    let owner_identity = measurement_process_identity(owner_pid).unwrap();
+    assert_eq!(
+        owner_identity.2,
+        std::fs::canonicalize(env!("CARGO_BIN_EXE_agent-terminal"))
+            .unwrap()
+            .as_os_str()
+            .as_bytes()
+    );
+    log(
+        serde_json::json!({"kind":"owner-identity","authenticated_peer_pid":owner_pid,"start_seconds":owner_identity.0,"start_microseconds":owner_identity.1,"executable":owner_identity.2}),
+    );
     let mut streams = Vec::new();
     for (index, folder) in folders.iter().enumerate() {
         control.request(serde_json::json!({"Adopt":folder.as_os_str().as_bytes()}));
@@ -11804,11 +12007,91 @@ fn six_stream_coordination_measurement19() {
     drop(control);
     measurement_wait_endpoint_exit(&fixture);
     drop(sampler);
+    // Socket unlink precedes process teardown. Query only this run's freshly
+    // authenticated peer; never copy a database while its writer can survive.
+    let exit_deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        match measurement_process_identity(owner_pid) {
+            Ok(actual) => assert_eq!(
+                actual, owner_identity,
+                "peer PID was reused before exit verification"
+            ),
+            Err(error) if error.raw_os_error() == Some(libc::ESRCH) => break,
+            Err(error) => panic!("Cannot establish authenticated peer exit: {error}"),
+        }
+        assert!(
+            Instant::now() < exit_deadline,
+            "authenticated owner has not exited"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    log(
+        serde_json::json!({"kind":"owner-exit","authenticated_peer_pid":owner_pid,"identity":owner_identity,"query":"Darwin process identity returned ESRCH; no signal sent"}),
+    );
     for entry in std::fs::read_dir(fixture.state()).unwrap().flatten() {
         if entry.file_type().unwrap().is_file() {
             std::fs::copy(entry.path(), evidence.join(entry.file_name())).unwrap();
         }
     }
+    // Retain the exact cold DB/sidecars before SQLite performs any rollback.
+    // Only the separate analysis copy is writable; no journal is manually deleted.
+    let raw_sqlite = evidence.join("sqlite-before-recovery");
+    std::fs::create_dir(&raw_sqlite).unwrap();
+    let sha = |path: &Path| {
+        let output = Command::new("shasum")
+            .args(["-a", "256"])
+            .arg(path)
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .split_whitespace()
+            .next()
+            .unwrap()
+            .to_owned()
+    };
+    let mut cold_files = Vec::new();
+    for entry in std::fs::read_dir(fixture.state()).unwrap().flatten() {
+        if entry
+            .file_name()
+            .to_string_lossy()
+            .starts_with("history.sqlite3")
+        {
+            let bytes = std::fs::read(entry.path()).unwrap();
+            assert_eq!(
+                bytes,
+                std::fs::read(evidence.join(entry.file_name())).unwrap(),
+                "cold SQLite copy changed"
+            );
+            std::fs::write(raw_sqlite.join(entry.file_name()), &bytes).unwrap();
+            assert_eq!(
+                bytes,
+                std::fs::read(entry.path()).unwrap(),
+                "exited owner's SQLite files changed"
+            );
+            let source_sha = sha(&entry.path());
+            let copy_sha = sha(&evidence.join(entry.file_name()));
+            let raw_sha = sha(&raw_sqlite.join(entry.file_name()));
+            assert_eq!(source_sha, copy_sha);
+            assert_eq!(source_sha, raw_sha);
+            cold_files.push(serde_json::json!({"name":entry.file_name().to_string_lossy(),"bytes":bytes.len(),"source_and_copy_equal":true,"source_sha256":source_sha,"analysis_copy_sha256":copy_sha,"untouched_raw_sha256":raw_sha}));
+        }
+    }
+    let journal_before = std::fs::read(raw_sqlite.join("history.sqlite3-journal")).ok();
+    let recovery = rusqlite::Connection::open_with_flags(
+        evidence.join("history.sqlite3"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE,
+    )
+    .unwrap();
+    let integrity: String = recovery
+        .query_row("PRAGMA integrity_check", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(integrity, "ok");
+    drop(recovery);
+    log(
+        serde_json::json!({"kind":"sqlite-analysis-copy","cold_files":cold_files,"raw_preserved":"sqlite-before-recovery","recovery":"SQLite rollback allowed only on separate analysis copy","integrity_check":integrity,"journal_after_verified_exit":journal_before.as_ref().map(|bytes| serde_json::json!({"bytes":bytes.len(),"first_eight_bytes":bytes.iter().take(8).copied().collect::<Vec<_>>()})),"analysis_journal_after_recovery":evidence.join("history.sqlite3-journal").exists()}),
+    );
     let index_db = rusqlite::Connection::open_with_flags(
         evidence.join("history.sqlite3"),
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
@@ -11824,7 +12107,7 @@ fn six_stream_coordination_measurement19() {
             "stream {index} has no valid committed index progress"
         );
         log(
-            serde_json::json!({"kind":"index-frontier","index":index,"session":session,"committed_frontier":frontier,"passages":ordinal,"projection_sealed":sealed,"durable_raw_prefix":durable,"caught_up":frontier == durable,"fully_sealed":frontier == durable && sealed,"scope":"quiescent copied SQLite after confirmed owner shutdown; raw durability is independent of derivative indexing"}),
+            serde_json::json!({"kind":"index-frontier","index":index,"session":session,"committed_frontier":frontier,"passages":ordinal,"projection_sealed":sealed,"durable_raw_prefix":durable,"caught_up":frontier == durable,"fully_sealed":frontier == durable && sealed,"scope":"cold SQLite after authenticated peer identity exited; raw DB/sidecars preserved; analysis copy integrity checked after SQLite recovery; raw durability is independent of derivative indexing"}),
         );
         let mut chunks: Vec<_> = std::fs::read_dir(&evidence)
             .unwrap()

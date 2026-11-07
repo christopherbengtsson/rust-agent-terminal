@@ -1252,7 +1252,7 @@ archive recovery ref for a review base. External-editor handoff is ticket 15.
 ### External editor inspection and live source (Milestone 2 ticket 15)
 
 `InspectWorking.editor` requests a fresh full Working/Whole workspace artifact
-from the existing cancellable comparison worker. `editor_protocol=1` advertises
+from the existing cancellable comparison worker. `editor_protocol=2` advertises
 that capability separately from comparison protocol 2; a dashboard connected to
 an older owner refuses editor inspection rather than treating a selected-file
 snapshot as a full export. Content and identity travel in `Snapshot.editor_content`,
@@ -1261,7 +1261,16 @@ and per-file state/reasons, with 64 KiB per file, 1 MiB total, 1024 inventory en
 and a five-second budget checked between files. Existing bounded Git process
 commands and cancellation remain in force; one command/file can finish after
 that between-file budget. Long display path labels are abbreviated at 256 bytes;
-raw path identity remains in the snapshot. Matching status is not atomicity.
+raw path identity remains in the snapshot. The worker records the selected raw
+path's one-based artifact heading in `Snapshot.editor_line`, including omitted
+sections; editor preparation validates that bound rather than matching display
+labels. `Snapshot.source_start` records the zero-based start of plain current-file
+text for new/conflicted files, including Whole workspace headers. Patch source
+positions continue to follow new-side hunks. These optional scalar fields preserve
+bounded payloads; editor actions refuse older capability versions lacking this
+position contract. A local per-file presentation helper is shared by Working,
+Whole and editor export; their comparison headers and export caps stay separate.
+Matching status is not atomicity.
 
 `EditorSource` freezes request/workspace/path/line and runs retained-checkout and
 existing regular-source validation in an execution-owned cancellable worker.
@@ -1374,6 +1383,12 @@ a stopped label or global pending count cannot authorize Git. Pending creation
 and setup handoffs are disarmed. Selected native resume re-enters the same
 admission gate after its asynchronous descriptor lookup; Stop also durably
 cancels that lookup request. Archived visibility continues to block Start.
+Admission distinguishes recovery still loading, a pending mutation receipt,
+a settled archive requiring Return/unarchive, and a completed folder removal
+requiring recovery into an available checkout before coding. Completed receipts
+never imply that native resume or a new session can run in a missing folder;
+readable history stays available. Diagnostics use retained owner facts without
+filesystem, Git or storage work in the UI loop.
 
 Schema 10 stores `workspace_archives(request,workspace,record)`. Waiting intent
 is durable before snapshot preparation; Prepared binds checkout, symbolic branch,

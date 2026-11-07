@@ -175,16 +175,12 @@ fn prepare(target: Target) -> Result<Prepared, String> {
             fs::write(&prepared.path, content).map_err(|e| e.to_string())?;
             fs::set_permissions(&prepared.path, fs::Permissions::from_mode(0o400))
                 .map_err(|e| e.to_string())?;
-            if let Some(path) = &snapshot.selected {
-                let marker = format!(
-                    "=== {}",
-                    crate::working_diff::printable(&String::from_utf8_lossy(path))
-                );
-                prepared.line = content
-                    .lines()
-                    .position(|l| l.starts_with(&marker))
-                    .map_or(1, |l| l + 1);
-            }
+            prepared.line = snapshot
+                .editor_line
+                .filter(|line| *line > 0 && *line <= content.lines().count())
+                .ok_or(
+                    "Owner did not return a valid comparison position; upgrade the supervisor",
+                )?;
             Ok(prepared)
         }
         Target::Source { path, line } => Ok(Prepared {
@@ -325,14 +321,17 @@ mod tests {
         view.horizontal = 8;
         app.diff = Some(view);
         let key = KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE);
-        assert!(app.input(key).is_none());
-        assert!(
-            app.editor_message
-                .as_deref()
-                .unwrap()
-                .contains("upgraded supervisor")
-        );
-        app.session.editor_protocol = 1;
+        for version in [0, 1] {
+            app.session.editor_protocol = version;
+            assert!(app.input(key).is_none());
+            assert!(
+                app.editor_message
+                    .as_deref()
+                    .unwrap()
+                    .contains("upgraded supervisor")
+            );
+        }
+        app.session.editor_protocol = 2;
         let Some(Effect::Session(Request::InspectWorking {
             editor: true,
             request,
@@ -373,6 +372,193 @@ mod tests {
         assert!(app.history_raw);
         assert_eq!(app.diff.as_ref().unwrap().scroll, 9);
         assert_eq!(app.diff.as_ref().unwrap().horizontal, 8);
+    }
+
+    #[test]
+    fn scrolled_new_file_opens_live_source_at_visible_line() {
+        check_scrolled_new_file(false);
+    }
+
+    fn check_scrolled_new_file(native: bool) {
+        use crate::{
+            app::App,
+            events::{Effect, Request},
+            working_diff::View,
+        };
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        use std::os::unix::ffi::OsStringExt;
+        let dir = tempfile::tempdir().unwrap();
+        assert!(
+            Command::new("git")
+                .arg("init")
+                .arg("-q")
+                .arg(dir.path())
+                .status()
+                .unwrap()
+                .success()
+        );
+        fs::write(dir.path().join("new"), "one\ntwo\nthree\nfour\nfive\n").unwrap();
+        let snapshot = crate::working_diff::inspect(
+            dir.path(),
+            "workspace",
+            "capture",
+            Some(b"new"),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        let mut app = App::new(dir.path().into());
+        app.session.editor_protocol = 2;
+        let mut view = View::new("workspace".into(), "name".into());
+        view.snapshot = Some(snapshot);
+        view.scroll = 4;
+        app.diff = Some(view);
+        let Some(Effect::Session(Request::EditorSource { path, line, .. })) =
+            app.input(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE))
+        else {
+            panic!("source editor request required")
+        };
+        assert_eq!(path, Some(b"new".to_vec()));
+        assert_eq!(
+            line, 4,
+            "fourth source line is visible after the new-file header"
+        );
+        if native {
+            let checkout =
+                crate::git::resolve_checkout(dir.path(), &AtomicBool::new(false)).unwrap();
+            let job = SourceJob::start(checkout, "source".into(), "workspace".into(), path, line)
+                .unwrap();
+            let (path, line) = job.result.recv().unwrap().result.unwrap();
+            let prepared = start(Target::Source {
+                path: PathBuf::from(std::ffi::OsString::from_vec(path)),
+                line,
+            })
+            .unwrap()
+            .recv()
+            .unwrap()
+            .unwrap();
+            assert_vim_position(&prepared);
+        }
+    }
+
+    #[test]
+    fn renamed_and_abbreviated_comparison_opens_selected_raw_path_section() {
+        check_renamed_comparison(false);
+    }
+
+    fn check_renamed_comparison(native: bool) {
+        use crate::working_diff::{ComparisonOptions, Job};
+        use std::os::unix::ffi::OsStrExt;
+        let dir = tempfile::tempdir().unwrap();
+        let git = |args: &[&str]| {
+            assert!(
+                Command::new("git")
+                    .arg("-C")
+                    .arg(dir.path())
+                    .args(args)
+                    .status()
+                    .unwrap()
+                    .success()
+            )
+        };
+        git(&["init", "-q", "-b", "main"]);
+        git(&["config", "user.email", "test@example.invalid"]);
+        git(&["config", "user.name", "Test"]);
+        fs::write(dir.path().join("old"), "retained rename content\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-qm", "base"]);
+        for destination in [
+            "renamed".into(),
+            format!("{}/{}/new", "z".repeat(150), "q".repeat(150)),
+        ] {
+            if let Some(parent) = std::path::Path::new(&destination).parent() {
+                fs::create_dir_all(dir.path().join(parent)).unwrap();
+            }
+            git(&["mv", "old", &destination]);
+            fs::write(dir.path().join("a-first"), "other file\n").unwrap();
+            for whole in [false, true] {
+                let checkout =
+                    crate::git::resolve_checkout(dir.path(), &AtomicBool::new(false)).unwrap();
+                let job = Job::start_comparison(
+                    checkout,
+                    "workspace".into(),
+                    "capture".into(),
+                    Some(destination.as_bytes().to_vec()),
+                    ComparisonOptions {
+                        whole,
+                        editor: true,
+                        retained: None,
+                        selected_ref: whole.then(|| b"refs/heads/main".to_vec()),
+                    },
+                )
+                .unwrap();
+                let snapshot = job.result.recv().unwrap().result.unwrap();
+                assert_eq!(snapshot.selected.as_deref(), Some(destination.as_bytes()));
+                assert!(
+                    snapshot
+                        .files
+                        .iter()
+                        .any(|f| f.path == destination.as_bytes()
+                            && f.previous.as_deref() == Some(b"old"))
+                );
+                let prepared = start(Target::Comparison(Box::new(snapshot)))
+                    .unwrap()
+                    .recv()
+                    .unwrap()
+                    .unwrap();
+                let artifact = fs::read_to_string(&prepared.path).unwrap();
+                let heading = artifact.lines().nth(prepared.line - 1).unwrap();
+                assert!(
+                    heading.starts_with("=== old -> "),
+                    "selected rename must open its section, got {heading:?}"
+                );
+                assert_ne!(prepared.path.as_os_str().as_bytes(), destination.as_bytes());
+                if native {
+                    assert_vim_position(&prepared);
+                }
+            }
+            git(&["reset", "--hard", "-q", "HEAD"]);
+        }
+    }
+
+    #[test]
+    #[ignore = "actual installed macOS Vim positioning; run serially with editor qualification"]
+    fn installed_vim_opens_captured_source_and_comparison_positions() {
+        assert_eq!(std::env::consts::OS, "macos");
+        check_scrolled_new_file(true);
+        check_renamed_comparison(true);
+    }
+
+    fn assert_vim_position(prepared: &Prepared) {
+        let dir = tempfile::tempdir().unwrap();
+        let receipt = dir.path().join("position");
+        let config = Config {
+            executable: "/usr/bin/vim".into(),
+            arguments: vec![
+                "-es".into(),
+                "-u".into(),
+                "NONE".into(),
+                "--cmd".into(),
+                format!(
+                    "autocmd VimEnter * call writefile([string(line('.'))], '{}') | qa!",
+                    receipt.display()
+                ),
+            ],
+            position: Position::Vim,
+        };
+        assert!(config.run(prepared).unwrap().success());
+        assert_eq!(
+            fs::read_to_string(receipt)
+                .unwrap()
+                .trim()
+                .parse::<usize>()
+                .unwrap(),
+            prepared.line
+        );
+        eprintln!(
+            "Installed Vim opened {} at line {}",
+            prepared.path.display(),
+            prepared.line
+        );
     }
 
     #[test]

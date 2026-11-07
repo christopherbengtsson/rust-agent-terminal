@@ -49,6 +49,12 @@ impl ChangedFile {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Snapshot {
+    /// Zero-based line where plain current-file text starts in `content`.
+    #[serde(default)]
+    pub source_start: Option<usize>,
+    /// One-based heading line for the raw selected path in `editor_content`.
+    #[serde(default)]
+    pub editor_line: Option<usize>,
     #[serde(default)]
     pub editor_content: Option<String>,
     #[serde(default)]
@@ -185,7 +191,7 @@ fn files(bytes: &[u8]) -> Result<(Vec<ChangedFile>, usize), String> {
     files.sort_by(|a, b| a.path.cmp(&b.path));
     Ok((files, omitted))
 }
-fn new_content(root: &Path, path: &[u8]) -> Result<String, String> {
+fn new_content(root: &Path, path: &[u8]) -> Result<(String, bool), String> {
     let path = root.join(OsStr::from_bytes(path));
     // NOFOLLOW refuses symlinks; NONBLOCK prevents FIFOs/devices from waiting at open.
     let file = OpenOptions::new()
@@ -210,9 +216,9 @@ fn new_content(root: &Path, path: &[u8]) -> Result<String, String> {
         return Err("Oversized file: changed beyond 64 KiB while reading; refresh".into());
     }
     if bytes.contains(&0) {
-        return Ok("Binary file: text content unavailable".into());
+        return Ok(("Binary file: text content unavailable".into(), false));
     }
-    Ok(content_printable(&bytes))
+    Ok((content_printable(&bytes), true))
 }
 fn patch(root: &Path, file: &ChangedFile, staged: bool, cancelled: &AtomicBool) -> String {
     let mut cmd = command(root);
@@ -249,6 +255,45 @@ fn patch(root: &Path, file: &ChangedFile, staged: bool, cancelled: &AtomicBool) 
         Err(error) => format!("Patch unavailable/oversized: {}", printable(&error)),
     }
 }
+/// Shared per-file presentation; capture headers and export bounds belong to callers.
+fn presentation(
+    root: &Path,
+    file: &ChangedFile,
+    ancestor: Option<&str>,
+    cancelled: &AtomicBool,
+) -> (String, Option<usize>) {
+    if file.new || file.conflict {
+        let heading = if file.conflict && ancestor.is_some() {
+            "Conflict: unmerged index; comparison is unresolved. Current file:"
+        } else if file.conflict {
+            "Conflict: unmerged index; resolve explicitly with your Git tools. Current file below may contain conflict markers."
+        } else {
+            "New file (not in index)"
+        };
+        return match new_content(root, &file.path) {
+            Ok((body, text)) => {
+                let start = text.then_some(1);
+                (format!("{heading}\n{body}"), start)
+            }
+            Err(error) => (format!("{heading}\n{error}"), None),
+        };
+    }
+    let mut text = String::new();
+    if let Some(ancestor) = ancestor {
+        text.push_str("Common ancestor to current working files (commits and current edits)\n");
+        text.push_str(&whole_patch(root, ancestor, file, cancelled));
+    }
+    if file.staged {
+        text.push_str("\nStaged · HEAD to index\n");
+        text.push_str(&patch(root, file, true, cancelled));
+    }
+    if file.unstaged {
+        text.push_str("\nUnstaged · index to working files\n");
+        text.push_str(&patch(root, file, false, cancelled));
+    }
+    (text, None)
+}
+
 pub(crate) fn inspect(
     root: &Path,
     workspace: &str,
@@ -263,33 +308,16 @@ pub(crate) fn inspect(
     let selected = selected
         .and_then(|path| files.iter().find(|file| file.path == path))
         .or_else(|| files.first());
-    let content = match selected {
-        None => "No working changes.".into(),
-        Some(file) if file.new => format!(
-            "New file (not in index)\n{}",
-            new_content(&checkout.root, &file.path).unwrap_or_else(|error| error)
-        ),
-        Some(file) if file.conflict => format!(
-            "Conflict: unmerged index; resolve explicitly with your Git tools. Current file below may contain conflict markers.\n{}",
-            new_content(&checkout.root, &file.path).unwrap_or_else(|error| error)
-        ),
-        Some(file) => {
-            let mut text = String::new();
-            if file.staged {
-                text.push_str("Staged · HEAD to index\n");
-                text.push_str(&patch(&checkout.root, file, true, cancelled));
-            }
-            if file.unstaged {
-                text.push_str("\nUnstaged · index to working files\n");
-                text.push_str(&patch(&checkout.root, file, false, cancelled));
-            }
-            text
-        }
-    };
+    let (content, source_start) = selected.map_or_else(
+        || ("No working changes.".into(), None),
+        |file| presentation(&checkout.root, file, None, cancelled),
+    );
     let changed_during_capture = status(&checkout.root, cancelled)? != before
         || revision(&checkout.root, b"HEAD", cancelled).ok() != head;
     let selected = selected.map(|file| file.path.clone());
     Ok(Snapshot {
+        source_start,
+        editor_line: None,
         comparison: format!(
             "Working\nHEAD {}",
             head.as_deref().unwrap_or("unavailable or unborn")
@@ -503,30 +531,18 @@ fn inspect_whole(
             .unwrap_or_default()
     );
     let mut content = format!("{comparison}\n\n");
-    match chosen {
-        None => content.push_str("No workspace changes since common ancestor."),
-        Some(file) if file.new => content.push_str(&format!(
-            "New file (not in index)\n{}",
-            new_content(&checkout.root, &file.path).unwrap_or_else(|e| e)
-        )),
-        Some(file) if file.conflict => content.push_str(&format!(
-            "Conflict: unmerged index; comparison is unresolved. Current file:\n{}",
-            new_content(&checkout.root, &file.path).unwrap_or_else(|e| e)
-        )),
-        Some(file) => {
-            content
-                .push_str("Common ancestor to current working files (commits and current edits)\n");
-            content.push_str(&whole_patch(&checkout.root, ancestor, file, cancelled));
-            if file.staged {
-                content.push_str("\nStaged · HEAD to index\n");
-                content.push_str(&patch(&checkout.root, file, true, cancelled));
-            }
-            if file.unstaged {
-                content.push_str("\nUnstaged · index to working files\n");
-                content.push_str(&patch(&checkout.root, file, false, cancelled));
-            }
+    let source_start = match chosen {
+        None => {
+            content.push_str("No workspace changes since common ancestor.");
+            None
         }
-    }
+        Some(file) => {
+            let (body, start) = presentation(&checkout.root, file, Some(ancestor), cancelled);
+            let prefix_lines = content.bytes().filter(|b| *b == b'\n').count();
+            content.push_str(&body);
+            start.map(|line| prefix_lines + line)
+        }
+    };
     let changed_during_capture = status(&checkout.root, cancelled)? != before
         || revision(&checkout.root, b"HEAD", cancelled)? != head
         || revision(&checkout.root, reference, cancelled)? != base_commit
@@ -539,6 +555,8 @@ fn inspect_whole(
             != branch;
     let selected = chosen.map(|f| f.path.clone());
     Ok(Snapshot {
+        source_start,
+        editor_line: None,
         workspace: workspace.into(),
         request: request.into(),
         captured_millis: SystemTime::now()
@@ -605,6 +623,8 @@ pub(crate) fn editor_comparison(
     for file in &snapshot.files {
         text.push_str(&format!("{} · {}\n", artifact_label(file), file.state));
     }
+    let mut lines = text.bytes().filter(|b| *b == b'\n').count();
+    snapshot.editor_line = snapshot.selected.is_none().then_some(1);
     // Reserve every file heading and an explicit omission reason before allocating patch bytes.
     let mut used = text.len()
         + 128
@@ -617,46 +637,26 @@ pub(crate) fn editor_comparison(
         if cancelled.load(Ordering::Acquire) {
             return Err("Comparison cancelled".into());
         }
+        if snapshot.selected.as_deref() == Some(file.path.as_slice()) {
+            snapshot.editor_line = Some(lines + 2);
+        }
         text.push_str(&format!(
             "\n=== {} · {} ===\n",
             artifact_label(file),
             file.state
         ));
+        lines += 2;
         if used >= TOTAL || started.elapsed() > Duration::from_secs(5) {
             text.push_str("Content omitted: total comparison byte/time bound reached.\n");
+            lines += 1;
             continue;
         }
-        let mut body = if file.new || file.conflict {
-            format!(
-                "{}\n{}",
-                if file.conflict {
-                    "Conflict: unresolved unmerged index; current file only."
-                } else {
-                    "New file (not in index)"
-                },
-                new_content(&snapshot.checkout.root, &file.path).unwrap_or_else(|e| e)
-            )
-        } else {
-            let mut body = String::new();
-            if let Some(ancestor) = &snapshot.ancestor {
-                body.push_str("Common ancestor to current working files\n");
-                body.push_str(&whole_patch(
-                    &snapshot.checkout.root,
-                    ancestor,
-                    file,
-                    cancelled,
-                ));
-            }
-            if file.staged {
-                body.push_str("\nStaged · HEAD to index\n");
-                body.push_str(&patch(&snapshot.checkout.root, file, true, cancelled));
-            }
-            if file.unstaged {
-                body.push_str("\nUnstaged · index to working files\n");
-                body.push_str(&patch(&snapshot.checkout.root, file, false, cancelled));
-            }
-            body
-        };
+        let (mut body, _) = presentation(
+            &snapshot.checkout.root,
+            file,
+            snapshot.ancestor.as_deref(),
+            cancelled,
+        );
         let limit = CONTENT_LIMIT.min(TOTAL - used);
         if body.len() > limit {
             let mut end = limit.saturating_sub(100);
@@ -669,6 +669,7 @@ pub(crate) fn editor_comparison(
             );
         }
         used += body.len();
+        lines += body.bytes().filter(|b| *b == b'\n').count() + 1;
         text.push_str(&body);
         text.push('\n');
     }
