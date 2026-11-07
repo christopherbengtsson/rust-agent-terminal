@@ -170,3 +170,22 @@ untouched cold SQLite, before/after executable manifests, cold-copy probes
 (including failures), process audit and tool versions. Earlier qualification
 archives and pinned source/binaries are unchanged. Ticket 19 and the spec remain
 **Resolved: no**; final aggregate checks and physical gates remain explicit.
+
+## Integration merge checks
+
+The clean `fix/m2-review` tip `b58ba9cc14fb3d58b2e31dc92cde88048b76bae7`
+was integrated with a no-fast-forward merge at
+`e65668c35c161d2f138558e4f6b122cc87db2163`, retaining the prior integration
+`e3cf58ed2c0b5615204b69e0029dff7c3f47d981` as its first parent. On the merged
+tree, Rust stable 1.99.1 passed `cargo +stable build --locked`,
+`cargo +stable fmt --all -- --check`, and
+`cargo +stable clippy --locked --all-targets -- -D warnings`.
+All 700 archived regular files (86,748,553 uncompressed bytes) matched the
+manifest's exact member set, byte lengths and SHA-256 hashes.
+
+These checks do not rerun runtime, native-provider or physical-transition
+qualification. The final frozen serial all-target gate follows this evidence
+commit. Ticket 19 and the spec remain **Resolved: no**; actual sleep/wake,
+physical reboot and C6 remain open. The clean fully merged temporary fix
+worktree was removed while retaining its branch and the private qualification
+source/state/binary pins.
