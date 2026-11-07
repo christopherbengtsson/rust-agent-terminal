@@ -1,4 +1,6 @@
 mod app;
+mod archive;
+mod archive_git;
 mod browser;
 mod child_scope;
 mod cleanup;

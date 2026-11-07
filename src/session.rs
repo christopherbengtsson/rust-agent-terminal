@@ -103,6 +103,7 @@ fn transport(
             || greeting.sessions_protocol != 1
             || greeting.prompt_naming_protocol != 1
             || greeting.creation_protocol != 1
+            || greeting.archive_protocol != 1
             || greeting.resume_protocol != 1
             || greeting.setup_protocol != 1
         {
@@ -144,6 +145,7 @@ fn transport(
         || greeting.sessions_protocol != 1
         || greeting.prompt_naming_protocol != 1
         || greeting.creation_protocol != 1
+        || greeting.archive_protocol != 1
         || greeting.resume_protocol != 1
         || greeting.setup_protocol != 1
     {
@@ -309,7 +311,9 @@ impl Delivery {
 struct Sessions {
     resume_completions: Vec<crate::persistence::Completion>,
     setup_reservations: Vec<crate::git::CheckoutIdentity>,
+    archive_reservations: Vec<crate::git::CheckoutIdentity>,
     setup_ready: bool,
+    archive_ready: bool,
     history_revision: u64,
     browse: Option<crate::persistence::search::Response>,
     browse_request: Option<String>,
@@ -404,7 +408,9 @@ impl Sessions {
         Ok(Self {
             resume_completions: Vec::new(),
             setup_reservations: Vec::new(),
+            archive_reservations: Vec::new(),
             setup_ready: false,
+            archive_ready: false,
             history_revision: 0,
             browse: None,
             browse_request: None,
@@ -769,7 +775,10 @@ impl Sessions {
                 }
                 if matches!(
                     *command,
-                    Request::Browse(_)
+                    Request::Archive { .. }
+                        | Request::CancelArchive { .. }
+                        | Request::Unarchive(_)
+                        | Request::Browse(_)
                         | Request::Session { .. }
                         | Request::SelectSession(_)
                         | Request::Shutdown
@@ -877,9 +886,23 @@ impl Sessions {
                 | Request::Resume(_)
                 | Request::ResumeSelected { .. }
         ) {
-            if !self.setup_ready {
+            if self.entries[index]
+                .1
+                .observation()
+                .checkout_identity
+                .is_some_and(|target| {
+                    self.archive_reservations
+                        .iter()
+                        .any(|r| r.common_dir == target.common_dir && r.git_dir == target.git_dir)
+                })
+            {
+                self.entries[index].1.report_error("Workspace archive owns this checkout; cancel/finish archive or unarchive before Start".into());
+                return;
+            }
+            if !self.setup_ready || !self.archive_ready {
                 self.entries[index].1.report_error(
-                    "Setup recovery is loading; retry after the committed receipts arrive".into(),
+                    "Setup/archive recovery is loading; retry after committed receipts arrive"
+                        .into(),
                 );
                 return;
             }
@@ -980,6 +1003,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let mut creation = crate::creation::Coordinator::new(&storage);
     creation.view.launches = restored.state.creation.launches.clone();
     let mut setup = crate::setup::Coordinator::new(&storage);
+    let mut archive = crate::archive::Coordinator::new(&storage);
     let mut registry = restored.state.registry.clone();
     let mut registry_error = None;
     let mut registry_operation = None;
@@ -1124,11 +1148,16 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
         }
         while let Ok(event) = storage.events.try_recv() {
             setup.complete(&event, &storage);
+            if let Some(snapshot) = archive.complete(&event) {
+                registry = snapshot;
+            }
             if let Some(snapshot) = creation.complete(&event, &storage) {
                 registry = snapshot;
             }
             match event {
-                crate::persistence::Completion::Setups(_)
+                crate::persistence::Completion::Archives(_)
+                | crate::persistence::Completion::ArchiveSaved(..)
+                | crate::persistence::Completion::Setups(_)
                 | crate::persistence::Completion::SetupSaved(..)
                 | crate::persistence::Completion::Creations(_)
                 | crate::persistence::Completion::CreationSaved(..) => {}
@@ -1172,6 +1201,16 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                 event => session.complete(event, &storage),
             }
         }
+        session.archive_reservations = registry
+            .workspaces
+            .iter()
+            .filter_map(|w| {
+                w.checkout
+                    .as_ref()
+                    .filter(|c| registry.archived.contains(&w.id) || archive.blocks(c))
+                    .cloned()
+            })
+            .collect();
         creation.advance(&storage);
         if let Some(mut handoff) = creation.launch.take() {
             if let Some(checkout) = handoff.record.checkout.clone()
@@ -1197,7 +1236,19 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     crate::setup::Policy::Command(command) => Some(command.clone()),
                     crate::setup::Policy::Disabled => None,
                 });
-            setup.accept(handoff, command, &storage);
+            if handoff.record.checkout.as_ref().is_some_and(|c| {
+                session
+                    .archive_reservations
+                    .iter()
+                    .any(|r| r.common_dir == c.common_dir && r.git_dir == c.git_dir)
+            }) {
+                handoff.authorized_start = false;
+                creation.view.error = Some(
+                    "Archive cancelled the pending setup/launch handoff; workspace retained".into(),
+                );
+            } else {
+                setup.accept(handoff, command, &storage);
+            }
         }
         setup.advance(&storage);
         session.setup_reservations = setup
@@ -1218,6 +1269,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                 found
             });
         session.setup_ready = setup.ready();
+        session.archive_ready = archive.ready();
         if let Some(crate::creation::LaunchHandoff {
             record,
             authorized_start,
@@ -1260,6 +1312,29 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         session.advance(&storage, adoption.is_some());
+        let settled = archive.target().is_some_and(|checkout| {
+            !setup.reserved(checkout)
+                && !creation.pending_checkout(checkout)
+                && session.entries.iter_mut().all(|(_, owner)| {
+                    let known = owner.observation().checkout_identity;
+                    let relevant = known.as_ref().is_some_and(|c| {
+                        c.common_dir == checkout.common_dir && c.git_dir == checkout.git_dir
+                    }) || registry
+                        .workspaces
+                        .iter()
+                        .filter(|w| {
+                            w.checkout.as_ref().is_some_and(|c| {
+                                c.common_dir == checkout.common_dir && c.git_dir == checkout.git_dir
+                            })
+                        })
+                        .any(|w| {
+                            w.task == owner.task()
+                                || w.legacy_tasks.iter().any(|t| t == owner.task())
+                        });
+                    !relevant || owner.archive_ready(&storage)
+                })
+        });
+        archive.advance(settled, &storage);
         let mut state = session.observation();
         state.subscriber_frame_high_water = subscriber_frame_high_water;
         state.diff_protocol = 2;
@@ -1272,7 +1347,9 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
         state.creation_protocol = 1;
         state.resume_protocol = 1;
         state.setup_protocol = 1;
+        state.archive_protocol = 1;
         state.setup = setup.view.clone();
+        state.archive = archive.view.clone();
         creation.view.launches =
             session.creation_receipts(&creation.view.records, &creation.view.launches);
         state.creation = creation.view.clone();
@@ -1281,7 +1358,8 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
         state.error = state
             .error
             .or_else(|| registry_error.clone())
-            .or_else(|| setup.view.error.clone());
+            .or_else(|| setup.view.error.clone())
+            .or_else(|| archive.view.error.clone());
         state.adoption_pending = adoption_pending;
         state.discovery = discovery_result.clone();
         state.stopped = session.all_stopped()
@@ -1292,6 +1370,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             && diff_job.is_none()
             && diff_save.is_none()
             && registry_operation.is_none()
+            && !archive.busy()
             && !creation.busy()
             && setup.stopped();
         if state.stopped && controller.is_none() {
@@ -1314,6 +1393,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                             creation_protocol: 1,
                             resume_protocol: 1,
                             setup_protocol: 1,
+                            archive_protocol:1,
                             control_denied: true,
                             error: Some("Another dashboard controls this supervisor; close it before reconnecting".into()),
                             ..Observation::default()
@@ -1582,6 +1662,48 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
             }
+            Request::Archive { workspace, request } => {
+                if let Some(known) = registry.workspaces.iter().find(|w| w.id == workspace) {
+                    archive.begin(known, &request, &storage);
+                    if let Some(checkout) = known.checkout.clone() {
+                        // Freeze admission before Stop, including lookup completions.
+                        session.archive_reservations.push(checkout.clone());
+                        setup.cancel_checkout(&checkout);
+                        creation.cancel_checkout(&checkout);
+                        for (_, owner) in &mut session.entries {
+                            let state = owner.observation();
+                            if state.checkout_identity.as_ref().is_some_and(|c| {
+                                c.common_dir == checkout.common_dir && c.git_dir == checkout.git_dir
+                            }) || known.task == owner.task()
+                                || known.legacy_tasks.iter().any(|task| task == owner.task())
+                            {
+                                owner.handle(Request::Stop, &storage, false);
+                            }
+                        }
+                    }
+                } else {
+                    archive.view.error =
+                        Some("Workspace unavailable; refresh before archive".into());
+                }
+            }
+            Request::CancelArchive { workspace, request } => {
+                archive.cancel_request(&workspace, &request)
+            }
+            Request::Unarchive(workspace) => {
+                if archive.busy() {
+                    archive.view.error =
+                        Some("Archive operation pending; wait or cancel before Unarchive".into());
+                } else {
+                    let id = uuid::Uuid::new_v4();
+                    match storage
+                        .commands
+                        .try_send(crate::persistence::Command::Unarchive(id, workspace))
+                    {
+                        Ok(()) => registry_operation = Some(id),
+                        Err(e) => registry_error = Some(e.to_string()),
+                    }
+                }
+            }
             Request::ConfigureSetup { project, command } => {
                 let operation = uuid::Uuid::new_v4();
                 if registry_operation.is_some() || creation.busy() {
@@ -1605,7 +1727,26 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                 attempt,
                 retry,
                 informed,
-            } => setup.recover(&attempt, retry, informed, &storage),
+            } => {
+                let blocked = setup
+                    .view
+                    .records
+                    .iter()
+                    .find(|r| r.attempt == attempt)
+                    .and_then(|r| r.creation.checkout.as_ref())
+                    .is_some_and(|c| {
+                        session
+                            .archive_reservations
+                            .iter()
+                            .any(|r| r.common_dir == c.common_dir && r.git_dir == c.git_dir)
+                    });
+                if blocked {
+                    setup.view.error =
+                        Some("Archive owns this checkout; setup admission is frozen".into());
+                } else {
+                    setup.recover(&attempt, retry, informed, &storage)
+                }
+            }
             Request::CancelCreation {
                 request,
                 native_session,
@@ -1689,6 +1830,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                 session.handle(Request::RetryStorage, &storage, adoption.is_some());
             }
             Request::Stop | Request::Shutdown => {
+                archive.cancel();
                 setup.cancel(None);
                 creation.cancel();
                 if let Some(job) = &source_job {
@@ -1762,7 +1904,9 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
         state.creation_protocol = 1;
         state.resume_protocol = 1;
         state.setup_protocol = 1;
+        state.archive_protocol = 1;
         state.setup = setup.view.clone();
+        state.archive = archive.view.clone();
         creation.view.launches =
             session.creation_receipts(&creation.view.records, &creation.view.launches);
         state.creation = creation.view.clone();
@@ -1771,7 +1915,8 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
         state.error = state
             .error
             .or_else(|| registry_error.clone())
-            .or_else(|| setup.view.error.clone());
+            .or_else(|| setup.view.error.clone())
+            .or_else(|| archive.view.error.clone());
         state.adoption_pending = adoption_pending;
         state.discovery = discovery_result.clone();
         state.stopped = session.all_stopped()
@@ -1782,6 +1927,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             && diff_job.is_none()
             && diff_save.is_none()
             && registry_operation.is_none()
+            && !archive.busy()
             && !creation.busy()
             && setup.stopped();
         if controller.is_some() {

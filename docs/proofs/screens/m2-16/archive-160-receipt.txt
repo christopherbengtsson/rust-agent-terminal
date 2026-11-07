@@ -1,0 +1,40 @@
+┌ Reviews ───────────────────────────────────────────┐┌ Session · Focus: dashboard · Process: Idle · semantic status: unknown ─────────────────────────────────┐
+│Unavailable · milestone 1                           ││Workspace aa64bc55                                                                                      │
+└────────────────────────────────────────────────────┘│Archived · Enter: Unarchive (coding stays stopped)                                                      │
+┌ Agent terminal · Worktrees ────────────────────────┐│Clean HEAD retained 999a8c995dc2                                                                        │
+│Repository: /private/tmp/.tmplfh62z/checkout with   ││saved locally, not pushed.                                                                              │
+└────────────────────────────────────────────────────┘│Tracked + new nonignored files saved.                                                                   │
+┌ Project / worktrees (1) ───────────────────────────┐│0 ignored paths excluded; folder retained.                                                              │
+│> └ main [archived]  /private/tmp/.tmplfh62z/checkou││Staged-only content: separate recovery tree.                                                            │
+│    └ adopted · c/x start · C/X prompt · R rename   ││HEAD 999a8c995dc22b6a9d1b2a85a35e713e8e62e2c0                                                           │
+│                                                    ││Recovery ref refs/rat/archive/aa64bc55-a164-4d03-9b90-d22e490c953a/a4201ee2-7bf4-4355-a7bd-3a7fce13d84e │
+│                                                    ││Staged tree                                                                                             │
+│                                                    ││refs/rat/archive/aa64bc55-a164-4d03-9b90-d22e490c953a/a4201ee2-7bf4-4355-a7                             │
+│                                                    ││Esc dismisses (operation continues) · j/k scroll · q quit/stop · d detach                               │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+└────────────────────────────────────────────────────┘│                                                                                                        │
+┌ Selection ─────────────────────────────────────────┐│                                                                                                        │
+│Path: /private/tmp/.tmplfh62z/checkout with spaces  ││                                                                                                        │
+│Branch: main  HEAD:                                 ││                                                                                                        │
+│999a8c995dc22b6a9d1b2a85a35e713e8e62e2c0            ││                                                                                                        │
+│                                                    ││                                                                                                        │
+└────────────────────────────────────────────────────┘└────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌ Status · semantic status: unknown ·  ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│Adopted: /private/tmp/.tmplfh62z/checkout with spaces · ready: c Claude / x Codex / l fixture                                                                 │
+│History: metadata committed · durable bytes 0                                                                                                                 │
+│Evidence: unavailable ·                                                                                                                                       │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+Enter confirm/retry · z cancel · Esc dismiss                                                                                                                    

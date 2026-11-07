@@ -1,0 +1,18 @@
+┌ Idle · Session unlaunched · Focus: dashboard ────────────┐
+│Workspace aa64bc55                                        │
+│Archived · Enter: Unarchive (coding stays stopped)        │
+│Clean HEAD retained 999a8c995dc2                          │
+│saved locally, not pushed.                                │
+│Tracked + new nonignored files saved.                     │
+│0 ignored paths excluded; folder retained.                │
+│Staged-only content: separate recovery tree.              │
+│HEAD 999a8c995dc22b6a9d1b2a85a35e713e8e62e2c0             │
+│Recovery ref                                              │
+│refs/rat/archive/aa64bc55-a164-4d03-9b90-d22e490c953a/5bab│
+│5e25-9e70-4595-9b3a-7af55fbb18d7                          │
+└──────────────────────────────────────────────────────────┘
+┌ Status · semantic status: unknown ·  ────────────────────┐
+│Adopted: /private/tmp/.tmplfh62z/checkout with spaces ·   │
+└──────────────────────────────────────────────────────────┘
+Enter confirm/retry · z cancel · Esc dismiss                
+j/k scroll · q quit/stop · d detach                         

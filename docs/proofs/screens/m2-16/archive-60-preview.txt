@@ -1,0 +1,18 @@
+┌ Idle · Session unlaunched · Focus: dashboard ────────────┐
+│Workspace aa64bc55                                        │
+│Enter: Stop, save and archive                             │
+│Tracked + new nonignored files become a local Archive     │
+│checkpoint, not pushed. Ignored files remain in the       │
+│folder, excluded from saving. Chats and folder stay.      │
+│Original staged content has a separate recovery tree.     │
+│Request 5bab5e25-9e70-4595-9b3a-7af55fbb18d7              │
+│                                                          │
+│Enter confirms/retries same request · z cancels archive · │
+│n new snapshot                                            │
+│Esc dismisses (operation continues) · j/k scroll · q      │
+└──────────────────────────────────────────────────────────┘
+┌ Status · semantic status: unknown ·  ────────────────────┐
+│Adopted: /private/tmp/.tmplfh62z/checkout with spaces ·   │
+└──────────────────────────────────────────────────────────┘
+Enter confirm/retry · z cancel · Esc dismiss                
+j/k scroll · q quit/stop · d detach                         

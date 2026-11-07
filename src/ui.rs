@@ -123,7 +123,69 @@ impl Ui {
             session,
         );
         let viewport = Self::session_viewport(frame.area());
-        if let Some(browser) = &app.browser {
+        if let Some(workspace) = &app.archive_open {
+            let archived = app.session.registry.archived.contains(workspace);
+            let name = app
+                .session
+                .registry
+                .workspaces
+                .iter()
+                .find(|w| &w.id == workspace)
+                .map_or("Workspace", |w| w.name.as_str());
+            let record = app.session.archive.records.iter().rev().find(|r| {
+                &r.workspace == workspace
+                    && (archived || Some(&r.request) == app.archive_request.as_ref())
+            });
+            let mut text = format!(
+                "{}\n{}\n",
+                visible(name),
+                if archived {
+                    "Archived · Enter: Unarchive (coding stays stopped)"
+                } else if app.archive_submitted {
+                    "Waiting for confirmed Stop, cleanup and saved history"
+                } else {
+                    "Enter: Stop, save and archive"
+                }
+            );
+            if app.session.archive.pending {
+                text.push_str(&format!("{}\n", visible(&app.session.archive.status)));
+            }
+            if let Some(e) = &app.session.archive.error {
+                text.push_str(&format!("{}\n", visible(e)));
+            }
+            if let Some(r) = record {
+                if let Some(saved) = &r.saved {
+                    text.push_str(&format!("{} {}\nsaved locally, not pushed.\nTracked + new nonignored files saved.\n{} ignored paths excluded; folder retained.\nStaged-only content: separate recovery tree.\nHEAD {}\n",if r.before.as_ref()==Some(saved){"Clean HEAD retained"}else{"Archive checkpoint"},saved.chars().take(12).collect::<String>(),r.excluded.len(),saved));
+                } else {
+                    text.push_str(&format!("{:?}: {}\n", r.phase, visible(&r.message)));
+                }
+                for path in &r.excluded {
+                    text.push_str(&format!(
+                        "Excluded: {}\n",
+                        visible(&String::from_utf8_lossy(path))
+                    ));
+                }
+                text.push_str(&format!(
+                    "Recovery ref {}\nStaged tree {}-index\n{}\n",
+                    r.reference,
+                    r.reference,
+                    visible(&r.message)
+                ));
+            } else {
+                text.push_str("Tracked + new nonignored files become a local Archive checkpoint, not pushed. Ignored files remain in the folder, excluded from saving. Chats and folder stay. Original staged content has a separate recovery tree.\n");
+            }
+            text.push_str(&format!(
+                "Request {}\n",
+                app.archive_request.as_deref().unwrap_or("none")
+            ));
+            text.push_str("\nEnter confirms/retries same request · z cancels archive · n new snapshot\nEsc dismisses (operation continues) · j/k scroll · q quit/stop · d detach");
+            frame.render_widget(
+                Paragraph::new(text)
+                    .wrap(Wrap { trim: false })
+                    .scroll((app.archive_scroll, 0)),
+                viewport,
+            );
+        } else if let Some(browser) = &app.browser {
             draw_browser(frame, viewport, browser);
         } else if let Some(view) = &app.diff {
             draw_working_diff(frame, viewport, view);
@@ -133,6 +195,7 @@ impl Ui {
                 .registry
                 .workspaces
                 .iter()
+                .filter(|w| app.show_archived || !app.session.registry.archived.contains(&w.id))
                 .map(|workspace| {
                     let project = workspace
                         .project
@@ -161,7 +224,9 @@ impl Ui {
                         .iter()
                         .filter(|entry| entry.task == workspace.task)
                         .max_by_key(|entry| entry.reserved);
-                    let context = if let Some(setup) = app
+                    let context = if app.session.registry.archived.contains(&workspace.id) {
+                        "Archived · K return".into()
+                    } else if let Some(setup) = app
                         .session
                         .setup
                         .records
@@ -202,6 +267,7 @@ impl Ui {
                 .registry
                 .workspaces
                 .iter()
+                .filter(|w| app.show_archived || !app.session.registry.archived.contains(&w.id))
                 .position(|workspace| Some(&workspace.id) == app.workspace_selected.as_ref());
             let mut selection = ListState::default().with_selected(selected);
             let title = if let Some(path) = &app.project_input {
@@ -209,7 +275,7 @@ impl Ui {
             } else if app.session.registry_pending {
                 " Registering project… ".into()
             } else {
-                " Projects / retained workspaces · A add · j/k select · Enter open · a adopt · R rename "
+                " Projects / retained workspaces · A add · j/k select · Enter open · K archive/return · z archived "
                     .into()
             };
             frame.render_stateful_widget(
@@ -326,6 +392,12 @@ impl Ui {
             .iter()
             .map(|worktree| {
                 let mut flags = String::new();
+                if app.session.registry.workspaces.iter().any(|w| {
+                    app.session.registry.archived.contains(&w.id)
+                        && w.checkout.as_ref().is_some_and(|c| c.root == worktree.path)
+                }) {
+                    flags.push_str(" [archived]");
+                }
                 if worktree.locked.is_some() {
                     flags.push_str(" [locked]");
                 }
@@ -762,6 +834,8 @@ impl Ui {
             && (frame.area().width < 80 || frame.area().height < 22)
         {
             "w Working/Whole · e inspect ALL · o LIVE · j/k file\nb base · r refresh · f/Esc back · s stop · q quit"
+        } else if app.archive_open.is_some() {
+            "Enter confirm/retry · z cancel · Esc dismiss\nj/k scroll · q quit/stop · d detach"
         } else if app.first_prompt.is_some() || app.rename_workspace.is_some() {
             app.keyboard_help()
         } else if !app.attached
@@ -774,8 +848,8 @@ Esc cancel · registration never starts an agent"
             && app.workspaces_open
             && (frame.area().width < 80 || frame.area().height < 22)
         {
-            "N create  j/k select  [/] project  a adopt  E LIVE  R rename
-A add · U setup · h history · w/Esc back · d detach · q quit"
+            "K archive/return · z show archived · j/k select
+A add · N create · w/Esc back · d detach · q quit"
         } else if app.cleanup_open
             && !app.attached
             && (frame.area().width < 80 || frame.area().height < 22)
@@ -805,7 +879,7 @@ A add · U setup · h history · w/Esc back · d detach · q quit"
                 &compact_help
             } else {
                 compact_help = format!(
-                    "q quit s stop h history S text / find B chats {}\nN create O receipt U setup w spaces f diff E LIVE d detach",
+                    "q quit s stop h history S text / find B chats {}\nK archive N create w spaces f diff E LIVE d detach",
                     if app.session.lifecycle == crate::session::Lifecycle::Running {
                         "Enter attach"
                     } else {

@@ -555,6 +555,42 @@ impl Coordinator {
     pub fn busy(&self) -> bool {
         self.job.is_some() || self.saving.is_some() || !self.loaded
     }
+    pub fn cancel_checkout(&mut self, checkout: &crate::git::CheckoutIdentity) {
+        let matches = |r: &Record| {
+            r.checkout.as_ref().is_some_and(|c| {
+                c.common_dir == checkout.common_dir && c.git_dir == checkout.git_dir
+            }) || r.intent.path == crate::session::path_bytes(&checkout.root)
+        };
+        if self.launch.as_ref().is_some_and(|h| matches(&h.record)) {
+            self.launch = None;
+        }
+        if self.saving.as_ref().is_some_and(|(_, r)| matches(r))
+            || self.retry_record.as_ref().is_some_and(matches)
+            || self.view.active_request.as_ref().is_some_and(|id| {
+                self.view
+                    .records
+                    .iter()
+                    .any(|r| &r.intent.request == id && matches(r))
+            })
+        {
+            self.cancel();
+        }
+    }
+    pub fn pending_checkout(&self, checkout: &crate::git::CheckoutIdentity) -> bool {
+        let matches = |r: &Record| {
+            r.checkout.as_ref().is_some_and(|c| {
+                c.common_dir == checkout.common_dir && c.git_dir == checkout.git_dir
+            }) || r.intent.path == crate::session::path_bytes(&checkout.root)
+        };
+        self.busy()
+            && (self.saving.as_ref().is_some_and(|(_, r)| matches(r))
+                || self.view.active_request.as_ref().is_some_and(|id| {
+                    self.view
+                        .records
+                        .iter()
+                        .any(|r| &r.intent.request == id && matches(r))
+                }))
+    }
     pub fn cancel(&mut self) {
         self.cancelled = true;
         self.launch_authorized = false;
