@@ -787,6 +787,17 @@ impl AgentSession {
             session,
         } = &request
         {
+            // A cached reply cannot replace any unresolved launch outcome,
+            // including a provisional result not yet durably acknowledged.
+            if self.launch.resolving.is_some()
+                || self.launch.cancelling.is_some()
+                || self.launch.pending_launch.is_some()
+                || self.launch.creating.is_some()
+                || self.launch.gate_receipt.is_some()
+                || self.launch.outcome_reply
+            {
+                return;
+            }
             if let Some(recorded) = recorded_result.or_else(|| self.launches.get(request).cloned())
             {
                 self.state.launch_result = Some(recorded.clone());

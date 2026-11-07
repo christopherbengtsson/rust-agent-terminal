@@ -9168,7 +9168,28 @@ for line in sys.stdin:
     for (n, index) in [1usize, 0, 2, 1].into_iter().enumerate() {
         let (source, native, agent) = &originals[index];
         let request = format!("selected-resume-{n}");
+        let prepare_pause = fixture.state().join("proof-storage-prepare");
+        if n == 0 {
+            std::fs::write(&prepare_pause, "stall").unwrap();
+        }
         control.request(serde_json::json!({"ResumeSelected":{"request":request,"workspace":workspace,"session":source}}));
+        if n == 0 {
+            let prepared = cleanup_wait15(&mut control, |s| {
+                s["session_identity"]["session"]
+                    .as_str()
+                    .is_some_and(|id| id != state["session_identity"]["session"].as_str().unwrap())
+            });
+            assert_eq!(&prepared["native_conversation"], native);
+            assert_eq!(&prepared["agent"], agent);
+            assert_eq!(prepared["metadata_pending"], true);
+            let replay=control.request(serde_json::json!({"ResumeSelected":{"request":request,"workspace":workspace,"session":originals[0].0}}));
+            assert_eq!(replay["session_identity"], prepared["session_identity"]);
+            assert_eq!(
+                replay["native_conversation"],
+                prepared["native_conversation"]
+            );
+            std::fs::remove_file(prepare_pause).unwrap();
+        }
         let running = cleanup_wait15(&mut control, |s| {
             s["lifecycle"] == "Running" && s["metadata_pending"] == false
         });
