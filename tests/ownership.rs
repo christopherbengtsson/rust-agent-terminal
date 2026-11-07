@@ -9987,6 +9987,7 @@ fn archive_refuses_restored_uncertain_setup_despite_exited_process_and_cancels_w
     // Only this fixture's changed boot evidence permits read-only reconciliation;
     // this is not an actual reboot qualification.
     f.restart("setup-boot-two");
+    archive_wait16(&mut f.control, |s| s["removal"]["ready"] == true);
     f.control.request_now(
         serde_json::json!({"RecoverSetup":{"attempt":attempt,"retry":false,"informed":true}}),
     );
@@ -10564,4 +10565,620 @@ fn archive_branch_qualified17() -> bool {
         );
     }
     qualified
+}
+
+fn removal_record18<'a>(
+    state: &'a serde_json::Value,
+    request: &str,
+) -> Option<&'a serde_json::Value> {
+    state["removal"]["records"]
+        .as_array()?
+        .iter()
+        .find(|r| r["request"] == request)
+}
+fn removal_preview18(control: &mut Controller, workspace: &str) -> serde_json::Value {
+    let request = uuid::Uuid::new_v4().to_string();
+    control.request_now(
+        serde_json::json!({"PreviewRemoval":{"workspace":workspace,"request":request}}),
+    );
+    let state = archive_wait16(control, |s| {
+        s["removal"]["pending"] == false && removal_record18(s, &request).is_some()
+    });
+    removal_record18(&state, &request).unwrap().clone()
+}
+fn removal_confirm18(record: &serde_json::Value, ack: bool) -> serde_json::Value {
+    serde_json::json!({"ConfirmRemoval":{"workspace":record["workspace"],"request":record["request"],"head":record["snapshot"]["head"],"reference":record["snapshot"]["reference"],"local_ack":ack}})
+}
+
+#[test]
+fn folder_removal_retains_exact_detached_code_branches_and_history_after_lost_ack_restart_and_gc() {
+    use std::os::unix::ffi::OsStrExt;
+    let mut f = SetupFixture::new("true");
+    let (creation, folder) = f.create(false);
+    let created = f.phase("Succeeded");
+    let workspace = created["registry"]["workspaces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|w| w["task"] == creation)
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    archive_git16(&folder, &["config", "user.name", "Removal fixture"]);
+    archive_git16(&folder, &["config", "user.email", "remove@example.invalid"]);
+    std::fs::write(folder.join("saved"), "saved local code\n").unwrap();
+    archive_git16(&folder, &["add", "saved"]);
+    archive_git16(&folder, &["commit", "-qm", "local only"]);
+    let head = archive_git16(&folder, &["rev-parse", "HEAD"]);
+    let branch = archive_git16(&folder, &["symbolic-ref", "HEAD"]);
+    let old_ref = format!("refs/rat/archive/{workspace}/prior");
+    archive_git16(&folder, &["update-ref", &old_ref, "HEAD~1"]);
+    archive_git16(&folder, &["switch", "--detach"]);
+    f.control
+        .request_now(serde_json::json!({"Adopt":folder.as_os_str().as_bytes()}));
+    archive_wait16(&mut f.control, |s| {
+        s["adoption_pending"] == false && s["adopted"] == folder.to_str().unwrap()
+    });
+    f.control
+        .request(serde_json::json!({"Launch":"removal-history-fixture"}));
+    let running = archive_wait16(&mut f.control, |s| {
+        s["screen"].as_str().is_some_and(|t| t.contains("fixture>"))
+    });
+    let session = running["session_identity"]["session"].clone();
+    f.control
+        .request_now(serde_json::json!({"Input":b"retained removal history\r".to_vec()}));
+    archive_wait16(&mut f.control, |s| {
+        s["screen"]
+            .as_str()
+            .is_some_and(|t| t.contains("received: retained removal history"))
+    });
+    f.control.request_now(serde_json::json!("Stop"));
+    archive_wait16(&mut f.control, |s| {
+        s["lifecycle"] == "Stopped"
+            && s["capture_pending_bytes"] == 0
+            && s["metadata_pending"] == false
+            && s["sessions"]
+                .as_array()
+                .is_some_and(|ss| ss.iter().all(|s| s["reserved"] == false))
+    });
+    let preview = removal_preview18(&mut f.control, &workspace);
+    assert_eq!(
+        preview["snapshot"]["blockers"],
+        serde_json::json!([]),
+        "{preview}"
+    );
+    assert_eq!(preview["snapshot"]["head"], head);
+    assert!(preview["snapshot"]["local_only"].as_bool().unwrap());
+    f.control.request_now(removal_confirm18(&preview, false));
+    let refused = archive_wait16(&mut f.control, |s| {
+        s["removal"]["error"]
+            .as_str()
+            .is_some_and(|e| e.contains("acknowledgement"))
+    });
+    assert_eq!(
+        removal_record18(&refused, preview["request"].as_str().unwrap()).unwrap()["phase"],
+        "Preview"
+    );
+    assert!(folder.exists());
+    f.control.send(removal_confirm18(&preview, true));
+    f.control.stream.shutdown(std::net::Shutdown::Both).unwrap();
+    let mut replacement = Controller::connect(&f.fixture); // discard acknowledgement; same operation, no replay
+    std::mem::swap(&mut f.control, &mut replacement);
+    drop(replacement);
+    let removed = archive_wait16(&mut f.control, |s| {
+        removal_record18(s, preview["request"].as_str().unwrap())
+            .is_some_and(|r| r["phase"] == "Removed")
+            && s["removal"]["pending"] == false
+    });
+    assert!(!folder.exists(), "{removed}");
+    let reference = preview["snapshot"]["reference"].as_str().unwrap();
+    archive_git16(
+        &f.fixture.repository,
+        &["reflog", "expire", "--expire=now", "--all"],
+    );
+    archive_git16(&f.fixture.repository, &["gc", "--prune=now"]);
+    assert_eq!(
+        archive_git16(
+            &f.fixture.repository,
+            &["show", &format!("{reference}:saved")]
+        ),
+        "saved local code"
+    );
+    assert_eq!(
+        archive_git16(&f.fixture.repository, &["rev-parse", &branch]),
+        head
+    );
+    assert_eq!(
+        archive_git16(&f.fixture.repository, &["cat-file", "-t", &old_ref]),
+        "commit"
+    );
+    f.control
+        .request_now(serde_json::json!({"HistorySession":{"session":session,"offset":0}}));
+    let history = archive_wait16(&mut f.control, |s| s["history"]["session"] == session);
+    assert!(
+        history["history"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("retained removal history")
+    );
+    f.restart("setup-boot-one");
+    archive_wait16(&mut f.control, |s| {
+        removal_record18(s, preview["request"].as_str().unwrap())
+            .is_some_and(|r| r["phase"] == "Removed")
+    });
+    f.control.request_now(removal_confirm18(&preview, true));
+    archive_wait16(&mut f.control, |s| {
+        s["removal"]["error"]
+            .as_str()
+            .is_some_and(|e| e.contains("cannot be replayed"))
+    });
+    f.control.request_now(serde_json::json!({"ReconcileRemoval":{"workspace":workspace,"request":preview["request"]}}));
+    archive_wait16(&mut f.control, |s| {
+        s["removal"]["pending"] == false
+            && removal_record18(s, preview["request"].as_str().unwrap())
+                .is_some_and(|r| r["phase"] == "Removed")
+    });
+    assert!(!f.launches.exists());
+    f.finish();
+}
+
+#[test]
+fn folder_removal_durable_boundary_blocks_alias_launch_and_restart_never_replays_deletion() {
+    use std::os::unix::ffi::OsStrExt;
+    let mut f = SetupFixture::new("true");
+    let (creation, folder) = f.create(false);
+    let created = f.phase("Succeeded");
+    let workspace = created["registry"]["workspaces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|w| w["task"] == creation)
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let alias = f.fixture.temp.path().join("canonical alias");
+    std::os::unix::fs::symlink(&folder, &alias).unwrap();
+    f.control
+        .request_now(serde_json::json!({"Adopt":alias.as_os_str().as_bytes()}));
+    archive_wait16(&mut f.control, |s| {
+        s["adoption_pending"] == false
+            && s["adopted"] == folder.to_str().unwrap()
+            && s["metadata_pending"] == false
+    });
+    let preview = removal_preview18(&mut f.control, &workspace);
+    assert_eq!(
+        preview["snapshot"]["blockers"],
+        serde_json::json!([]),
+        "{preview}"
+    );
+    let fault = f.fixture.state().join("proof-storage-removal-before-git");
+    std::fs::write(&fault, "stall").unwrap();
+    f.control.request_now(removal_confirm18(&preview, true));
+    let reference = preview["snapshot"]["reference"].as_str().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(6);
+    while !Command::new("git")
+        .arg("-C")
+        .arg(&folder)
+        .args(["show-ref", "--verify", reference])
+        .output()
+        .unwrap()
+        .status
+        .success()
+    {
+        assert!(
+            Instant::now() < deadline,
+            "recovery reference not created before durable intent wait"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(folder.exists());
+    let blocked = f
+        .control
+        .request_now(serde_json::json!({"Launch":"must-not-start-during-removal"}));
+    assert!(
+        blocked["error"]
+            .as_str()
+            .is_some_and(|e| e.contains("owns this checkout")),
+        "{blocked}"
+    );
+    assert!(blocked["execution"].is_null());
+    f.control.request_now(serde_json::json!({"Archive":{"workspace":workspace,"request":uuid::Uuid::new_v4().to_string()}}));
+    archive_wait16(&mut f.control, |s| {
+        s["archive"]["error"]
+            .as_str()
+            .is_some_and(|e| e.contains("Folder removal owns"))
+    });
+    f.restart("setup-boot-one");
+    std::fs::remove_file(&fault).unwrap();
+    let restored = archive_wait16(&mut f.control, |s| {
+        removal_record18(s, preview["request"].as_str().unwrap()).is_some()
+    });
+    assert_eq!(
+        removal_record18(&restored, preview["request"].as_str().unwrap()).unwrap()["phase"],
+        "Intent"
+    );
+    for _ in 0..5 {
+        f.control.request_now(serde_json::json!("Screen"));
+        assert!(
+            folder.exists(),
+            "restart may inspect but cannot replay deletion"
+        );
+    }
+    f.control.request_now(removal_confirm18(&preview, true));
+    archive_wait16(&mut f.control, |s| {
+        s["removal"]["error"]
+            .as_str()
+            .is_some_and(|e| e.contains("cannot be replayed"))
+    });
+    f.control.request_now(serde_json::json!({"ReconcileRemoval":{"workspace":workspace,"request":preview["request"]}}));
+    archive_wait16(&mut f.control, |s| {
+        s["removal"]["pending"] == false
+            && removal_record18(s, preview["request"].as_str().unwrap())
+                .is_some_and(|r| r["phase"] == "Failed")
+    });
+    assert!(folder.exists());
+    assert_eq!(
+        archive_git16(&folder, &["rev-parse", reference]),
+        preview["snapshot"]["head"]
+    );
+    assert!(!f.launches.exists());
+    f.finish();
+}
+
+#[test]
+fn folder_removal_keyboard_blockers_confirmation_and_result_are_usable_at_normal_and_small_sizes() {
+    use std::os::unix::ffi::OsStrExt;
+    let mut f = SetupFixture::new("true");
+    for (cols, rows) in [(160, 40), (60, 18)] {
+        let (creation, folder) = f.create(false);
+        archive_wait16(&mut f.control, |s| {
+            s["setup"]["pending"] == false
+                && s["setup"]["records"].as_array().is_some_and(|rs| {
+                    rs.iter().any(|r| {
+                        r["creation"]["intent"]["request"] == creation && r["phase"] == "Succeeded"
+                    })
+                })
+        });
+        archive_git16(
+            &folder,
+            &["config", "user.name", "Removal keyboard fixture"],
+        );
+        archive_git16(&folder, &["config", "user.email", "remove@example.invalid"]);
+        std::fs::write(folder.join(".gitignore"), "ignored\n").unwrap();
+        archive_git16(&folder, &["add", ".gitignore"]);
+        archive_git16(&folder, &["commit", "-qm", "ignore fixture"]);
+        std::fs::write(folder.join("ignored"), "private unsaved content\n").unwrap();
+        f.control
+            .request_now(serde_json::json!({"Adopt":folder.as_os_str().as_bytes()}));
+        archive_wait16(&mut f.control, |s| {
+            s["adoption_pending"] == false
+                && s["adopted"] == folder.to_str().unwrap()
+                && s["metadata_pending"] == false
+        });
+        f.control.stream.shutdown(std::net::Shutdown::Both).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(8);
+        let mut dashboard = loop {
+            let mut d =
+                Dashboard::open_geometry(&folder, &f.fixture.state(), None, None, rows, cols);
+            let screen = d.wait_any(&[
+                "Discovery complete",
+                "Adopted:",
+                "Another dashboard controls this supervisor",
+            ]);
+            if !screen.contains("Another dashboard controls this supervisor") {
+                break d;
+            }
+            d.kill();
+            assert!(
+                Instant::now() < deadline,
+                "previous controller not released"
+            );
+        };
+        dashboard.send(b"M");
+        dashboard.wait("Preview: Preview only");
+        if let Some(dir) = std::env::var_os("RAT_REMOVAL_EVIDENCE") {
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(
+                Path::new(&dir).join(format!("remove-{cols}-preview.txt")),
+                dashboard.screen.screen().contents(),
+            )
+            .unwrap();
+        }
+        if cols == 60 {
+            dashboard.send(b"jjjjjjjjjjjjjj");
+        }
+        dashboard.wait("BLOCKED:");
+        if let Some(dir) = std::env::var_os("RAT_REMOVAL_EVIDENCE") {
+            std::fs::write(
+                Path::new(&dir).join(format!("remove-{cols}-blocker.txt")),
+                dashboard.screen.screen().contents(),
+            )
+            .unwrap();
+        }
+        dashboard.send(b" y\r");
+        assert!(
+            folder.join("ignored").exists(),
+            "blocked preview never confirms deletion"
+        );
+        std::fs::remove_file(folder.join("ignored")).unwrap();
+        dashboard.send(b"n");
+        dashboard.wait("Preview: Preview only");
+        if cols == 60 {
+            dashboard.send(b"jjjjjjjjjjjj");
+        }
+        dashboard.wait("y: Confirm removal");
+        if let Some(dir) = std::env::var_os("RAT_REMOVAL_EVIDENCE") {
+            std::fs::write(
+                Path::new(&dir).join(format!("remove-{cols}-confirm.txt")),
+                dashboard.screen.screen().contents(),
+            )
+            .unwrap();
+        }
+        dashboard.send(b" y");
+        dashboard.wait("Removed: Workspace folder removed.");
+        assert!(!folder.exists());
+        if let Some(dir) = std::env::var_os("RAT_REMOVAL_EVIDENCE") {
+            std::fs::write(
+                Path::new(&dir).join(format!("remove-{cols}-result.txt")),
+                dashboard.screen.screen().contents(),
+            )
+            .unwrap();
+        }
+        dashboard.send(b"d");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while dashboard.child.try_wait().unwrap().is_none() {
+            assert!(Instant::now() < deadline);
+            while dashboard.output.try_recv().is_ok() {}
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        drop(dashboard);
+        f.control = Controller::connect(&f.fixture);
+    }
+    f.finish();
+}
+
+#[test]
+fn folder_removal_storage_failures_keep_code_and_require_read_only_reconciliation() {
+    let mut f = SetupFixture::new("true");
+    for boundary in ["removal-intent", "removal-before-git", "removal-result"] {
+        let (creation, folder) = f.create(false);
+        let created = archive_wait16(&mut f.control, |s| {
+            s["setup"]["pending"] == false
+                && s["setup"]["records"].as_array().is_some_and(|rs| {
+                    rs.iter().any(|r| {
+                        r["creation"]["intent"]["request"] == creation && r["phase"] == "Succeeded"
+                    })
+                })
+        });
+        let workspace = created["registry"]["workspaces"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|w| w["task"] == creation)
+            .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let preview = removal_preview18(&mut f.control, &workspace);
+        assert_eq!(preview["snapshot"]["blockers"], serde_json::json!([]));
+        let fault = f.fixture.state().join(format!("proof-storage-{boundary}"));
+        std::fs::write(&fault, "error").unwrap();
+        f.control.request_now(removal_confirm18(&preview, true));
+        archive_wait16(&mut f.control, |s| {
+            s["removal"]["pending"] == false
+                && s["removal"]["error"]
+                    .as_str()
+                    .is_some_and(|e| e.contains("not durable"))
+        });
+        assert_eq!(folder.exists(), boundary != "removal-result");
+        if boundary != "removal-intent" {
+            assert_eq!(
+                archive_git16(
+                    &f.fixture.repository,
+                    &[
+                        "rev-parse",
+                        preview["snapshot"]["reference"].as_str().unwrap()
+                    ]
+                ),
+                preview["snapshot"]["head"]
+            );
+        }
+        std::fs::remove_file(fault).unwrap();
+        f.control.request_now(serde_json::json!("RetryStorage"));
+        archive_wait16(&mut f.control, |s| {
+            s["removal"]["pending"] == false
+                && removal_record18(s, preview["request"].as_str().unwrap())
+                    .is_some_and(|r| r["phase"] == "Uncertain")
+        });
+        f.control.request_now(serde_json::json!({"ReconcileRemoval":{"workspace":workspace,"request":preview["request"]}}));
+        archive_wait16(&mut f.control, |s| {
+            s["removal"]["pending"] == false
+                && removal_record18(s, preview["request"].as_str().unwrap()).is_some_and(|r| {
+                    r["phase"]
+                        == if boundary == "removal-result" {
+                            "Removed"
+                        } else {
+                            "Failed"
+                        }
+                })
+        });
+        assert_eq!(folder.exists(), boundary != "removal-result");
+    }
+    assert!(!f.launches.exists());
+    f.finish();
+}
+
+#[test]
+fn folder_removal_blocks_pending_resume_lookup_and_active_coding_without_stopping_them() {
+    let mut f = SetupFixture::new("true");
+    let (creation, folder) = f.create(true);
+    let live = archive_wait16(&mut f.control, |s| {
+        s["sessions"].as_array().is_some_and(|ss| {
+            ss.iter()
+                .any(|r| r["task"] == creation && r["lifecycle"] == "Running")
+        })
+    });
+    let target = live["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["task"] == creation)
+        .unwrap()["target"]
+        .clone();
+    f.control
+        .request_now(serde_json::json!({"SelectSession":target}));
+    let running = archive_wait16(&mut f.control, |s| {
+        s["lifecycle"] == "Running" && s["screen"].as_str().is_some_and(|t| t.contains("fixture>"))
+    });
+    let workspace = running["registry"]["workspaces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|w| w["task"] == creation)
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let segment = running["session_identity"]["session"].clone();
+    let active = removal_preview18(&mut f.control, &workspace);
+    assert!(
+        active["snapshot"]["blockers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|b| b.as_str().unwrap().contains("Active/uncertain")),
+        "{active}"
+    );
+    let head = archive_git16(&folder, &["rev-parse", "HEAD"]);
+    f.control.request_now(removal_confirm18(&active, true));
+    assert_eq!(archive_git16(&folder, &["rev-parse", "HEAD"]), head);
+    assert_eq!(
+        f.control.request_now(serde_json::json!("Screen"))["lifecycle"],
+        "Running"
+    );
+    f.control.request_now(serde_json::json!("Stop"));
+    archive_wait16(&mut f.control, |s| {
+        s["lifecycle"] == "Stopped"
+            && s["metadata_pending"] == false
+            && s["sessions"]
+                .as_array()
+                .is_some_and(|rs| rs.iter().all(|r| r["reserved"] == false))
+    });
+    let clean = removal_preview18(&mut f.control, &workspace);
+    assert_eq!(clean["snapshot"]["blockers"], serde_json::json!([]));
+    let fault = f.fixture.state().join("proof-storage-resume");
+    std::fs::write(&fault, "stall").unwrap();
+    f.control.request_now(serde_json::json!({"ResumeSelected":{"request":"removal-late-resume","workspace":workspace,"session":segment}}));
+    f.control.request_now(removal_confirm18(&clean, true));
+    archive_wait16(&mut f.control, |s| {
+        s["removal"]["error"]
+            .as_str()
+            .is_some_and(|e| e.contains("Active/uncertain"))
+    });
+    assert!(folder.exists());
+    // Removal does not implicitly Stop an occupied or resolving conversation.
+    f.control.request_now(serde_json::json!("Stop"));
+    std::fs::remove_file(fault).unwrap();
+    archive_wait16(&mut f.control, |s| {
+        s["sessions"]
+            .as_array()
+            .is_some_and(|rs| rs.iter().all(|r| r["reserved"] == false))
+    });
+    assert_eq!(archive_git16(&folder, &["rev-parse", "HEAD"]), head);
+    f.finish();
+}
+
+#[test]
+fn folder_removal_excludes_setup_execution_without_implicitly_cancelling_it() {
+    let mut f = SetupFixture::new("while :; do sleep 1; done");
+    let (creation, folder) = f.create(false);
+    let running = archive_wait16(&mut f.control, |s| {
+        s["setup"]["records"].as_array().is_some_and(|rs| {
+            rs.iter()
+                .any(|r| r["creation"]["intent"]["request"] == creation && r["phase"] == "Running")
+        })
+    });
+    let workspace = running["registry"]["workspaces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|w| w["task"] == creation)
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let preview = removal_preview18(&mut f.control, &workspace);
+    assert!(
+        preview["snapshot"]["blockers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|b| b.as_str().unwrap().contains("Setup or creation")),
+        "{preview}"
+    );
+    f.control.request_now(removal_confirm18(&preview, true));
+    let retained = f.control.request_now(serde_json::json!("Screen"));
+    assert_eq!(retained["setup"]["records"][0]["phase"], "Running");
+    assert!(folder.exists());
+    f.finish();
+}
+
+#[test]
+fn folder_removal_excludes_incomplete_archive_branch_mutation_after_restart() {
+    let mut f = SetupFixture::new("true");
+    let (creation, folder) = f.create(false);
+    let created = f.phase("Succeeded");
+    let workspace = created["registry"]["workspaces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|w| w["task"] == creation)
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let branch = archive_git16(&folder, &["symbolic-ref", "HEAD"]);
+    let fault = f
+        .fixture
+        .state()
+        .join("proof-storage-archive-branch-result");
+    std::fs::write(&fault, "stall").unwrap();
+    f.control.request_now(serde_json::json!({"Archive":{"workspace":workspace,"request":uuid::Uuid::new_v4().to_string()}}));
+    archive_wait16(&mut f.control, |s| {
+        s["registry"]["archived"]
+            .as_array()
+            .is_some_and(|ids| ids.contains(&serde_json::json!(workspace)))
+            && s["archive"]["pending"] == true
+            && !Command::new("git")
+                .arg("-C")
+                .arg(&folder)
+                .args(["show-ref", "--verify", &branch])
+                .output()
+                .unwrap()
+                .status
+                .success()
+    });
+    f.restart("setup-boot-one");
+    std::fs::remove_file(fault).unwrap();
+    archive_wait16(&mut f.control, |s| {
+        s["archive"]["records"].as_array().is_some_and(|rs| {
+            rs.iter()
+                .any(|r| r["workspace"] == workspace && r["branch_phase"] == "CleanupPending")
+        })
+    });
+    let preview = removal_preview18(&mut f.control, &workspace);
+    assert!(
+        preview["snapshot"]["blockers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|b| b.as_str().unwrap().contains("Incomplete archive/branch")),
+        "{preview}"
+    );
+    f.control.request_now(removal_confirm18(&preview, true));
+    assert!(folder.exists());
+    assert!(!f.launches.exists());
+    f.finish();
 }

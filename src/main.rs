@@ -18,6 +18,8 @@ mod native_status;
 mod persistence;
 mod recovery;
 mod registry;
+mod removal;
+mod removal_git;
 mod session;
 mod setup;
 mod setup_execution;

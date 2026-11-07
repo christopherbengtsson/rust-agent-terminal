@@ -289,6 +289,8 @@ pub struct ResumeIdentity {
     pub native: String,
 }
 pub enum Command {
+    RemovalLoad,
+    RemovalSave(uuid::Uuid, Box<crate::removal::Record>),
     ArchiveLoad,
     ArchiveSave(uuid::Uuid, Box<crate::archive::Record>),
     SetupLoad,
@@ -337,6 +339,8 @@ pub enum Command {
 }
 #[derive(Clone)]
 pub enum Completion {
+    Removals(std::result::Result<Vec<crate::removal::Record>, String>),
+    RemovalSaved(uuid::Uuid, std::result::Result<(), String>),
     Archives(std::result::Result<Vec<crate::archive::Record>, String>),
     ArchiveSaved(
         uuid::Uuid,
@@ -502,11 +506,13 @@ impl Worker {
                             continue;
                         }
                     }
-                    let kind = match &command { Command::CancelResume { .. } | Command::ResumeIdentity { .. } => "resume", Command::ArchiveLoad | Command::ArchiveSave(..) => "registry", Command::Browse(..) => "browse", Command::ObservedBranches(..) => "registry", Command::SetupLoad | Command::SetupSave(..) | Command::ConfigureSetup(..) | Command::ComparisonBase(..) | Command::CreationLoad | Command::CreationSave(..) => "registry", Command::SelectWorkspace(..) => "selection", Command::Capture(..) => unreachable!(), Command::Rename(..) | Command::Register(..) => "registry", Command::Save(..) | Command::Prepare(..) | Command::Authorize(..) => "metadata", Command::History(..) | Command::HistorySession(..) | Command::HistoryTarget { .. } => "history", Command::Cleanup(..) | Command::Delete(..) | Command::Seal(..) => "cleanup", Command::Retry => "retry", Command::Flush(..) => "flush" };
+                    let kind = match &command { Command::CancelResume { .. } | Command::ResumeIdentity { .. } => "resume", Command::RemovalLoad | Command::RemovalSave(..) | Command::ArchiveLoad | Command::ArchiveSave(..) => "registry", Command::Browse(..) => "browse", Command::ObservedBranches(..) => "registry", Command::SetupLoad | Command::SetupSave(..) | Command::ConfigureSetup(..) | Command::ComparisonBase(..) | Command::CreationLoad | Command::CreationSave(..) => "registry", Command::SelectWorkspace(..) => "selection", Command::Capture(..) => unreachable!(), Command::Rename(..) | Command::Register(..) => "registry", Command::Save(..) | Command::Prepare(..) | Command::Authorize(..) => "metadata", Command::History(..) | Command::HistorySession(..) | Command::HistoryTarget { .. } => "history", Command::Cleanup(..) | Command::Delete(..) | Command::Seal(..) => "cleanup", Command::Retry => "retry", Command::Flush(..) => "flush" };
                     status.lock().unwrap().operation = Some((kind, Instant::now()));
                     let operation = match &command { Command::Prepare(snapshot) | Command::Authorize(snapshot) | Command::Save(snapshot) => Some(snapshot.operation.clone()), Command::Flush(operation) | Command::Seal(operation) => Some(operation.clone()), _ => None };
                     let result = match command {
                         Command::SetupLoad => Ok(Completion::Setups(store.setups().map_err(|e|e.to_string()))),
+                        Command::RemovalLoad => Ok(Completion::Removals(store.removals().map_err(|e|e.to_string()))),
+                        Command::RemovalSave(id,record) => Ok(Completion::RemovalSaved(id,store.save_removal(&record).map_err(|e|e.to_string()))),
                         Command::ArchiveLoad => Ok(Completion::Archives(store.archives().map_err(|e|e.to_string()))),
                         Command::ArchiveSave(id,record) => Ok(Completion::ArchiveSaved(id,store.save_archive(&record).map_err(|e|e.to_string()))),
                         Command::SetupSave(id, record) => Ok(Completion::SetupSaved(id, store.save_setup(&record).map_err(|e|e.to_string()))),
@@ -759,7 +765,7 @@ impl Store {
             "PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL; PRAGMA fullfsync=ON;",
         )?;
         let version: u32 = db.pragma_query_value(None, "user_version", |r| r.get(0))?;
-        if version > 10 {
+        if version > 11 {
             return Err("History schema is newer than this executable".into());
         }
         if version == 0 {
@@ -860,6 +866,12 @@ impl Store {
             let tx = db.transaction()?;
             tx.execute_batch("CREATE TABLE IF NOT EXISTS workspace_archives(request TEXT PRIMARY KEY,workspace TEXT NOT NULL,record TEXT NOT NULL);")?;
             tx.pragma_update(None, "user_version", 10)?;
+            tx.commit()?;
+        }
+        if version < 11 {
+            let tx = db.transaction()?;
+            tx.execute_batch("CREATE TABLE workspace_removals(request TEXT PRIMARY KEY,workspace TEXT NOT NULL,record TEXT NOT NULL);")?;
+            tx.pragma_update(None, "user_version", 11)?;
             tx.commit()?;
         }
         let mut store = Self {
@@ -1427,6 +1439,87 @@ impl Store {
             .and_then(|value| value.trim().parse().ok());
         #[cfg(not(debug_assertions))]
         None
+    }
+    fn removals(&self) -> Result<Vec<crate::removal::Record>> {
+        let rows = self
+            .db
+            .prepare("SELECT record FROM workspace_removals ORDER BY rowid")?
+            .query_map([], |r| r.get::<_, String>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        rows.into_iter()
+            .map(|r| Ok(serde_json::from_str(&r)?))
+            .collect()
+    }
+    fn save_removal(&mut self, record: &crate::removal::Record) -> Result<()> {
+        use crate::removal::Phase;
+        self.fault(match record.phase {
+            Phase::Preview => "removal-preview",
+            Phase::Intent => "removal-intent",
+            Phase::Protected => "removal-protected",
+            Phase::Removing => "removal-before-git",
+            _ => "removal-result",
+        })?;
+        uuid::Uuid::parse_str(&record.request)?;
+        uuid::Uuid::parse_str(&record.workspace)?;
+        if record.snapshot.reference
+            != format!("refs/rat/removal/{}/{}", record.workspace, record.request)
+            || serde_json::to_vec(record)?.len() > 32768
+        {
+            return Err("Invalid or oversized removal receipt; folder retained".into());
+        }
+        let tx = self.db.transaction()?;
+        let known: Option<String> = tx.query_row(
+            "SELECT checkout FROM workspaces WHERE id=?1",
+            [&record.workspace],
+            |r| r.get(0),
+        )?;
+        if known
+            .as_deref()
+            .map(serde_json::from_str::<crate::git::CheckoutIdentity>)
+            .transpose()?
+            .as_ref()
+            != Some(&record.snapshot.checkout)
+        {
+            return Err("Removal checkout conflicts with retained workspace".into());
+        }
+        let previous: Option<String> = tx
+            .query_row(
+                "SELECT record FROM workspace_removals WHERE request=?1",
+                [&record.request],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if let Some(json) = previous {
+            let old: crate::removal::Record = serde_json::from_str(&json)?;
+            if old.workspace != record.workspace || old.snapshot != record.snapshot {
+                return Err("Frozen removal preview changed; a new request is required".into());
+            }
+            if record.phase == Phase::Preview && old.phase != Phase::Preview
+                || record.phase == Phase::Intent
+                    && old.phase != Phase::Preview
+                    && old.phase != Phase::Intent
+                || record.phase == Phase::Removing
+                    && !matches!(
+                        old.phase,
+                        Phase::Intent | Phase::Protected | Phase::Removing
+                    )
+            {
+                return Err("Removal phase cannot replay deletion".into());
+            }
+        } else {
+            if record.phase != Phase::Preview {
+                return Err("Missing durable removal preview".into());
+            }
+            if tx.query_row("SELECT count(*) FROM workspace_removals", [], |r| {
+                r.get::<_, u64>(0)
+            })? >= 64
+            {
+                return Err("Removal receipt capacity reached; existing recovery retained".into());
+            }
+        }
+        tx.execute("INSERT INTO workspace_removals VALUES(?1,?2,?3) ON CONFLICT(request) DO UPDATE SET record=excluded.record",params![record.request,record.workspace,serde_json::to_string(record)?])?;
+        tx.commit()?;
+        Ok(())
     }
     fn archives(&self) -> Result<Vec<crate::archive::Record>> {
         let rows = self

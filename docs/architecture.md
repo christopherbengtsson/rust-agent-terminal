@@ -1463,3 +1463,71 @@ cancellation reports that it is too late rather than promising a rollback.
 Restart loads pending receipts without automatically mutating Git; explicit retry
 reconciles absence as uncertain, preserving the archived saved point. Cleanup and
 restore have distinct storage fault boundaries. See [ticket 17 evidence](proofs/m2-17-branches.md).
+
+
+## Explicit workspace folder removal (Milestone 2 ticket 18)
+
+`removal::Coordinator` is a separate, bounded concrete operation owner. A read-only
+Git worker returns an immutable preview for a workspace/request UUID. Schema 11
+stores `workspace_removals(request,workspace,record)` through the existing sole
+writer, retaining at most 64 receipts of at most 32 KiB each. Receipt storage does
+not alter archive visibility, transcript tombstones, native IDs, creation facts,
+branches or future PR/review identity. The independent removal protocol capability
+(version 1) rejects incompatible live supervisors before dashboard dispatch.
+
+Explicit confirmation names the stored HEAD and recovery ref, and acknowledges
+local-only code when applicable. The supervisor rechecks every relevant canonical
+session owner and workspace task alias: execution/launch lookup uncertainty,
+capture tails, durable metadata/outcome obligations and setup/creation handoffs
+all block confirmation. Incomplete archive/branch mutations also block it.
+Confirmed removal reserves the canonical common-dir/git-dir during writer waits
+and Git work; aliases and asynchronous native-resume lookup completions re-enter
+the same admission gate. Archive/Return and setup retries cannot bypass this gate.
+Removal does not implicitly Stop a session or setup; independent Stop remains
+available to settle those blockers. Quit cancels pending mutation intent.
+
+After the frozen Preview receipt commits, explicit confirmation commits Intent.
+Only its exact completion starts `removal_git::protect`: verify the linked-checkout
+identity and eligibility, then create-only or verify the exact current HEAD ref at
+`refs/rat/removal/<workspace>/<request>`. Reference writes request committed-object
+and reference fsync. The complete snapshot/ref/HEAD and Removing intent then commit
+through SQLite before a separate Git worker may invoke ordinary `git worktree
+remove -- <canonical root>`. These two workers acquire the common-directory
+mutation lease only for bounded Git work, releasing it before SQLite waits.
+No force, branch deletion or recursive recorded-path deletion is available.
+
+Workers preserve raw Unix path bytes and anchor root, Git/common directories,
+`.git` link and worktree registration with device/inode evidence. Main, missing,
+locked/prunable, replaced or unsupported identities are refused. Tracked/untracked
+status and an independent ignored-file inventory are checked at preview,
+protection and immediately before removal: ordinary Git removal itself can delete
+ignored files. Git operation/lock state, sparse/special index entries, submodules,
+shallow/partial clones and external object dependencies conservatively block
+unsupported recovery coverage. HEAD/branch, recovery ref, canonical links and
+registration repeat after remote/ref work and immediately before deletion.
+
+Push evidence uses bounded live `ls-remote` checks of configured push destinations,
+with prompts disabled, at most eight destinations and a 12-second inspection
+budget (each subprocess retains its two-second deadline and 256 KiB pipe bound).
+Missing/inaccessible configured upstream/destinations are uncertainty and block;
+no configured upstream/remote can instead establish local-only saving with an
+explicit acknowledgement. A local tracking branch is not remote backup. Preview
+records a fingerprint of configuration/advertised refs; changed evidence requires
+a new preview. No fetch, push, credential copy or remote ref mutation occurs.
+
+Success is visible only after the matching durable Removed receipt. Lost storage
+acknowledgements, cancellation or uncertain Git outcomes retain the recovery ref
+and show uncertainty; no next deletion step is armed. Restart only loads receipts.
+Explicit `g` launches read-only reconciliation: absent root plus absent registration
+and the exact protected commit confirms removed; matching anchored retained state
+confirms retained and permits a fresh request. Replacement/inaccessible identities
+remain uncertain. It never replays removal or unlinks a replacement path. Saved
+commits and previous archive refs survive GC; history/search remains independent
+of checkout availability and in-place native resume is explained as unavailable.
+
+The process-local lease excludes cooperating application workers, not arbitrary
+external editors/Git. Final checks and ordinary Git refusal bound observed safety;
+there is no universal external-write atomicity or physical power-loss guarantee.
+Git filters/LFS retain ordinary Git semantics for external resources. See
+[ticket 18 evidence](proofs/m2-18-removal.md). Full native/combined-workload,
+sleep/wake and physical reboot qualification remains ticket 19.

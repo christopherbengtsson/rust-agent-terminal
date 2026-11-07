@@ -56,6 +56,21 @@ pub enum NativeAgent {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Request {
+    PreviewRemoval {
+        workspace: String,
+        request: String,
+    },
+    ConfirmRemoval {
+        workspace: String,
+        request: String,
+        head: String,
+        reference: String,
+        local_ack: bool,
+    },
+    ReconcileRemoval {
+        workspace: String,
+        request: String,
+    },
     Archive {
         workspace: String,
         request: String,
@@ -191,6 +206,10 @@ pub struct LaunchResult {
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Observation {
+    #[serde(default)]
+    pub removal: crate::removal::View,
+    #[serde(default)]
+    pub removal_protocol: u32,
     #[serde(default)]
     pub archive: crate::archive::View,
     #[serde(default)]
