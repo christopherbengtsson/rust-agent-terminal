@@ -222,3 +222,29 @@ remain available for coordinated physical-transition preparation. An unrelated
 untracked `strict-editor-supplement.log` was preserved for its owner's closeout;
 it was not included in this integration commit. Ticket 19 and the spec remain
 **Resolved: no**; actual sleep/wake, physical reboot and C6 remain open.
+
+## Review-fix qualification delta
+
+The [review-fix record](m2-19-review-fixes.md) separates the original Standards
+axis (zero hard findings, one optional duplication) from the two Spec defects,
+and records their fixes at production source
+`2523e947b644f531633fca4f9cb8da2ea7abf596`. This changes the product source tree
+and binary: it does not inherit a56's native/provider or performance claims.
+Real Git/App/editor positioning, actual installed Vim/Pico, canonical/pending/
+loading/missing-checkout and original-ID refusal checks pass. A separate copied
+retained state demonstrates completed-removed workspace 803's refusal and the
+ID-null unavailable case without native execution; the original cold state and
+its same-boot Interrupted reservation remain unchanged.
+
+The new six-stream run first failed on a read-only copied SQLite/hot-journal
+boundary; that failure and its unestablished cold provenance are retained.
+Ignored-harness-only source `41dba345fe67127f97f7214588da3b1cc0e401fe` then adds
+fresh authenticated process-start/executable exit evidence, byte/hash-verified
+cold copies, untouched DB/sidecars and separate analysis-copy SQLite recovery.
+Its production tree/binary are identical to 2523e94. The corrected frozen
+measurement passes in 76.00 seconds, with all six raw extents and 18 healthy
+owner attaches verified. Final stable build, formatting, all-target Clippy and
+prebuild pass; the root's final frozen serial all-target suite remains required.
+Actual sleep/wake, physical reboot and C6 remain open; ticket 19/spec stay
+**Resolved: no**. The linked record and archive preserve the precise source,
+binary, workload and failure boundaries.
