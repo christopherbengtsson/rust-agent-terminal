@@ -482,7 +482,7 @@ impl Sessions {
                     result: if state.metadata_pending {
                         None
                     } else {
-                        state.launch_result.clone()
+                        owner.recorded_launch(&state.launch_request)
                     },
                     pending: state.metadata_pending,
                     error: state.error.clone(),

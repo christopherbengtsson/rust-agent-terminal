@@ -94,6 +94,7 @@ pub struct Coordinator {
     pub view: View,
     pub launch: Option<LaunchHandoff>,
     job: Option<Job>,
+    job_attempt: Option<String>,
     pending: Option<(uuid::Uuid, Record, bool)>,
     unsaved: Option<Record>,
     armed: std::collections::BTreeSet<String>,
@@ -107,6 +108,7 @@ impl Coordinator {
             view: View::default(),
             launch: None,
             job: None,
+            job_attempt: None,
             pending: None,
             unsaved: None,
             armed: Default::default(),
@@ -118,7 +120,8 @@ impl Coordinator {
         self.job.is_some() || self.pending.is_some() || self.unsaved.is_some()
     }
     pub fn stopped(&self) -> bool {
-        !self.busy()
+        self.loaded
+            && !self.busy()
             && !self.view.records.iter().any(|r| {
                 !r.cleanup_confirmed
                     && matches!(
@@ -178,13 +181,7 @@ impl Coordinator {
             .as_ref()
             .map(|(_, r, _)| r.attempt.as_str())
             .or_else(|| self.unsaved.as_ref().map(|r| r.attempt.as_str()))
-            .or_else(|| {
-                self.view
-                    .records
-                    .last()
-                    .filter(|_| self.job.is_some())
-                    .map(|r| r.attempt.as_str())
-            })
+            .or(self.job_attempt.as_deref())
     }
     fn publish(&mut self, record: Record) {
         if let Some(old) = self
@@ -381,6 +378,7 @@ impl Coordinator {
                 }
                 let _ = tx.send(next);
             });
+            self.job_attempt = Some(attempt.to_owned());
             self.job = Some(Job {
                 cancel,
                 events,
@@ -474,7 +472,10 @@ impl Coordinator {
                         return;
                     }
                     match Job::start(record.clone()) {
-                        Ok(job) => self.job = Some(job),
+                        Ok(job) => {
+                            self.job_attempt = Some(record.attempt.clone());
+                            self.job = Some(job);
+                        }
                         Err(e) => {
                             let mut r = record;
                             r.phase = Phase::Failed;
@@ -505,18 +506,26 @@ impl Coordinator {
                 Some(Ok(record)) => {
                     if !matches!(record.phase, Phase::Authorized | Phase::Running) {
                         self.job = None;
+                        self.job_attempt = None;
                     }
                     self.save(record, storage);
                 }
                 Some(Err(mpsc::TryRecvError::Disconnected)) => {
                     self.job = None;
-                    if let Some(mut r) = self.view.records.last().cloned() {
+                    if let Some(mut r) = self
+                        .view
+                        .records
+                        .iter()
+                        .find(|r| Some(&r.attempt) == self.job_attempt.as_ref())
+                        .cloned()
+                    {
                         r.phase = Phase::Uncertain;
                         r.cleanup_confirmed = false;
                         r.message="Setup worker ended without an outcome; reconcile survivors before explicit informed recovery".into();
                         self.armed.remove(&r.creation.intent.request);
                         self.save(r, storage);
                     }
+                    self.job_attempt = None;
                 }
                 _ => {}
             }
@@ -524,7 +533,11 @@ impl Coordinator {
         self.view.pending = self.busy();
         self.view.armed_launches = self.armed.iter().cloned().collect();
         if let Some(job) = &self.job
-            && let Some(record) = self.view.records.last_mut()
+            && let Some(record) = self
+                .view
+                .records
+                .iter_mut()
+                .find(|r| Some(&r.attempt) == self.job_attempt.as_ref())
         {
             job.tail.lock().unwrap().apply(record);
         }

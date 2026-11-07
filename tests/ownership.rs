@@ -8920,6 +8920,27 @@ fn configured_setup_empty_owner_stop_follows_original_handoff_but_never_later_co
             .iter()
             .any(|s| s["target"] == target && s["lifecycle"] == "Running")
     });
+    let live = f.control.request_now(serde_json::json!("Screen"));
+    let live_id = live["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["target"] == target)
+        .unwrap()["session"]
+        .clone();
+    f.control.request(serde_json::json!({"Session":{"target":target,"session":live_id,"command":{"QueryLaunch":"unrelated-unknown-launch"}}}));
+    let retained = f.control.request(serde_json::json!("Screen"));
+    let receipt = retained["creation"]["launches"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["request"] == request)
+        .unwrap();
+    assert_eq!(receipt["result"]["request"], request);
+    assert!(
+        receipt["result"]["error"].is_null(),
+        "unrelated query cannot replace original native launch result"
+    );
     // This is the identity captured when setup's coding owner was still empty.
     f.control
         .request(serde_json::json!({"Session":{"target":target,"session":null,"command":"Stop"}}));
