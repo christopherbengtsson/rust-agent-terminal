@@ -249,11 +249,24 @@ pub(crate) fn snapshot(db: &Connection, selected_task: Option<&str>) -> Result<R
                 |row| row.get(0),
             )
             .optional()?;
+        let setup: Option<Option<String>> = db
+            .query_row(
+                "SELECT command FROM workspace_setup_policies WHERE request=?1",
+                [&task],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let setup = setup.map(|command| {
+            command
+                .map(crate::setup::Policy::Command)
+                .unwrap_or(crate::setup::Policy::Disabled)
+        });
         let creation = creation
             .map(|json| serde_json::from_str::<crate::creation::Record>(&json))
             .transpose()?
             .and_then(|r| {
                 Some(crate::creation::Facts {
+                    setup,
                     request: r.intent.request,
                     original_base_ref: r.base_ref?,
                     original_base_commit: r.commit?,

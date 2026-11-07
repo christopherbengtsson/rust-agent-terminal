@@ -8965,3 +8965,77 @@ fn configured_setup_empty_owner_stop_follows_original_handoff_but_never_later_co
     );
     f.finish();
 }
+
+#[test]
+fn configured_setup_creation_to_first_receipt_crash_retains_explicit_setup_choice() {
+    let mut f = SetupFixture::new("printf x >> attempts");
+    let fault = f.fixture.state().join("proof-storage-setup-prepare");
+    std::fs::write(&fault, "error").unwrap();
+    let (request, folder) = f.create(true);
+    let first = setup_wait(&mut f.control, &|s| {
+        s["setup"]["error"]
+            .as_str()
+            .is_some_and(|e| e.contains("not saved"))
+    });
+    assert!(!folder.join("attempts").exists());
+    assert!(!f.launches.exists());
+    let original = first["creation"]["records"][0]["intent"].clone();
+    f.control.request(serde_json::json!({"ConfigureSetup":{"project":f.project,"command":"printf changed > wrong-command"}}));
+    setup_wait(&mut f.control, &|s| {
+        s["registry_pending"] == false
+            && s["registry"]["projects"][0]["setup_command"] == "printf changed > wrong-command"
+    });
+    let duplicate = f
+        .control
+        .request(serde_json::json!({"CreateWorkspace":original}));
+    assert!(
+        duplicate["creation"]["error"].is_null(),
+        "same-request replay compares original client intent, not a changed private setup policy: {duplicate}"
+    );
+    assert_eq!(duplicate["creation"]["records"][0]["intent"], original);
+    std::fs::remove_file(fault).unwrap();
+    f.restart("setup-boot-one");
+    let restored = f.phase("Failed");
+    assert!(
+        restored["setup"]["records"][0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("never started")
+    );
+    assert!(
+        restored["setup"]["armed_launches"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    f.control
+        .request(serde_json::json!({"Adopt":folder.as_os_str().as_encoded_bytes()}));
+    let adopted = setup_wait(&mut f.control, &|s| {
+        s["adoption_pending"] == false && s["adopted"].is_string()
+    });
+    f.control.request(serde_json::json!({"Session":{"target":adopted["control_target"],"session":null,"command":{"LaunchClaude":"crash-gap-bypass"}}}));
+    assert!(!f.launches.exists());
+    assert!(!folder.join("attempts").exists());
+    let attempt = restored["setup"]["records"][0]["attempt"].clone();
+    f.control.request(
+        serde_json::json!({"RecoverSetup":{"attempt":attempt,"retry":true,"informed":false}}),
+    );
+    let done = f.phase("Succeeded");
+    assert_eq!(
+        done["setup"]["records"][0]["creation"]["intent"]["request"],
+        request
+    );
+    assert_eq!(
+        std::fs::read_to_string(folder.join("attempts")).unwrap(),
+        "x"
+    );
+    assert!(
+        !folder.join("wrong-command").exists(),
+        "restored setup obligation keeps original project policy"
+    );
+    assert!(
+        !f.launches.exists(),
+        "explicit setup retry after restore never implies Start"
+    );
+    f.finish();
+}

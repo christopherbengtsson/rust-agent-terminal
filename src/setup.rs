@@ -18,6 +18,11 @@ use std::{
 };
 const MAX_RECORDS: usize = 32;
 const OUTPUT: usize = 8192;
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum Policy {
+    Disabled,
+    Command(String),
+}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Phase {
     Prepared,
