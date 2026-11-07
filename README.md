@@ -13,6 +13,13 @@ explicit native recovery are implemented. Native status has bounded per-version
 evidence; GitHub workflows remain unavailable. The first release targets macOS;
 fixture tests do not establish native-agent compatibility.
 
+Local multi-project coordination, independent workspace creation/setup, retained
+search, selected native resume, Working/Whole workspace diffs, external editors,
+archive recovery, branch cleanup and separate folder removal are implemented.
+The [Milestone 2 qualification record](docs/proofs/m2-19-qualification.md) tracks
+the combined acceptance gates. Milestone 2 remains incomplete until those gates,
+including explicitly authorized physical reboot recovery, have been demonstrated.
+
 The [integrated Milestone 1 evidence](docs/proofs/18-milestone-evidence.md) records
 exact native versions, measured capacity and limits. The discovered default
 Codex foreground-subprocess Stop failure was fixed and real Stop/quit retests

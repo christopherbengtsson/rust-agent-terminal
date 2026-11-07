@@ -212,7 +212,7 @@ defer remote transport, provider abstractions, containers and extra crates until
 remote execution is explicitly scoped and its deployment/recovery trade-offs can
 be decided with evidence.
 
-## Milestone 2 migration boundaries (planned)
+## Milestone 2 migration boundaries
 
 Milestone 1 began with one global runtime/current adoption and singleton capture
 accounting. Tickets 03, 05 and 06 now provide execution-owned asynchronous Git
@@ -330,8 +330,9 @@ for Milestones 3–5 without implementing their features prematurely:
   command must not be replayed automatically because it can have external effects.
   This does not add review automation or general onboarding to Milestone 2.
 
-These are requirements for future Milestone 2 implementation, not claims that
-the existing singleton supervisor or editor/diff flows already implement them.
+The implementation sections below describe the completed Milestone 2 feature
+boundaries. These design constraints do not establish the combined native,
+resource or recovery acceptance gates; ticket 19 records that qualification.
 
 ## Native-session interaction baseline (planned)
 
