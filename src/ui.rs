@@ -140,13 +140,22 @@ impl Ui {
                 "{}\n{}\n",
                 visible(name),
                 if archived {
-                    "Archived · Enter: Unarchive (coding stays stopped)"
+                    "Archived · Enter: Restore branch and return (coding stays stopped)"
                 } else if app.archive_submitted {
                     "Waiting for confirmed Stop, cleanup and saved history"
                 } else {
                     "Enter: Stop, save and archive"
                 }
             );
+            if !archived {
+                text.push_str(&format!(
+                    "Delete local branch on archive: {} · b toggle\nTarget: {}\n",
+                    if app.archive_delete { "on" } else { "off" },
+                    app.archive_delete_target
+                        .as_deref()
+                        .unwrap_or("unavailable; refresh discovery before selecting")
+                ));
+            }
             if app.session.archive.pending {
                 text.push_str(&format!("{}\n", visible(&app.session.archive.status)));
             }
@@ -154,6 +163,9 @@ impl Ui {
                 text.push_str(&format!("{}\n", visible(e)));
             }
             if let Some(r) = record {
+                if !r.branch_message.is_empty() {
+                    text.push_str(&format!("{}\n", visible(&r.branch_message)));
+                }
                 if let Some(saved) = &r.saved {
                     text.push_str(&format!("{} {}\nsaved locally, not pushed.\nTracked + new nonignored files saved.\n{} ignored paths excluded; folder retained.\nStaged-only content: separate recovery tree.\nHEAD {}\n",if r.before.as_ref()==Some(saved){"Clean HEAD retained"}else{"Archive checkpoint"},saved.chars().take(12).collect::<String>(),r.excluded.len(),saved));
                 } else {

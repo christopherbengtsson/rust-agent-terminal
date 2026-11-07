@@ -12,7 +12,23 @@ use std::{
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum BranchPolicy {
+    Keep,
+    Delete(String),
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Record {
+    #[serde(default)]
+    pub delete_target: Option<String>,
+    #[serde(default)]
+    pub owned_branch: Option<String>,
+    #[serde(default)]
+    pub protected_base: Option<String>,
+    #[serde(default)]
+    pub branch_phase: BranchPhase,
+    #[serde(default)]
+    pub branch_message: String,
     pub request: String,
     pub workspace: String,
     pub checkout: CheckoutIdentity,
@@ -26,6 +42,17 @@ pub struct Record {
     pub reference: String,
     pub excluded: Vec<Vec<u8>>,
     pub message: String,
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BranchPhase {
+    #[default]
+    None,
+    CleanupPending,
+    Cleaned,
+    Retained,
+    RestorePending,
+    Restored,
+    RestoreFailed,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Phase {
@@ -50,6 +77,22 @@ impl Record {
         uuid::Uuid::parse_str(&workspace.id)
             .map_err(|_| "Archive workspace identity unavailable")?;
         Ok(Self {
+            delete_target: workspace
+                .creation
+                .as_ref()
+                .filter(|f| f.created_branch)
+                .map(|f| format!("refs/heads/{}", f.original_branch)),
+            owned_branch: workspace
+                .creation
+                .as_ref()
+                .filter(|f| f.created_branch)
+                .map(|f| format!("refs/heads/{}", f.original_branch)),
+            protected_base: workspace
+                .creation
+                .as_ref()
+                .map(|f| f.original_base_ref.clone()),
+            branch_phase: BranchPhase::None,
+            branch_message: String::new(),
             request: request.into(),
             workspace: workspace.id.clone(),
             checkout: workspace
@@ -73,6 +116,9 @@ impl Record {
         !matches!(
             self.phase,
             Phase::Archived | Phase::Failed | Phase::Cancelled
+        ) || matches!(
+            self.branch_phase,
+            BranchPhase::CleanupPending | BranchPhase::RestorePending
         )
     }
 }
@@ -93,6 +139,37 @@ impl Job {
                     Phase::Waiting => crate::archive_git::prepare(record, &worker_cancel),
                     Phase::Prepared | Phase::Saved => {
                         crate::archive_git::save(record, &worker_cancel)
+                    }
+                    Phase::Archived => {
+                        let mut r = record;
+                        if r.branch_phase == BranchPhase::RestorePending {
+                            match crate::archive_restore::restore(&r, &worker_cancel) {
+                                Ok(branch) => {
+                                    r.branch_phase = BranchPhase::Restored;
+                                    r.branch_message =
+                                        format!("Restored branch {branch}; coding remains stopped");
+                                }
+                                Err(error) => {
+                                    r.branch_phase = BranchPhase::RestoreFailed;
+                                    r.branch_message = format!(
+                                        "Return unavailable: {error}; coding remains stopped"
+                                    );
+                                }
+                            }
+                        } else {
+                            match crate::archive_branch::cleanup(&r, &worker_cancel) {
+                                Ok(message) => {
+                                    r.branch_phase = BranchPhase::Cleaned;
+                                    r.branch_message = message;
+                                }
+                                Err(error) => {
+                                    r.branch_phase = BranchPhase::Retained;
+                                    r.branch_message =
+                                        format!("Branch retained; cleanup incomplete: {error}");
+                                }
+                            }
+                        }
+                        Ok(r)
                     }
                     _ => Err("Archive phase cannot execute Git".into()),
                 };
@@ -124,6 +201,7 @@ pub struct Coordinator {
     saving: Option<(uuid::Uuid, Record)>,
     job: Option<Job>,
     armed: bool,
+    cancelled: bool,
 }
 impl Coordinator {
     pub fn new(storage: &crate::persistence::Worker) -> Self {
@@ -142,6 +220,7 @@ impl Coordinator {
             saving: None,
             job: None,
             armed: false,
+            cancelled: false,
         }
     }
     pub fn ready(&self) -> bool {
@@ -165,6 +244,15 @@ impl Coordinator {
         &mut self,
         workspace: &crate::registry::Workspace,
         request: &str,
+        storage: &crate::persistence::Worker,
+    ) {
+        self.begin_policy(workspace, request, None, storage);
+    }
+    pub fn begin_policy(
+        &mut self,
+        workspace: &crate::registry::Workspace,
+        request: &str,
+        policy: Option<Option<String>>,
         storage: &crate::persistence::Worker,
     ) {
         if !self.loaded || self.busy() {
@@ -192,9 +280,19 @@ impl Coordinator {
             .unwrap_or_else(|| Record::new(workspace, request));
         match record {
             Ok(mut r) => {
+                self.cancelled = false;
+                if existing.is_none()
+                    && let Some(target) = policy
+                {
+                    r.delete_target = target;
+                }
                 if matches!(r.phase, Phase::Archived) {
-                    self.current = Some(r);
+                    self.armed = r.branch_phase == BranchPhase::CleanupPending;
+                    self.current = Some(r.clone());
                     self.view.error = None;
+                    if self.armed {
+                        self.persist(r, storage);
+                    }
                     return;
                 }
                 // Failed command replies retain the prepared snapshot so same-request
@@ -214,9 +312,57 @@ impl Coordinator {
             Err(e) => self.view.error = Some(e),
         }
     }
+    pub fn restore(
+        &mut self,
+        workspace: &str,
+        request: &str,
+        storage: &crate::persistence::Worker,
+    ) {
+        if !self.loaded || self.busy() {
+            self.view.error = Some("Archive/return operation pending".into());
+            return;
+        }
+        let Some(mut record) = self
+            .view
+            .records
+            .iter()
+            .rev()
+            .find(|r| r.workspace == workspace && r.phase == Phase::Archived)
+            .cloned()
+        else {
+            self.view.error = Some("Saved archive recovery unavailable".into());
+            return;
+        };
+        if record.request != request {
+            self.view.error =
+                Some("Archive revision changed; reopen its exact receipt before Return".into());
+            return;
+        }
+        if record.branch_phase == BranchPhase::Restored {
+            self.view.error = None;
+            return;
+        }
+        self.cancelled = false;
+        record.branch_phase = BranchPhase::RestorePending;
+        self.armed = true;
+        self.current = Some(record.clone());
+        self.view.error = None;
+        self.persist(record, storage);
+    }
     fn persist(&mut self, mut record: Record, storage: &crate::persistence::Worker) {
         if record.phase == Phase::Saved {
             record.phase = Phase::Archived;
+            record.branch_phase = if record.delete_target.is_some() {
+                BranchPhase::CleanupPending
+            } else {
+                BranchPhase::None
+            };
+            record.branch_message = if record.delete_target.is_some() {
+                "Branch cleanup pending durable archive confirmation"
+            } else {
+                "Local branch retained by archive policy"
+            }
+            .into();
         }
         let id = uuid::Uuid::new_v4();
         match storage
@@ -266,7 +412,11 @@ impl Coordinator {
                         self.view.records.push(record.clone());
                         self.current = Some(record.clone());
                         if record.phase == Phase::Archived {
-                            self.armed = false
+                            self.armed = self.armed
+                                && matches!(
+                                    record.branch_phase,
+                                    BranchPhase::CleanupPending | BranchPhase::RestorePending
+                                );
                         }
                         return Some(registry.clone());
                     }
@@ -274,7 +424,7 @@ impl Coordinator {
                         self.current = Some(record);
                         self.armed = false;
                         self.view.error = Some(format!(
-                            "Archive metadata not saved: {e}; workspace unarchived, retry same request"
+                            "Archive metadata not saved: {e}; last durable visibility retained, retry same request"
                         ))
                     }
                 }
@@ -288,7 +438,11 @@ impl Coordinator {
             let job = self.job.take().unwrap();
             match job.result.try_recv() {
                 Ok(Ok(mut r)) => {
-                    if !self.armed {
+                    if self.cancelled && r.branch_phase == BranchPhase::Restored {
+                        r.branch_phase = BranchPhase::RestoreFailed;
+                        r.branch_message = "Return cancelled; any created branch/checkout retained; workspace remains archived and coding stopped".into();
+                    }
+                    if !self.armed && r.phase != Phase::Archived {
                         r.phase = Phase::Cancelled;
                         r.message = format!("Archive cancelled; {}", r.message);
                     }
@@ -297,13 +451,28 @@ impl Coordinator {
                 }
                 result => {
                     let mut r = self.current.clone().unwrap();
-                    r.phase = if self.armed {
-                        Phase::Failed
-                    } else {
-                        Phase::Cancelled
+                    let error = match result {
+                        Ok(Err(e)) => e,
+                        _ => "Worker ended without a receipt; retry exact request to reconcile"
+                            .into(),
                     };
-                    r.message=match result{Ok(Err(e))=>e,_=>"Archive worker ended without a receipt; retry same request to reconcile".into()};
-                    self.view.error = Some(r.message.clone());
+                    if r.phase == Phase::Archived {
+                        r.branch_phase = if r.branch_phase == BranchPhase::RestorePending {
+                            BranchPhase::RestoreFailed
+                        } else {
+                            BranchPhase::Retained
+                        };
+                        r.branch_message =
+                            format!("Saved archive retained; branch outcome uncertain: {error}");
+                    } else {
+                        r.phase = if self.armed {
+                            Phase::Failed
+                        } else {
+                            Phase::Cancelled
+                        };
+                        r.message = error.clone();
+                    }
+                    self.view.error = Some(error);
                     self.armed = false;
                     self.persist(r, storage)
                 }
@@ -328,15 +497,27 @@ impl Coordinator {
             && self.saving.is_none()
             && let Some(mut r) = self.current.clone()
             && r.blocks()
+            && (r.phase != Phase::Archived || self.cancelled)
         {
-            r.phase = Phase::Cancelled;
-            r.message="Archive cancelled; execution remains stopped. Retry same request reconciles any partial save".into();
+            if r.phase == Phase::Archived {
+                r.branch_phase = if r.branch_phase == BranchPhase::RestorePending {
+                    BranchPhase::RestoreFailed
+                } else {
+                    BranchPhase::Retained
+                };
+                r.branch_message = "Branch operation cancelled; saved archive retained".into();
+            } else {
+                r.phase = Phase::Cancelled;
+                r.message="Archive cancelled; execution remains stopped. Retry same request reconciles any partial save".into();
+            }
             self.current = Some(r.clone());
             self.persist(r, storage);
         }
         self.view.pending = self.busy();
         self.view.status=if self.saving.as_ref().is_some_and(|(_,r)|r.phase==Phase::Archived){"Checkpoint protected locally; waiting for durable archive metadata"}
             else if self.saving.is_some(){"Waiting for durable archive phase receipt"}
+            else if self.job.is_some() && self.current.as_ref().is_some_and(|r|r.branch_phase==BranchPhase::RestorePending){"Restoring local branch; coding remains stopped"}
+            else if self.job.is_some() && self.current.as_ref().is_some_and(|r|r.phase==Phase::Archived){"Archive saved; cleaning local branch (failure retains saved archive)"}
             else if self.job.is_some(){"Saving local checkpoint; Git identity, hooks and signing apply"}
             else if self.armed&&!settled{"Waiting for confirmed Stop, setup cleanup and durable history; uncertainty blocks saving"}
             else if !self.loaded{"Loading archive recovery receipts"}else{"Archive operation settled"}.into();
@@ -373,6 +554,12 @@ impl Coordinator {
         }
     }
     pub fn cancel(&mut self) {
+        if self.saving.as_ref().is_some_and(|(_, r)| {
+            r.branch_phase == BranchPhase::Restored || r.branch_phase == BranchPhase::Cleaned
+        }) {
+            self.view.error=Some("Git branch operation already completed; durable result is pending and cannot be cancelled. Coding remains stopped".into());
+            return;
+        }
         // A failed result write may leave current Git success in memory while
         // the last durable record is still Prepared. Cancel that durable intent.
         if !self.busy()
@@ -391,6 +578,7 @@ impl Coordinator {
         {
             return;
         }
+        self.cancelled = true;
         self.armed = false;
         if let Some(job) = &self.job {
             job.cancel()

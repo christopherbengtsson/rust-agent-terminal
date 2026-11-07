@@ -334,12 +334,33 @@ missing identity, rejecting hooks, external edits and uncertain checks block
 complete-save success with an explanation. Abrupt supervisor loss during Git
 may leave Git locks; the app never removes uncertain locks automatically.
 Verify no Git process owns a lock before resolving it through normal Git repair.
-Local branch cleanup and workspace folder removal are separate later actions.
+Before confirming archive, `b` toggles **Delete local branch on archive** for the
+exact displayed local branch. It starts on for product-created branches and off
+for adopted branches. Immutable creation provenance remains separate from the
+last observed branch; an external rename/switch causes conservative retention.
+Cleanup starts only after the saved recovery ref and archive metadata are
+confirmed. It uses safe ordinary detach, retains the folder/ignored files, and
+reports cleanup separately from save/archive success. Main/default/base branches,
+branches in another checkout, external advances, uncertain checks, custom
+`core.hooksPath` and executable `reference-transaction` hooks retain the branch.
+Automatic deletion is currently qualified only for Git 2.50 with the files ref
+backend. Other versions/backends retain the branch with an explanation. Remote
+branches are never deleted. Git's worktree-use checks are immediate snapshots;
+concurrent external worktree registration is not universally locked out.
+
+Return explicitly restores a branch from the saved point before restoring active
+visibility. A reused old name gets a fresh alternative; no existing ref is
+overwritten. Failed switch, missing folder or changed recovery remains visible
+and keeps the workspace archived. Coding always stays stopped. Enter retries the
+exact displayed archive revision; a stale Return cannot affect a later archive.
+Cancellation before branch mutation does not rearm on a late receipt. Once Git's
+branch result is awaiting its durable acknowledgement, cancellation is too late
+and the panel says so. Folder removal remains a separate later action.
 
 Archived metadata and confirmed missing/inaccessible folders are labelled without
 requiring the checkout for reading. `K` opens Stop, save and archive for the
 selected workspace; `w`, then `z`, includes archived workspaces and `K` opens
-Unarchive without starting coding.
+Restore branch and return without starting coding.
 Branches are labelled **last observed** from Git discovery, never inferred from
 the original creation branch. Refresh discovery to observe ordinary Git branch
 changes. Legacy facts that were not recorded remain unknown. Explicit transcript
