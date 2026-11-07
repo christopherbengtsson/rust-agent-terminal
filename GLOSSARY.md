@@ -53,6 +53,10 @@ not native resume.
 A local, editable collection of review suggestions, human comments, and choices
 associated with the code examined. A draft is distinct from a published review.
 
+**Review guidance**:
+The repository-specific instructions and review skills that guide preparation of
+a review, or the configured fallback review skill when the repository provides none.
+
 **Review comparison**:
 The changes between the identified PR head and base/comparison revisions used
 for review. It identifies the code being evaluated independently of current

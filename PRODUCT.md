@@ -190,9 +190,52 @@ When automatic preparation is enabled during setup, all outstanding personal rev
 
 Prepare one PR at a time initially. Queued, preparing, ready, stale, failed, and submitted states are visible. Users can pause the queue or cancel preparation. Requests that are closed, merged, or withdrawn leave the preparation queue; saved drafts remain accessible.
 
+Pause queue prevents new preparations from starting while the current one may
+finish. Cancel preparation stops the current attempt. Disabling automation also
+prevents queued automatic work from starting, preserving requests and drafts;
+explicit manual preparation remains available. Re-enabling automation admits
+outstanding eligible requests again. After ordinary quit or reboot, reopening
+the app resumes discovery and eligible automatic preparation under the saved
+setting. Interrupted attempts remain visible, and any fresh attempt first
+checks eligibility and comparison revisions.
+
 The review agent examines the PR description, diff, relevant repository files, and reported CI results. It obtains repository context as needed without requiring a registered local project. It does not automatically run builds, lints, or tests in this release. Missing, pending, or unavailable CI evidence must not be represented as a passing result.
 
+Review preparation follows applicable repository-specific review instructions and
+review skills first. When none are provided, it uses a bundled review skill;
+general repository conventions apply in either case. Milestone 3 bundles only
+the skills needed for review preparation, using Matt Pocock's code-review
+approach as a starting point adapted for unattended, restricted inspection.
+Installing the full collection for coding sessions is deferred. Setup explains
+this precedence and offers an optional custom fallback skill; the same setting
+remains available afterward. Each draft identifies the instructions and skill
+versions used. Repository and fallback instructions remain subject to enforced
+reviewer restrictions; required steps that cannot be performed are reported as
+unverified.
+
+An existing draft retains the guidance used for its preparation. Updated guidance
+or a changed fallback setting applies to the next explicit preparation or
+regeneration; it does not rewrite saved findings or human edits, or start agent
+usage by itself. Target-branch changes still follow comparison revalidation rules.
+
+Repository review guidance comes from the pinned target-branch revision. Changes
+to that guidance in the PR, including newly introduced guidance, are shown as
+proposed changes rather than silently used to govern their own review. If
+existing guidance cannot be loaded or followed meaningfully, preparation shows
+an actionable failure and offers Retry or an explicit Use fallback action.
+It does not silently substitute the fallback. A readable instruction requiring
+an unavailable execution step is instead retained with that step reported as
+unverified.
+
 Background preparation must leave dashboard navigation and coding sessions responsive. A ready draft can contain no suggested issues; that is distinguishable from an incomplete or failed preparation.
+
+There is no arbitrary product cap on PR size, file count or review duration.
+Large reviews may inspect changes in manageable pieces. If provider context,
+account usage or operational limits prevent completion, preserve findings and
+show an incomplete result with its coverage and reason, requiring explicit
+action to try again. Completion means the planned inspection finished, not that
+every defect was found. Qualification must establish supported workloads and
+necessary resource bounds; a product restriction requires an explicit decision.
 
 ### Local draft and human judgment
 
@@ -204,6 +247,15 @@ Open the draft beside the corresponding diff. Each suggestion has enough locatio
 - Add their own inline comments and an overall review message.
 
 Suggestions begin undecided. Only explicitly kept suggestions and the user's own selected comments enter the submission preview. Saving an external edit returns the text to the local draft. Edits and choices are saved locally across navigation, editor use, and restart; editing or discarding a suggestion does not publish anything.
+
+A successful external-editor return saves changed comment text to its original
+local draft without changing selection or validation choices. Unchanged text
+leaves the draft unchanged. An unsuccessful exit or readback/save failure keeps
+available edited text recoverable and shows an actionable explanation; it does
+not silently discard text or claim the edit was saved. If a newer draft or
+comment version would be overwritten, retain the returning text and require
+explicit reconciliation. A PR revision change alone does not discard the edit:
+save it against its original context and retain the required stale state.
 
 The user chooses Comment, Approve, or Request changes. The agent never chooses or submits that outcome on the user's behalf. A final preview identifies the PR, revision, outcome, overall message, and exact comments to be published. Publishing requires an explicit submission action.
 
@@ -259,6 +311,14 @@ Persistent in-app indicators identify input or approval requests, completed turn
 Local history and draft editing remain available offline. Remote information shows when it is unavailable or no longer current. Network or authentication failures must not erase local work.
 
 Temporary background-review failures receive a bounded number of retries with visible progress. Persistent failures show an actionable explanation and manual retry. Interrupted or partial drafts never appear ready, and retries or regeneration preserve human edits.
+
+Temporary preparation failures receive at most two automatic retries with
+increasing delays, a visible retry count and next retry time. Authentication
+failures, unusable review guidance and unsupported reviewer restrictions require
+user action. Each retry refreshes eligibility and comparison revisions and
+preserves prior partial results and human edits. Cancelled preparations require
+an explicit restart. Exhausting automatic retries leaves manual retry available.
+This retry policy never authorizes automatic publication or publication retries.
 
 Failed submissions preserve the draft. If publication may have succeeded before the connection failed, reconcile with GitHub before allowing a retry that could duplicate comments or a review. Do not label an uncertain result as either confirmed failure or confirmed success. Merge and auto-merge actions likewise show their confirmed or uncertain remote state.
 

@@ -442,6 +442,17 @@ outcomes require reconciliation before
 retrying. Background failures preserve human edits and never label partial work
 ready. No GitHub access is part of the foundation.
 
+The selected Milestone 3 editor direction is planned, not yet implemented:
+deepen the external-editor workflow to own preparation, process completion,
+exact text readback and recovery artifact lifetime. Dashboard terminal ownership
+and navigation context stay local; the review draft owner checks target/text
+versions and confirms durable saves through the sole writer. An editor exit is
+not a save acknowledgement. Preserve failed edits and prevent silent overwrite
+of newer draft text. Comparison presentation extraction remains conditional on
+demonstrated reuse by a pinned-review producer; do not generalize the existing
+coding-session owner or durable-operation records as a prerequisite. Details
+and verification are in the [Milestone 3 spec](../.scratch/milestone-3-github-reviews/spec.md).
+
 Verify boundaries with temporary real Git repositories, deterministic state/event
 tests, and terminal smoke checks. Next add a scripted PTY agent, supervisor
 failure tests, and measured navigation/attach latency, then real Claude Code,
