@@ -1400,8 +1400,66 @@ output stays capped at 256 KiB with a 30-second mutation deadline; receipts are
 bounded to 64 durable operations and 32 KiB per record, refusing excess without
 claiming archive success. Refs are not automatically expired.
 
-Unarchive here changes visibility only and starts no coding. Immutable original
-creation branch/base ownership remains in Workspace creation facts; prepared
-branch and recovery reference remain in the archive receipt. Ticket 17 owns
-safe branch cleanup/restoration; ticket 18 owns separately confirmed folder
-removal against exact current HEAD. See [ticket 16 evidence](proofs/m2-16-archive.md).
+Immutable original creation branch/base ownership remains in Workspace creation
+facts; prepared branch and recovery reference remain in the archive receipt.
+Ticket 17 adds branch cleanup/restoration below; ticket 18 owns separately
+confirmed folder removal against exact current HEAD.
+See [ticket 16 evidence](proofs/m2-16-archive.md).
+
+## Archive branch cleanup and return (Milestone 2 ticket 17)
+
+Schema 10's bounded JSON receipt gains backward-defaulted immutable deletion
+selection, original owned branch and selected base plus a separate `BranchPhase`
+and message. No schema/table or generic scheduler is introduced. Product-created
+branches default to deletion; adopted branches require the exact previewed target.
+Prepared snapshot and policy cannot change on request reuse. Saved OID becomes
+immutable once recorded. Protocol 2 binds Return to workspace **and archive
+request**, rejecting stale revisions and treating an already-returned receipt as
+a no-op, including when the active checkout has since become dirty.
+
+A durable Archived/CleanupPending receipt precedes the cleanup worker. This
+worker alone acquires the common-dir mutation lease; no lease spans SQLite or
+Stop. It revalidates canonical identity, saved recovery ref, direct local branch,
+immutable creation provenance, expected saved HEAD/ref and clean files/index.
+Main/master/trunk, selected local/remote base name and remote-default branch names
+are protected. Ordinary `switch --detach --no-overwrite-ignore
+--no-recurse-submodules` preserves checkout semantics and hooks. Protected/default,
+direct-ref, hooks, tip, recovery and checkout-use facts are checked again after
+detach. Failure retains the branch, folder, ignored files and confirmed archive;
+detach success is not silently rolled back.
+
+Deletion uses **ordinary `git branch -D`**, preserving its branch-in-use refusal.
+A command-local `reference-transaction` prepared guard checks the direct ref's
+actual OID under Git's lock, rather than trusting the zero old OID of an
+unconditional transaction. It checks saved recovery, current default names and
+worktree occupancy too. No low-level deletion fallback exists. The qualified
+subset is Git 2.50/files refs with no custom hooksPath or executable transaction
+hook; other policies/backends/versions fail closed. Hook policy is checked before
+and after detach and in prepared. Other ordinary checkout hooks remain effective.
+The guard argument and environment preserve raw Unix paths. App mutation leases
+exclude cooperating app workers only; worktree-use checks remain immediate
+snapshots. Ordinary external `worktree add --no-checkout` can race Git's own check;
+this is not a universal interprocess checkout lock or branch-generation identity.
+Direct Git-file edits and unobservable same-tip delete/recreate are outside that
+bounded guarantee. Observable branch replacements/advances are retained.
+
+Return durably records RestorePending before bounded Git work. Recovery and clean
+checkout identity must still match. Absent original names can be recreated;
+occupied names receive a fresh operation-derived alternative. A create-only
+`update-ref --stdin` transaction creates the branch and its operation marker at
+`refs/rat/restore/<workspace>/<archive request>/<branch>` together. Marker/ref
+verification reconciles a crash after create or switch without overwriting reused
+refs. Ordinary safe switch preserves user hooks. Only a matching durable
+Restored receipt sets archive visibility to false in the same SQLite transaction.
+Missing folders, changed files/HEAD/recovery, hook failure or branch-in-use refusal
+remain archived with actionable partial outcomes. No native start is dispatched.
+Workspace, native conversation and future PR/review identities do not derive
+from restored branch-name equality.
+
+Cancellation remains disarmed through late durable intent acknowledgement.
+A cancelled running Return retains any Git result and archived visibility.
+Once an actual completed branch result is already queued for durable storage,
+cancellation reports that it is too late rather than promising a rollback.
+Restart loads pending receipts without automatically mutating Git; explicit retry
+reconciles absence as uncertain, preserving the archived saved point. Cleanup and
+restore have distinct storage fault boundaries. See [ticket 17 evidence](proofs/m2-17-branches.md).

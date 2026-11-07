@@ -291,7 +291,6 @@ pub struct ResumeIdentity {
 pub enum Command {
     ArchiveLoad,
     ArchiveSave(uuid::Uuid, Box<crate::archive::Record>),
-    Unarchive(uuid::Uuid, String),
     SetupLoad,
     SetupSave(uuid::Uuid, Box<crate::setup::Record>),
     ConfigureSetup(uuid::Uuid, String, Option<String>),
@@ -503,14 +502,13 @@ impl Worker {
                             continue;
                         }
                     }
-                    let kind = match &command { Command::CancelResume { .. } | Command::ResumeIdentity { .. } => "resume", Command::ArchiveLoad | Command::ArchiveSave(..) | Command::Unarchive(..) => "registry", Command::Browse(..) => "browse", Command::ObservedBranches(..) => "registry", Command::SetupLoad | Command::SetupSave(..) | Command::ConfigureSetup(..) | Command::ComparisonBase(..) | Command::CreationLoad | Command::CreationSave(..) => "registry", Command::SelectWorkspace(..) => "selection", Command::Capture(..) => unreachable!(), Command::Rename(..) | Command::Register(..) => "registry", Command::Save(..) | Command::Prepare(..) | Command::Authorize(..) => "metadata", Command::History(..) | Command::HistorySession(..) | Command::HistoryTarget { .. } => "history", Command::Cleanup(..) | Command::Delete(..) | Command::Seal(..) => "cleanup", Command::Retry => "retry", Command::Flush(..) => "flush" };
+                    let kind = match &command { Command::CancelResume { .. } | Command::ResumeIdentity { .. } => "resume", Command::ArchiveLoad | Command::ArchiveSave(..) => "registry", Command::Browse(..) => "browse", Command::ObservedBranches(..) => "registry", Command::SetupLoad | Command::SetupSave(..) | Command::ConfigureSetup(..) | Command::ComparisonBase(..) | Command::CreationLoad | Command::CreationSave(..) => "registry", Command::SelectWorkspace(..) => "selection", Command::Capture(..) => unreachable!(), Command::Rename(..) | Command::Register(..) => "registry", Command::Save(..) | Command::Prepare(..) | Command::Authorize(..) => "metadata", Command::History(..) | Command::HistorySession(..) | Command::HistoryTarget { .. } => "history", Command::Cleanup(..) | Command::Delete(..) | Command::Seal(..) => "cleanup", Command::Retry => "retry", Command::Flush(..) => "flush" };
                     status.lock().unwrap().operation = Some((kind, Instant::now()));
                     let operation = match &command { Command::Prepare(snapshot) | Command::Authorize(snapshot) | Command::Save(snapshot) => Some(snapshot.operation.clone()), Command::Flush(operation) | Command::Seal(operation) => Some(operation.clone()), _ => None };
                     let result = match command {
                         Command::SetupLoad => Ok(Completion::Setups(store.setups().map_err(|e|e.to_string()))),
                         Command::ArchiveLoad => Ok(Completion::Archives(store.archives().map_err(|e|e.to_string()))),
                         Command::ArchiveSave(id,record) => Ok(Completion::ArchiveSaved(id,store.save_archive(&record).map_err(|e|e.to_string()))),
-                        Command::Unarchive(id,workspace) => Ok(Completion::Registered(id,store.unarchive(&workspace).map_err(|e|e.to_string()))),
                         Command::SetupSave(id, record) => Ok(Completion::SetupSaved(id, store.save_setup(&record).map_err(|e|e.to_string()))),
                         Command::ConfigureSetup(id, project, command) => Ok(Completion::Registered(id, store.configure_setup(&project, &command).map_err(|e|e.to_string()))),
                         Command::CancelResume { target, request } => {
@@ -1440,21 +1438,6 @@ impl Store {
             .map(|r| Ok(serde_json::from_str(&r)?))
             .collect()
     }
-    fn unarchive(&mut self, workspace: &str) -> Result<crate::registry::Registry> {
-        self.fault("registry")?;
-        uuid::Uuid::parse_str(workspace)?;
-        let _: String =
-            self.db
-                .query_row("SELECT id FROM workspaces WHERE id=?1", [workspace], |r| {
-                    r.get(0)
-                })?;
-        self.db.execute("INSERT INTO workspace_history_facts VALUES(?1,0) ON CONFLICT(workspace) DO UPDATE SET archived=0",[workspace])?;
-        let selected: Option<String> = self
-            .db
-            .query_row("SELECT task FROM app WHERE id=1", [], |r| r.get(0))
-            .optional()?;
-        crate::registry::snapshot(&self.db, selected.as_deref())
-    }
     fn save_archive(
         &mut self,
         record: &crate::archive::Record,
@@ -1462,7 +1445,15 @@ impl Store {
         self.fault(match record.phase {
             crate::archive::Phase::Waiting => "archive-intent",
             crate::archive::Phase::Prepared => "archive-prepared",
-            crate::archive::Phase::Archived => "archive-result",
+            crate::archive::Phase::Archived => match record.branch_phase {
+                crate::archive::BranchPhase::Cleaned | crate::archive::BranchPhase::Retained => {
+                    "archive-branch-result"
+                }
+                crate::archive::BranchPhase::RestorePending => "archive-restore-intent",
+                crate::archive::BranchPhase::Restored
+                | crate::archive::BranchPhase::RestoreFailed => "archive-restore-result",
+                _ => "archive-result",
+            },
             _ => "archive-phase",
         })?;
         self.fault("registry")?;
@@ -1484,6 +1475,10 @@ impl Store {
             if old.workspace != record.workspace
                 || old.checkout != record.checkout
                 || old.reference != record.reference
+                || old.owned_branch != record.owned_branch
+                || old.delete_target != record.delete_target
+                || old.protected_base != record.protected_base
+                || old.saved.is_some() && old.saved != record.saved
             {
                 return Err("Archive identity changed".into());
             }
@@ -1523,7 +1518,8 @@ impl Store {
             if record.saved.is_none() {
                 return Err("Missing protected archive commit".into());
             }
-            tx.execute("INSERT INTO workspace_history_facts VALUES(?1,1) ON CONFLICT(workspace) DO UPDATE SET archived=1",[&record.workspace])?;
+            let archived = i64::from(record.branch_phase != crate::archive::BranchPhase::Restored);
+            tx.execute("INSERT INTO workspace_history_facts VALUES(?1,?2) ON CONFLICT(workspace) DO UPDATE SET archived=excluded.archived",rusqlite::params![&record.workspace,archived])?;
         }
         tx.commit()?;
         let selected: Option<String> = self

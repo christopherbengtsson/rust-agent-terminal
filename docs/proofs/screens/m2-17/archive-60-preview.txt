@@ -1,0 +1,18 @@
+┌ Idle · Session unlaunched · Focus: dashboard ────────────┐
+│Workspace 9aca9d99                                        │
+│Enter: Stop, save and archive                             │
+│Delete local branch on archive: on · b toggle             │
+│Target: refs/heads/main                                   │
+│Tracked + new nonignored files become a local Archive     │
+│checkpoint, not pushed. Ignored files remain in the       │
+│folder, excluded from saving. Chats and folder stay.      │
+│Original staged content has a separate recovery tree.     │
+│Request 168b2b7f-8e10-4be4-b53e-8f24ee1a89bc              │
+│                                                          │
+│Enter confirms/retries same request · z cancels archive · │
+└──────────────────────────────────────────────────────────┘
+┌ Status · semantic status: unknown ·  ────────────────────┐
+│Adopted: /private/tmp/.tmp3SjDYg/checkout with spaces ·   │
+└──────────────────────────────────────────────────────────┘
+Enter confirm/retry · z cancel · Esc dismiss                
+j/k scroll · q quit/stop · d detach                         

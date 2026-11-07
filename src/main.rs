@@ -1,6 +1,8 @@
 mod app;
 mod archive;
+mod archive_branch;
 mod archive_git;
+mod archive_restore;
 mod browser;
 mod child_scope;
 mod cleanup;

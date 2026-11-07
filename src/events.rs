@@ -59,12 +59,17 @@ pub enum Request {
     Archive {
         workspace: String,
         request: String,
+        #[serde(default)]
+        branch_policy: Option<crate::archive::BranchPolicy>,
     },
     CancelArchive {
         workspace: String,
         request: String,
     },
-    Unarchive(String),
+    Unarchive {
+        workspace: String,
+        request: String,
+    },
     Browse(crate::persistence::search::Query),
     EditorSource {
         request: String,

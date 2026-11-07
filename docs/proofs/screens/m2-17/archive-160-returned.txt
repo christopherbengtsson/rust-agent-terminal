@@ -1,0 +1,40 @@
+┌ Reviews ───────────────────────────────────────────┐┌ Session · Focus: dashboard · Process: Idle · semantic status: unknown ─────────────────────────────────┐
+│Unavailable · milestone 1                           ││                                                                                                        │
+└────────────────────────────────────────────────────┘│                                                                                                        │
+┌ Agent terminal · Worktrees ────────────────────────┐│                                                                                                        │
+│Repository: /private/tmp/.tmp3SjDYg/checkout with   ││                                                                                                        │
+└────────────────────────────────────────────────────┘│                                                                                                        │
+┌ Project / worktrees (1) ───────────────────────────┐│                                                                                                        │
+│> └ main  /private/tmp/.tmp3SjDYg/checkout with spac││                                                                                                        │
+│    └ adopted · c/x start · C/X prompt · R rename   ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││Enter confirms/retries same request · z cancels archive · n new snapshot                                │
+│                                                    ││Esc dismisses (operation continues) · j/k scroll · q quit/stop · d detach                               │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+└────────────────────────────────────────────────────┘│                                                                                                        │
+┌ Selection ─────────────────────────────────────────┐│                                                                                                        │
+│Path: /private/tmp/.tmp3SjDYg/checkout with spaces  ││                                                                                                        │
+│Branch: main  HEAD:                                 ││                                                                                                        │
+│5bb0b39aa5f71925b7d6081ea271afb5167801b2            ││                                                                                                        │
+│                                                    ││                                                                                                        │
+└────────────────────────────────────────────────────┘└────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌ Status · semantic status: unknown ·  ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│Adopted: /private/tmp/.tmp3SjDYg/checkout with spaces · ready: c Claude / x Codex / l fixture                                                                 │
+│History: metadata committed · durable bytes 0                                                                                                                 │
+│Evidence: unavailable ·                                                                                                                                       │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+Enter confirm/retry · z cancel · Esc dismiss                                                                                                                    

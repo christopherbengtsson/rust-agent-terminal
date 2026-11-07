@@ -103,7 +103,7 @@ fn transport(
             || greeting.sessions_protocol != 1
             || greeting.prompt_naming_protocol != 1
             || greeting.creation_protocol != 1
-            || greeting.archive_protocol != 1
+            || greeting.archive_protocol != 2
             || greeting.resume_protocol != 1
             || greeting.setup_protocol != 1
         {
@@ -145,7 +145,7 @@ fn transport(
         || greeting.sessions_protocol != 1
         || greeting.prompt_naming_protocol != 1
         || greeting.creation_protocol != 1
-        || greeting.archive_protocol != 1
+        || greeting.archive_protocol != 2
         || greeting.resume_protocol != 1
         || greeting.setup_protocol != 1
     {
@@ -777,7 +777,7 @@ impl Sessions {
                     *command,
                     Request::Archive { .. }
                         | Request::CancelArchive { .. }
-                        | Request::Unarchive(_)
+                        | Request::Unarchive { .. }
                         | Request::Browse(_)
                         | Request::Session { .. }
                         | Request::SelectSession(_)
@@ -1347,7 +1347,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
         state.creation_protocol = 1;
         state.resume_protocol = 1;
         state.setup_protocol = 1;
-        state.archive_protocol = 1;
+        state.archive_protocol = 2;
         state.setup = setup.view.clone();
         state.archive = archive.view.clone();
         creation.view.launches =
@@ -1393,7 +1393,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                             creation_protocol: 1,
                             resume_protocol: 1,
                             setup_protocol: 1,
-                            archive_protocol:1,
+                            archive_protocol:2,
                             control_denied: true,
                             error: Some("Another dashboard controls this supervisor; close it before reconnecting".into()),
                             ..Observation::default()
@@ -1662,10 +1662,22 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
             }
-            Request::Archive { workspace, request } => {
+            Request::Archive {
+                workspace,
+                request,
+                branch_policy,
+            } => {
                 if let Some(known) = registry.workspaces.iter().find(|w| w.id == workspace) {
-                    archive.begin(known, &request, &storage);
-                    if let Some(checkout) = known.checkout.clone() {
+                    if let Some(policy) = branch_policy {
+                        let target = match policy {
+                            crate::archive::BranchPolicy::Keep => None,
+                            crate::archive::BranchPolicy::Delete(target) => Some(target),
+                        };
+                        archive.begin_policy(known, &request, Some(target), &storage);
+                    } else {
+                        archive.begin(known, &request, &storage);
+                    }
+                    if let Some(checkout) = archive.target().cloned() {
                         // Freeze admission before Stop, including lookup completions.
                         session.archive_reservations.push(checkout.clone());
                         setup.cancel_checkout(&checkout);
@@ -1689,20 +1701,8 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
             Request::CancelArchive { workspace, request } => {
                 archive.cancel_request(&workspace, &request)
             }
-            Request::Unarchive(workspace) => {
-                if archive.busy() {
-                    archive.view.error =
-                        Some("Archive operation pending; wait or cancel before Unarchive".into());
-                } else {
-                    let id = uuid::Uuid::new_v4();
-                    match storage
-                        .commands
-                        .try_send(crate::persistence::Command::Unarchive(id, workspace))
-                    {
-                        Ok(()) => registry_operation = Some(id),
-                        Err(e) => registry_error = Some(e.to_string()),
-                    }
-                }
+            Request::Unarchive { workspace, request } => {
+                archive.restore(&workspace, &request, &storage);
             }
             Request::ConfigureSetup { project, command } => {
                 let operation = uuid::Uuid::new_v4();
@@ -1904,7 +1904,7 @@ pub fn supervisor(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
         state.creation_protocol = 1;
         state.resume_protocol = 1;
         state.setup_protocol = 1;
-        state.archive_protocol = 1;
+        state.archive_protocol = 2;
         state.setup = setup.view.clone();
         state.archive = archive.view.clone();
         creation.view.launches =

@@ -9571,7 +9571,7 @@ fn archive_stops_capture_saves_index_and_files_pins_code_after_history_deletion_
         archive_git16(&fixture.repository, &["rev-parse", &reference]),
         checkpoint
     );
-    control.request_now(serde_json::json!({"Unarchive":workspace}));
+    control.request_now(serde_json::json!({"Unarchive":{"workspace":workspace,"request":request}}));
     let returned = archive_wait16(&mut control, |s| {
         s["registry"]["archived"]
             .as_array()
@@ -9665,6 +9665,10 @@ fn archive_keyboard_preview_receipt_and_return_are_usable_in_normal_and_small_la
         }
         dashboard.send(b"K");
         dashboard.wait("Stop, save and archive");
+        dashboard.wait("Delete local branch on archive: off");
+        dashboard.wait("Target: refs/heads/main");
+        dashboard.send(b"b");
+        dashboard.wait("Delete local branch on archive: on");
         if let Some(dir) = std::env::var_os("RAT_ARCHIVE_EVIDENCE") {
             std::fs::create_dir_all(&dir).unwrap();
             std::fs::write(
@@ -9676,6 +9680,7 @@ fn archive_keyboard_preview_receipt_and_return_are_usable_in_normal_and_small_la
         dashboard.send(b"\r");
         dashboard.wait("Clean HEAD retained");
         dashboard.wait("saved locally, not pushed");
+        dashboard.wait("Branch retained; cleanup incomplete");
         if let Some(dir) = std::env::var_os("RAT_ARCHIVE_EVIDENCE") {
             std::fs::write(
                 Path::new(&dir).join(format!("archive-{cols}-receipt.txt")),
@@ -9684,7 +9689,27 @@ fn archive_keyboard_preview_receipt_and_return_are_usable_in_normal_and_small_la
             .unwrap();
         }
         dashboard.send(b"\r");
-        dashboard.wait("Focus:");
+        let deadline = Instant::now() + Duration::from_secs(8);
+        loop {
+            let screen = dashboard.screen.screen().contents();
+            if !screen.contains("Archived · Enter") && !screen.contains("Clean HEAD retained") {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "Restore did not return dashboard: {screen}"
+            );
+            if let Ok(bytes) = dashboard.output.recv_timeout(Duration::from_millis(40)) {
+                dashboard.screen.process(&bytes);
+            }
+        }
+        if let Some(dir) = std::env::var_os("RAT_ARCHIVE_EVIDENCE") {
+            std::fs::write(
+                Path::new(&dir).join(format!("archive-{cols}-returned.txt")),
+                dashboard.screen.screen().contents(),
+            )
+            .unwrap();
+        }
         dashboard.send(b"K");
         dashboard.wait("Stop, save and archive");
         dashboard.send(b"\x1b");
@@ -10070,4 +10095,473 @@ fn archive_checkpoint_survives_supervisor_loss_before_metadata_and_same_request_
     control.request_now(serde_json::json!("Shutdown"));
     archive_wait16(&mut control, |s| s["stopped"] == true);
     owner.0.wait().unwrap();
+}
+
+#[test]
+fn archive_branch_default_cleanup_reuse_gc_and_restore_are_durable_without_coding() {
+    if !archive_branch_qualified17() {
+        return;
+    }
+    let mut f = SetupFixture::new("true");
+    let (creation, folder) = f.create(false);
+    let state = f.phase("Succeeded");
+    let workspace = state["registry"]["workspaces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|w| w["task"] == creation)
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let branch = archive_git16(&folder, &["symbolic-ref", "--short", "HEAD"]);
+    archive_git16(&folder, &["config", "user.name", "Archive fixture"]);
+    archive_git16(
+        &folder,
+        &["config", "user.email", "archive@example.invalid"],
+    );
+    std::fs::write(folder.join(".gitignore"), "ignored\n").unwrap();
+    std::fs::write(folder.join("ignored"), "private\n").unwrap();
+    std::fs::write(folder.join("new"), "saved local work\n").unwrap();
+    let request = uuid::Uuid::new_v4().to_string();
+    f.control
+        .request_now(serde_json::json!({"Archive":{"workspace":workspace,"request":request}}));
+    let archived = archive_wait16(&mut f.control, |s| {
+        s["archive"]["pending"] == false
+            && s["archive"]["records"].as_array().is_some_and(|rs| {
+                rs.iter()
+                    .any(|r| r["request"] == request && r["branch_phase"] == "Cleaned")
+            })
+    });
+    let receipt = archived["archive"]["records"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["request"] == request)
+        .unwrap();
+    let saved = receipt["saved"].as_str().unwrap().to_owned();
+    assert_eq!(receipt["delete_target"], format!("refs/heads/{branch}"));
+    assert_eq!(receipt["owned_branch"], receipt["delete_target"]);
+    assert_eq!(
+        archive_git16(&folder, &["rev-parse", "--symbolic-full-name", "HEAD"]),
+        "HEAD"
+    );
+    assert_eq!(
+        std::fs::read_to_string(folder.join("ignored")).unwrap(),
+        "private\n"
+    );
+    // An external actor reuses the old name. Returning must create a different
+    // branch from the exact recovery point and leave this ref alone.
+    let external = archive_git16(&f.fixture.repository, &["rev-parse", "HEAD"]);
+    archive_git16(&f.fixture.repository, &["branch", &branch, &external]);
+    archive_git16(&folder, &["reflog", "expire", "--expire=now", "--all"]);
+    archive_git16(&folder, &["gc", "--prune=now"]);
+    f.restart("setup-boot-one");
+    archive_wait16(&mut f.control, |s| {
+        s["archive"]["records"]
+            .as_array()
+            .is_some_and(|r| !r.is_empty())
+    });
+    assert!(!f.launches.exists());
+    let fault = f
+        .fixture
+        .state()
+        .join("proof-storage-archive-restore-result");
+    std::fs::write(&fault, "error").unwrap();
+    f.control
+        .request_now(serde_json::json!({"Unarchive":{"workspace":workspace,"request":request}}));
+    let failed = archive_wait16(&mut f.control, |s| {
+        s["archive"]["error"]
+            .as_str()
+            .is_some_and(|e| e.contains("metadata not saved"))
+    });
+    assert!(
+        failed["registry"]["archived"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!(workspace))
+    );
+    let restored = archive_git16(&folder, &["symbolic-ref", "--short", "HEAD"]);
+    assert_ne!(restored, branch);
+    assert_eq!(archive_git16(&folder, &["rev-parse", "HEAD"]), saved);
+    assert_eq!(
+        archive_git16(&folder, &["rev-parse", &format!("refs/heads/{branch}")]),
+        external
+    );
+    std::fs::remove_file(fault).unwrap();
+    f.restart("setup-boot-one");
+    archive_wait16(&mut f.control, |s| {
+        s["archive"]["records"]
+            .as_array()
+            .is_some_and(|r| !r.is_empty())
+    });
+    f.control
+        .request_now(serde_json::json!({"Unarchive":{"workspace":workspace,"request":request}}));
+    let returned = archive_wait16(&mut f.control, |s| {
+        s["archive"]["pending"] == false
+            && s["registry"]["archived"]
+                .as_array()
+                .is_some_and(Vec::is_empty)
+    });
+    assert_eq!(
+        archive_git16(&folder, &["symbolic-ref", "--short", "HEAD"]),
+        restored
+    );
+    assert_eq!(
+        returned["archive"]["records"][0]["branch_phase"],
+        "Restored"
+    );
+    assert!(!f.launches.exists(), "Return must never start coding");
+    std::fs::write(folder.join("later-dirty"), "user work after return").unwrap();
+    f.control
+        .request_now(serde_json::json!({"Unarchive":{"workspace":workspace,"request":request}}));
+    let repeated = archive_wait16(&mut f.control, |s| s["archive"]["pending"] == false);
+    assert!(
+        repeated["registry"]["archived"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "Duplicate Return must not rearchive dirty active work"
+    );
+    assert_eq!(
+        std::fs::read_to_string(folder.join("later-dirty")).unwrap(),
+        "user work after return"
+    );
+    let next_request = uuid::Uuid::new_v4().to_string();
+    f.control
+        .request_now(serde_json::json!({"Archive":{"workspace":workspace,"request":next_request}}));
+    archive_wait16(&mut f.control, |s| {
+        s["archive"]["pending"] == false
+            && s["registry"]["archived"]
+                .as_array()
+                .is_some_and(|ids| ids.contains(&serde_json::json!(workspace)))
+    });
+    f.control
+        .request_now(serde_json::json!({"Unarchive":{"workspace":workspace,"request":request}}));
+    let stale = archive_wait16(&mut f.control, |s| {
+        s["archive"]["error"]
+            .as_str()
+            .is_some_and(|e| e.contains("revision changed"))
+    });
+    assert!(
+        stale["registry"]["archived"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!(workspace))
+    );
+    f.finish();
+}
+
+#[test]
+fn archive_branch_guard_retains_tip_advanced_after_last_check_before_delete() {
+    if !archive_branch_qualified17() {
+        return;
+    }
+    use std::os::unix::fs::PermissionsExt;
+    let mut f = SetupFixture::new("true");
+    let (creation, folder) = f.create(false);
+    let state = f.phase("Succeeded");
+    let workspace = state["registry"]["workspaces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|w| w["task"] == creation)
+        .unwrap()["id"]
+        .clone();
+    let branch = archive_git16(&folder, &["symbolic-ref", "--short", "HEAD"]);
+    let wrapper = f.tools.join("git");
+    std::fs::write(&wrapper,r#"#!/bin/sh
+case " $* " in
+  *' branch -D -- '*)
+    root=
+    previous=
+    for arg in "$@"; do
+      if [ "$previous" = '-C' ]; then root=$arg; fi
+      previous=$arg
+    done
+    saved=$(/usr/bin/git -C "$root" rev-parse HEAD) || exit 1
+    advanced=$(/usr/bin/git -C "$root" -c user.name=Race -c user.email=race@example.invalid commit-tree 'HEAD^{tree}' -p "$saved" -m external-advance) || exit 1
+    /usr/bin/git -C "$root" update-ref "refs/heads/$previous" "$advanced" "$saved" || exit 1
+    printf '%s\n' "$advanced" > "$root/../advanced-ref"
+    ;;
+esac
+exec /usr/bin/git "$@"
+"#).unwrap();
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700)).unwrap();
+    // The guard must be installed through raw Unix path bytes. A lossy display
+    // of core.hooksPath silently disables it when TMPDIR is not UTF-8.
+    use std::os::unix::ffi::OsStrExt;
+    let mut raw_tmp = f
+        .fixture
+        .temp
+        .path()
+        .join(std::ffi::OsStr::from_bytes(b"guard-temp-\xff"));
+    if let Err(error) = std::fs::create_dir(&raw_tmp) {
+        assert_eq!(
+            error.raw_os_error(),
+            Some(libc::EILSEQ),
+            "Unexpected raw-path fixture error: {error}"
+        );
+        eprintln!(
+            "Filesystem rejects non-UTF8 names; guard path exercised with spaces/Unicode instead; raw-byte native case unverified"
+        );
+        raw_tmp = f.fixture.temp.path().join("guard temp ✓");
+        std::fs::create_dir(&raw_tmp).unwrap();
+    }
+    f.owner.0.kill().unwrap();
+    f.owner.0.wait().unwrap();
+    let _ = f.control.stream.shutdown(std::net::Shutdown::Both);
+    std::fs::remove_file(f.fixture.state().join("supervisor.sock")).unwrap();
+    let path = std::env::join_paths([f.tools.as_path(), Path::new("/usr/bin"), Path::new("/bin")])
+        .unwrap();
+    f.owner = RegistryOwner(
+        Command::new(env!("CARGO_BIN_EXE_agent-terminal"))
+            .arg("--supervisor")
+            .arg(f.fixture.state())
+            .env("PATH", path)
+            .env("TMPDIR", &raw_tmp)
+            .env("RAT_PROOF_BOOT_ID", "setup-boot-one")
+            .spawn()
+            .unwrap(),
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !f.fixture.state().join("supervisor.sock").exists() {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    f.control = Controller::connect(&f.fixture);
+    archive_wait16(&mut f.control, |s| {
+        s["archive"]["status"] == "Archive operation settled"
+    });
+    let request = uuid::Uuid::new_v4().to_string();
+    f.control
+        .request_now(serde_json::json!({"Archive":{"workspace":workspace,"request":request}}));
+    let archived = archive_wait16(&mut f.control, |s| {
+        s["archive"]["pending"] == false
+            && s["archive"]["records"].as_array().is_some_and(|rs| {
+                rs.iter()
+                    .any(|r| r["request"] == request && r["branch_phase"] == "Retained")
+            })
+    });
+    let r = &archived["archive"]["records"][0];
+    let advanced = std::fs::read_to_string(folder.parent().unwrap().join("advanced-ref")).unwrap();
+    assert_eq!(
+        archive_git16(&folder, &["rev-parse", &format!("refs/heads/{branch}")]),
+        advanced.trim()
+    );
+    assert_ne!(r["saved"], advanced.trim());
+    assert!(
+        r["branch_message"]
+            .as_str()
+            .unwrap()
+            .contains("ref updates aborted by hook"),
+        "{r}"
+    );
+    assert_eq!(
+        archive_git16(&folder, &["rev-parse", r["reference"].as_str().unwrap()]),
+        r["saved"].as_str().unwrap()
+    );
+    assert!(
+        archived["registry"]["archived"]
+            .as_array()
+            .unwrap()
+            .contains(&workspace)
+    );
+    assert!(!f.launches.exists());
+    f.finish();
+}
+
+#[test]
+fn archive_branch_cleanup_crash_keeps_durable_archive_and_preserves_replaced_ref_on_retry() {
+    if !archive_branch_qualified17() {
+        return;
+    }
+    let mut f = SetupFixture::new("true");
+    let (creation, folder) = f.create(false);
+    let created = f.phase("Succeeded");
+    let workspace = created["registry"]["workspaces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|w| w["task"] == creation)
+        .unwrap()["id"]
+        .clone();
+    let branch = archive_git16(&folder, &["symbolic-ref", "--short", "HEAD"]);
+    let request = uuid::Uuid::new_v4().to_string();
+    let fault = f
+        .fixture
+        .state()
+        .join("proof-storage-archive-branch-result");
+    std::fs::write(&fault, "stall").unwrap();
+    f.control
+        .request_now(serde_json::json!({"Archive":{"workspace":workspace,"request":request}}));
+    archive_wait16(&mut f.control, |s| {
+        s["archive"]["pending"] == true
+            && s["registry"]["archived"]
+                .as_array()
+                .is_some_and(|ids| ids.contains(&workspace))
+            && !Command::new("git")
+                .arg("-C")
+                .arg(&folder)
+                .args(["show-ref", "--verify", &format!("refs/heads/{branch}")])
+                .output()
+                .unwrap()
+                .status
+                .success()
+    });
+    archive_wait16(&mut f.control, |s| {
+        s["archive"]["status"]
+            .as_str()
+            .is_some_and(|v| v.contains("waiting for durable archive metadata"))
+    });
+    f.owner.0.kill().unwrap();
+    f.owner.0.wait().unwrap();
+    let _ = f.control.stream.shutdown(std::net::Shutdown::Both);
+    std::fs::remove_file(fault).unwrap();
+    std::fs::remove_file(f.fixture.state().join("supervisor.sock")).unwrap();
+    f.owner = SetupFixture::owner(&f.fixture, &f.tools);
+    f.control = Controller::connect(&f.fixture);
+    let recovered = archive_wait16(&mut f.control, |s| {
+        s["archive"]["records"]
+            .as_array()
+            .is_some_and(|rs| rs.iter().any(|r| r["request"] == request))
+    });
+    assert_eq!(recovered["archive"]["pending"], false);
+    assert!(
+        recovered["registry"]["archived"]
+            .as_array()
+            .unwrap()
+            .contains(&workspace)
+    );
+    // Absence alone is not attributed deletion proof. Reconciliation is explicit.
+    f.control
+        .request_now(serde_json::json!({"Archive":{"workspace":workspace,"request":request}}));
+    let absent = archive_wait16(&mut f.control, |s| {
+        s["archive"]["pending"] == false && s["archive"]["records"][0]["branch_phase"] == "Retained"
+    });
+    assert!(
+        absent["archive"]["records"][0]["branch_message"]
+            .as_str()
+            .unwrap()
+            .contains("absent")
+    );
+    archive_git16(
+        &f.fixture.repository,
+        &[
+            "-c",
+            "user.name=External",
+            "-c",
+            "user.email=external@example.invalid",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "external-new",
+        ],
+    );
+    let external = archive_git16(&f.fixture.repository, &["rev-parse", "HEAD"]);
+    archive_git16(&f.fixture.repository, &["branch", &branch, &external]);
+    // The completed exact request does not become permission to delete a newly
+    // reused name. Unarchive creates a different branch from recovery.
+    f.control
+        .request_now(serde_json::json!({"Archive":{"workspace":workspace,"request":request}}));
+    archive_wait16(&mut f.control, |s| s["archive"]["pending"] == false);
+    assert_eq!(archive_git16(&folder, &["rev-parse", &branch]), external);
+    f.control
+        .request_now(serde_json::json!({"Unarchive":{"workspace":workspace,"request":request}}));
+    archive_wait16(&mut f.control, |s| {
+        s["archive"]["pending"] == false
+            && s["registry"]["archived"]
+                .as_array()
+                .is_some_and(Vec::is_empty)
+    });
+    assert_ne!(
+        archive_git16(&folder, &["symbolic-ref", "--short", "HEAD"]),
+        branch
+    );
+    assert_eq!(archive_git16(&folder, &["rev-parse", &branch]), external);
+    assert!(!f.launches.exists());
+    f.finish();
+}
+
+#[test]
+fn archive_branch_cancel_during_durable_intents_never_rearms_cleanup_or_return() {
+    let mut f = SetupFixture::new("true");
+    let (creation, folder) = f.create(false);
+    let created = f.phase("Succeeded");
+    let workspace = created["registry"]["workspaces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|w| w["task"] == creation)
+        .unwrap()["id"]
+        .clone();
+    let branch = archive_git16(&folder, &["symbolic-ref", "--short", "HEAD"]);
+    let request = uuid::Uuid::new_v4().to_string();
+    let fault = f.fixture.state().join("proof-storage-archive-result");
+    std::fs::write(&fault, "stall").unwrap();
+    f.control
+        .request_now(serde_json::json!({"Archive":{"workspace":workspace,"request":request}}));
+    archive_wait16(&mut f.control, |s| {
+        s["archive"]["status"]
+            .as_str()
+            .is_some_and(|v| v.contains("waiting for durable archive metadata"))
+    });
+    f.control.request_now(
+        serde_json::json!({"CancelArchive":{"workspace":workspace,"request":request}}),
+    );
+    std::fs::remove_file(fault).unwrap();
+    let cancelled = archive_wait16(&mut f.control, |s| {
+        s["archive"]["pending"] == false && s["archive"]["records"][0]["branch_phase"] == "Retained"
+    });
+    assert!(
+        cancelled["registry"]["archived"]
+            .as_array()
+            .unwrap()
+            .contains(&workspace)
+    );
+    assert_eq!(
+        archive_git16(&folder, &["symbolic-ref", "--short", "HEAD"]),
+        branch
+    );
+    let fault = f
+        .fixture
+        .state()
+        .join("proof-storage-archive-restore-intent");
+    std::fs::write(&fault, "stall").unwrap();
+    f.control
+        .request_now(serde_json::json!({"Unarchive":{"workspace":workspace,"request":request}}));
+    archive_wait16(&mut f.control, |s| s["archive"]["pending"] == true);
+    f.control.request_now(
+        serde_json::json!({"CancelArchive":{"workspace":workspace,"request":request}}),
+    );
+    std::fs::remove_file(fault).unwrap();
+    let cancelled = archive_wait16(&mut f.control, |s| {
+        s["archive"]["pending"] == false
+            && s["archive"]["records"][0]["branch_phase"] == "RestoreFailed"
+    });
+    assert!(
+        cancelled["registry"]["archived"]
+            .as_array()
+            .unwrap()
+            .contains(&workspace)
+    );
+    assert_eq!(
+        archive_git16(&folder, &["symbolic-ref", "--short", "HEAD"]),
+        branch
+    );
+    assert!(!f.launches.exists());
+    f.finish();
+}
+
+fn archive_branch_qualified17() -> bool {
+    let qualified = Command::new("/usr/bin/git")
+        .arg("--version")
+        .output()
+        .is_ok_and(|out| out.status.success() && out.stdout.starts_with(b"git version 2.50."));
+    if !qualified {
+        eprintln!(
+            "Git 2.50/files deletion qualification unavailable; deletion-specific scenario skipped. Public Git tests verify conservative retention."
+        );
+    }
+    qualified
 }

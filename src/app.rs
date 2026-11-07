@@ -48,6 +48,8 @@ pub struct App {
     pub archive_scroll: u16,
     pub archive_request: Option<String>,
     pub archive_submitted: bool,
+    pub archive_delete_target: Option<String>,
+    pub archive_delete: bool,
     pub show_archived: bool,
     pub setup_input: Option<(String, String)>,
     pub browser: Option<crate::browser::Browser>,
@@ -97,6 +99,8 @@ impl App {
             archive_scroll: 0,
             archive_request: None,
             archive_submitted: false,
+            archive_delete_target: None,
+            archive_delete: false,
             show_archived: false,
             setup_input: None,
             browser: None,
@@ -419,6 +423,27 @@ impl App {
             browser.observe(observation.browse.as_ref());
             self.attached = false;
         }
+        if !self.archive_submitted && self.archive_delete_target.is_none() {
+            self.archive_delete_target = self
+                .archive_open
+                .as_ref()
+                .and_then(|id| observation.registry.workspaces.iter().find(|w| &w.id == id))
+                .and_then(|w| w.checkout.as_ref())
+                .and_then(|c| self.worktrees.iter().find(|t| t.path == c.root))
+                .and_then(|t| t.branch.clone())
+                .map(|b| {
+                    if b.starts_with("refs/") {
+                        b
+                    } else {
+                        format!("refs/heads/{b}")
+                    }
+                });
+        }
+        if self.archive_open.as_ref().is_some_and(|w| {
+            self.session.registry.archived.contains(w) && !observation.registry.archived.contains(w)
+        }) {
+            self.archive_open = None;
+        }
         self.session = observation;
     }
 
@@ -466,17 +491,31 @@ impl App {
                         request: self.archive_request.clone().unwrap(),
                     }));
                 }
+                KeyCode::Char('b') if !self.archive_submitted && !self.session.archive.pending => {
+                    if self.archive_delete_target.is_some() {
+                        self.archive_delete = !self.archive_delete;
+                    }
+                }
                 KeyCode::Char('n') if !self.session.archive.pending => {
                     self.archive_request = Some(uuid::Uuid::new_v4().to_string());
                     self.archive_submitted = false;
                 }
                 KeyCode::Enter => {
                     if self.session.registry.archived.contains(&workspace) {
-                        self.archive_open = None;
-                        return Some(Effect::Session(Request::Unarchive(workspace)));
+                        return Some(Effect::Session(Request::Unarchive {
+                            workspace,
+                            request: self.archive_request.clone().unwrap(),
+                        }));
                     }
                     self.archive_submitted = true;
                     return Some(Effect::Session(Request::Archive {
+                        branch_policy: Some(if self.archive_delete {
+                            crate::archive::BranchPolicy::Delete(
+                                self.archive_delete_target.clone().unwrap(),
+                            )
+                        } else {
+                            crate::archive::BranchPolicy::Keep
+                        }),
                         workspace,
                         request: self.archive_request.clone().unwrap(),
                     }));
@@ -1135,11 +1174,37 @@ impl App {
                         .rev()
                         .find(|r| {
                             r.workspace == workspace
-                                && !matches!(r.phase, crate::archive::Phase::Archived)
+                                && (self.session.registry.archived.contains(&workspace)
+                                    || !matches!(r.phase, crate::archive::Phase::Archived))
                         })
                         .map(|r| r.request.clone())
                         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
                 );
+                let known = self
+                    .session
+                    .registry
+                    .workspaces
+                    .iter()
+                    .find(|w| w.id == workspace);
+                self.archive_delete_target = known
+                    .and_then(|w| w.checkout.as_ref())
+                    .and_then(|c| self.worktrees.iter().find(|t| t.path == c.root))
+                    .and_then(|t| t.branch.clone())
+                    .map(|b| {
+                        if b.starts_with("refs/") {
+                            b
+                        } else {
+                            format!("refs/heads/{b}")
+                        }
+                    });
+                self.archive_delete = known
+                    .and_then(|w| w.creation.as_ref())
+                    .is_some_and(|f| f.created_branch);
+                if self.archive_delete && self.archive_delete_target.is_none() {
+                    self.archive_delete_target = known
+                        .and_then(|w| w.creation.as_ref())
+                        .map(|f| format!("refs/heads/{}", f.original_branch));
+                }
                 self.archive_open = Some(workspace);
                 self.archive_submitted = false;
                 self.archive_scroll = 0;
@@ -2766,5 +2831,64 @@ mod tests {
         assert!(
             matches!(app.input(KeyEvent::new(KeyCode::Enter,KeyModifiers::NONE)),Some(Effect::Session(Request::ConfigureSetup{project,command:Some(saved)})) if project=="project" && saved==command)
         );
+    }
+    #[test]
+    fn archive_policy_defaults_follow_provenance_and_keyboard_choice_names_exact_branch() {
+        for created in [true, false] {
+            let mut app = App::new("/project".into());
+            let checkout = crate::git::CheckoutIdentity {
+                root: "/project/work".into(),
+                git_dir: "/project/.git/worktrees/work".into(),
+                common_dir: "/project/.git".into(),
+            };
+            app.session
+                .registry
+                .workspaces
+                .push(crate::registry::Workspace {
+                    creation: created.then(|| crate::creation::Facts {
+                        setup: None,
+                        request: "creation".into(),
+                        original_base_ref: "refs/heads/main".into(),
+                        original_base_commit: "base".into(),
+                        original_branch: "work".into(),
+                        created_branch: true,
+                    }),
+                    id: "workspace".into(),
+                    task: "task".into(),
+                    legacy_tasks: vec![],
+                    name: "Work".into(),
+                    project: None,
+                    path: None,
+                    checkout: Some(checkout),
+                    sessions: vec![],
+                });
+            app.session.registry.selected = Some("workspace".into());
+            app.worktrees.push(Worktree {
+                path: "/project/work".into(),
+                branch: Some("work".into()),
+                ..Default::default()
+            });
+            app.input(KeyEvent::new(KeyCode::Char('K'), KeyModifiers::NONE));
+            assert_eq!(app.archive_delete, created);
+            app.input(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE));
+            assert_eq!(app.archive_delete, !created);
+            let effect = app.input(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+            match effect {
+                Some(Effect::Session(Request::Archive {
+                    branch_policy: Some(crate::archive::BranchPolicy::Delete(target)),
+                    ..
+                })) if !created => assert_eq!(target, "refs/heads/work"),
+                Some(Effect::Session(Request::Archive {
+                    branch_policy: Some(crate::archive::BranchPolicy::Keep),
+                    ..
+                })) if created => {}
+                _ => panic!("Unexpected archive choice"),
+            }
+            app.input(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE));
+            assert_eq!(
+                app.archive_delete, !created,
+                "submitted policy is immutable until a new snapshot"
+            );
+        }
     }
 }
