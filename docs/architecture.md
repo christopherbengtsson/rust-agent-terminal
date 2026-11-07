@@ -244,7 +244,8 @@ history; derivative cleanup removes one bounded passage per retained-row turn.
 Native identities and launch outcomes remain independent of transcript deletion.
 
 `workspace_history_facts(workspace,archived)` is the minimal retained archive-state
-contract for the later archive implementation; it has no placeholder action.
+contract used by archive visibility. Schema 10 adds attributed archive operation
+records independently of transcript deletion.
 `checkout_branch_facts(path,branch)` contains only actual Git discovery facts and
 is presented as last observed. Unknown legacy facts and missing/inaccessible
 checkout paths remain distinct. See [the search evidence](proofs/m2-11-retained-search.md). Mutation/fetch work remains execution-owned and bounded. See
@@ -1348,3 +1349,59 @@ phase for retry without replaying external effects. A lost worker becomes a
 conservative uncertain receipt. Full process-tree sampling/reboot/native limits
 remain those of the existing ownership foundation; see the
 [scoped setup evidence](proofs/m2-10-project-setup.md).
+
+
+## Stop, save and archive (Milestone 2 ticket 16)
+
+`archive::Coordinator` owns one current explicit request and attributed durable
+phase receipts. `archive_git` runs bounded cancellable Git subprocesses in the
+execution worker and acquires `RepositoryMutation` only for snapshot/Git work.
+Waiting for Stop, setup cancellation or SQLite receipts holds no repository
+mutation lease. This introduces no generic job framework.
+
+Admission freezes on canonical common-dir/git-dir, independently of selection
+or display labels. Every relevant session owner receives Stop, including retained
+workspace task aliases. Archive readiness requires no execution/launch/uncertainty
+reservation, no capture tail, no durable-write obligations or metadata failure,
+and no outstanding launch result. Setup's checkout reservation also must settle;
+a stopped label or global pending count cannot authorize Git. Pending creation
+and setup handoffs are disarmed. Selected native resume re-enters the same
+admission gate after its asynchronous descriptor lookup; Stop also durably
+cancels that lookup request. Archived visibility continues to block Start.
+
+Schema 10 stores `workspace_archives(request,workspace,record)`. Waiting intent
+is durable before snapshot preparation; Prepared binds checkout, symbolic branch,
+pre-HEAD, combined working tree, original staged tree and real-index byte hash
+before commit. Request reuse cannot change those prepared facts. Saved Git and
+recovery protection precede the single SQLite transaction connecting the receipt
+and archived visibility. Only its matching completion permits success. Restart
+loads incomplete receipts without executing Git or coding; explicit retry uses
+the same prepared request. Commit recognition checks parent, tree and random
+operation-bound message together, never message text alone.
+
+The worker owns `index.lock`, keeps immutable original/combined alternate indexes,
+and runs ordinary `git commit` with the user's identity/hooks/signing settings.
+A workspace-specific ref pins the original staged tree (`-index`) and combined
+prepared tree (`-prepared`); a commit ref pins saved HEAD. These retain staged-only
+blobs and code through GC independently of the visible branch or transcript.
+After parent/tree/operation identity, canonical checkout/branch/HEAD, working
+snapshot and original real-index hash rechecks, the worker atomically replaces
+its index lock with an index matching saved HEAD. Error paths do not restore or
+overwrite the real index. A partial commit/ref remains local and explicitly
+unarchived when observed concurrent/hook edits invalidate a complete save.
+
+Archive Git commands request `core.fsync=committed,reference`, `core.fsyncMethod=fsync`.
+Index artifacts and containing directories are explicitly synced; SQLite retains
+FULL synchronous/fullfsync settings. This is ordered protection across two stores,
+not a cross-store atomic transaction or a tested physical power-loss guarantee.
+A crash after Git but before metadata replays the same durable Prepared receipt;
+uncertain surviving Git locks are never deleted automatically. Per-command Git
+output stays capped at 256 KiB with a 30-second mutation deadline; receipts are
+bounded to 64 durable operations and 32 KiB per record, refusing excess without
+claiming archive success. Refs are not automatically expired.
+
+Unarchive here changes visibility only and starts no coding. Immutable original
+creation branch/base ownership remains in Workspace creation facts; prepared
+branch and recovery reference remain in the archive receipt. Ticket 17 owns
+safe branch cleanup/restoration; ticket 18 owns separately confirmed folder
+removal against exact current HEAD. See [ticket 16 evidence](proofs/m2-16-archive.md).

@@ -305,8 +305,41 @@ to committed output; results are labelled partial and Ctrl-R refreshes. Complete
 lines are indexed; an unfinished tail becomes searchable after final capture is
 sealed. Raw bytes remain available through the session’s history view.
 
+`K` previews Stop, save and archive. Enter confirms; Escape dismisses the
+panel while the operation continues, `z` cancels archive, and `j`/`k` scrolls
+receipts/exclusions. Stop remains an independent session action. Archive cancels
+pending native/setup intent and waits for confirmed owned cleanup and durable
+history. An uncertain Stop blocks saving. Quit stops outstanding local work;
+detach leaves the supervisor available for reconnect.
+
+A dirty workspace gets an **Archive checkpoint** commit using your Git identity,
+hooks and signing settings. A clean workspace keeps its existing HEAD. The
+receipt says **saved locally, not pushed**, lists ignored exclusions, and shows
+the saved commit and workspace recovery ref. Files and chats stay in place.
+The checkpoint combines tracked and new nonignored working changes. Git's
+original staged tree is pinned separately at the receipt's ref plus `-index`,
+including staged-only content no longer present in working files. For example,
+`git show '<receipt-ref>-index:path/to/file'` reads that saved staged version.
+A successful save leaves the index matching the checkpoint; partial staging is
+combined as part of the save. Git save failures preserve the original real index;
+a successful Git save followed by a metadata failure already has the combined
+index and retains the staged recovery tree. Either failure leaves the workspace
+unarchived; partial Git outcomes are reported explicitly.
+
+Enter retries the same archive request after a partial outcome or lost reply.
+If files changed since its prepared snapshot, cancel that operation and press
+`n` for a new snapshot, then Enter. Existing recovery refs remain retained.
+Conflicts, submodules/nested repositories, sparse/split/special index state,
+missing identity, rejecting hooks, external edits and uncertain checks block
+complete-save success with an explanation. Abrupt supervisor loss during Git
+may leave Git locks; the app never removes uncertain locks automatically.
+Verify no Git process owns a lock before resolving it through normal Git repair.
+Local branch cleanup and workspace folder removal are separate later actions.
+
 Archived metadata and confirmed missing/inaccessible folders are labelled without
-requiring the checkout for reading. The archive action itself arrives separately.
+requiring the checkout for reading. `K` opens Stop, save and archive for the
+selected workspace; `w`, then `z`, includes archived workspaces and `K` opens
+Unarchive without starting coding.
 Branches are labelled **last observed** from Git discovery, never inferred from
 the original creation branch. Refresh discovery to observe ordinary Git branch
 changes. Legacy facts that were not recorded remain unknown. Explicit transcript

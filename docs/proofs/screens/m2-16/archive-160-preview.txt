@@ -1,0 +1,40 @@
+┌ Reviews ───────────────────────────────────────────┐┌ Session · Focus: dashboard · Process: Idle · semantic status: unknown ─────────────────────────────────┐
+│Unavailable · milestone 1                           ││Workspace aa64bc55                                                                                      │
+└────────────────────────────────────────────────────┘│Enter: Stop, save and archive                                                                           │
+┌ Agent terminal · Worktrees ────────────────────────┐│Tracked + new nonignored files become a local Archive checkpoint, not pushed. Ignored files remain in   │
+│Repository: /private/tmp/.tmplfh62z/checkout with   ││the folder, excluded from saving. Chats and folder stay. Original staged content has a separate recovery│
+└────────────────────────────────────────────────────┘│tree.                                                                                                   │
+┌ Project / worktrees (1) ───────────────────────────┐│Request a4201ee2-7bf4-4355-a7bd-3a7fce13d84e                                                            │
+│> └ main  /private/tmp/.tmplfh62z/checkout with spac││                                                                                                        │
+│    └ adopted · c/x start · C/X prompt · R rename   ││Enter confirms/retries same request · z cancels archive · n new snapshot                                │
+│                                                    ││Esc dismisses (operation continues) · j/k scroll · q quit/stop · d detach                               │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+└────────────────────────────────────────────────────┘│                                                                                                        │
+┌ Selection ─────────────────────────────────────────┐│                                                                                                        │
+│Path: /private/tmp/.tmplfh62z/checkout with spaces  ││                                                                                                        │
+│Branch: main  HEAD:                                 ││                                                                                                        │
+│999a8c995dc22b6a9d1b2a85a35e713e8e62e2c0            ││                                                                                                        │
+│                                                    ││                                                                                                        │
+└────────────────────────────────────────────────────┘└────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌ Status · semantic status: unknown ·  ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│Adopted: /private/tmp/.tmplfh62z/checkout with spaces · ready: c Claude / x Codex / l fixture                                                                 │
+│History: metadata committed · durable bytes 0                                                                                                                 │
+│Evidence: unavailable ·                                                                                                                                       │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+q quit/stop s stop h history Enter attach x new Codex v resume K archive / find S text B chats N create O receipt U setup E LIVE f diff w workspaces d detach   
