@@ -243,7 +243,12 @@ def main():
     args.root = args.root.resolve(strict=True)
     assert not str(args.root).startswith(("/tmp/", "/private/tmp/")), "reboot state must be persistent"
     assert args.root.stat().st_uid == os.getuid(), "qualification root has another owner"
+    assert not args.root.stat().st_mode & 0o077, "qualification root must be private (0700)"
     args.state = args.root / "state"
+    assert args.state.resolve(strict=True) == args.state, "state must not be a symlink"
+    assert args.state.stat().st_uid == os.getuid() and not args.state.stat().st_mode & 0o077, "state must be private and owned"
+    resolved_commit = output(["git", "-C", str(args.git_repo), "rev-parse", "--verify", args.source_commit+"^{commit}"]).decode().strip()
+    assert resolved_commit == args.source_commit, "source requires a full immutable commit object ID"
     args.binary = (args.binary or args.root / "bin/agent-terminal").resolve(strict=True)
     assert os.path.commonpath([str(args.root), str(args.binary)]) == str(args.root)
     if args.action == "capture":
@@ -309,8 +314,25 @@ def main():
     if data["public"].get("available"):
         observation = data["public"]["observation"]
         checks["no_automatic_running_coding_observed"] = not any(row.get("lifecycle") == "Running" for row in observation.get("sessions", []))
+        registry = observation.get("registry", {})
+        checks["public_registry_identities_preserved"] = (
+            {row["id"] for row in registry.get("projects", [])} == {row["id"] for row in previous["database"]["projects"]}
+            and {row["id"] for row in registry.get("workspaces", [])} == {row["id"] for row in previous["database"]["workspaces"]}
+            and {(session, row["id"]) for row in registry.get("workspaces", []) for session in row.get("sessions", [])}
+                == {tuple(row) for row in previous["database"]["membership"]})
+        membership = dict(previous["database"]["membership"])
+        latest = {}
+        for session in previous["database"]["sessions"]:
+            if session["id"] in membership:
+                latest[membership[session["id"]]] = session["id"]
+        checks["public_latest_segments_restored"] = set(latest.values()).issubset(
+            {row.get("session") for row in observation.get("sessions", [])})
+        selected = (observation.get("session_identity") or {}).get("session")
+        checks["public_selected_native_id_preserved"] = selected in before and observation.get("native_conversation") == before[selected]["native_conversation"]
     else:
-        checks["no_automatic_running_coding_observed"] = None
+        for check in ["no_automatic_running_coding_observed", "public_registry_identities_preserved",
+                      "public_latest_segments_restored", "public_selected_native_id_preserved"]:
+            checks[check] = None
     result = {"checkpoint": str(args.checkpoint), "checks": checks,
               "all_required_checks_passed": all(value is True for value in checks.values()),
               "unverified_checks": [key for key, value in checks.items() if value is None],
