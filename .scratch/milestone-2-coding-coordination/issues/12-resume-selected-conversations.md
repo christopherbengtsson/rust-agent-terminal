@@ -56,3 +56,14 @@ action at 160×40 and 60×18. One earlier bin invocation used the wrong skip nam
 terminal restoration ran and passed then, with no concurrent native proof or
 resource/timing claim. Final ownership/resource and physical reboot gates remain
 later-ticket work.
+
+Integration check, 2026-11-07: source `f9b1b870217c2eff69a5f238804a1bc85afdbbb8`
+included integration tip `e8f67a2bba75ddaf0b9ca297ce39328dbc9d1553` and was
+merged without conflicts by no-ff merge
+`e92bd4fcb6436e0b2ba2f6985ce1cb7110a2b299`. Ticket 11 was resolved before
+merge. On that merged source, locked build, formatting check and all-target
+warnings-denied Clippy passed. Scoped bin tests passed: `app::` (32), `ui::`
+(18), and `selected_resume_choices_survive_restart_and_transcript_deletion`
+(1). These checks exercised no terminal restoration, PTY, ownership or real native
+scenario. The native evidence above retains its recorded source/tool scope;
+aggregate and final integrated native/resource checks remain ticket 19 work.
