@@ -328,7 +328,10 @@ def main():
         checks["public_latest_segments_restored"] = set(latest.values()).issubset(
             {row.get("session") for row in observation.get("sessions", [])})
         selected = (observation.get("session_identity") or {}).get("session")
-        checks["public_selected_native_id_preserved"] = selected in before and observation.get("native_conversation") == before[selected]["native_conversation"]
+        previous_selected = ((previous.get("public", {}).get("observation") or {}).get("session_identity") or {}).get("session")
+        checks["public_selected_native_id_preserved"] = (
+            selected in before and observation.get("native_conversation") == before[selected]["native_conversation"]
+            if selected is not None else previous_selected is None)
     else:
         for check in ["no_automatic_running_coding_observed", "public_registry_identities_preserved",
                       "public_latest_segments_restored", "public_selected_native_id_preserved"]:
