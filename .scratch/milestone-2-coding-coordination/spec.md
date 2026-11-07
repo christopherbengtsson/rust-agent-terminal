@@ -338,3 +338,18 @@ execution machinery.
 - The user approved the ticket granularity and blocking edges. The
   [19 implementation tickets](ticket-breakdown.md) are published under issues;
   publication does not claim that implementation or validation has started.
+
+
+## Integrated qualification checkpoint — 2026-11-07
+
+Ticket 19 records new source-pinned aggregate, declared six-session fixture and
+actual six-native-session evidence in the [qualification record](../../docs/proofs/m2-19-qualification.md).
+The corrected frozen serial all-target aggregate passed at 335ba44; the later
+a56 measurement-only refinement preserves the exact production source/executable.
+Native evidence qualifies Claude 2.1.318 and Codex 0.167.0; a separate current
+Claude 2.1.319 smoke retains Unknown semantics. Final integration review/checks
+remain separate. Actual sleep/wake and physical reboot are still open required
+gates, with an explicitly unexecuted [preparation plan](../../docs/proofs/m2-19-physical-transition-plan.md).
+No physical transition is inferred from injected boot fixtures. Ticket 19 remains
+Resolved: no, C6 and milestone completion are unclaimed, and no later release
+gates are claimed.

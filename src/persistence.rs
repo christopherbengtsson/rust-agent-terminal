@@ -397,6 +397,9 @@ pub struct Restored {
 // <=270336 accepted bytes before the existing reader's separate finite Stop tail.
 // Successful seal releases its queue, handle and commit ring; historic rows allocate none.
 const MAX_CAPTURE_STREAMS: usize = 32;
+const CAPTURE_TURN_BLOCKS: usize = 64;
+const CAPTURE_TURN_BYTES: usize = 65536;
+const CAPTURE_TURN_TIME: Duration = Duration::from_millis(2);
 pub struct CaptureStream {
     session: String,
     receiver: Receiver<(String, Vec<u8>, Instant)>,
@@ -627,19 +630,26 @@ impl Worker {
                     }
                 }
                 status.lock().unwrap().operation = None;
-                // One append attempt per stream per pass, rotating the first stream.
-                // Failed streams retain their block and cannot monopolize healthy streams.
+                // Drain a bounded turn from each stream before doing a durable
+                // derivative-index step. A native PTY read can be only 1 KiB;
+                // syncing an index checkpoint after every such block otherwise
+                // makes index fsync latency throttle capture. Keep the existing
+                // queue/payload bounds and give every stream its own byte, block
+                // and elapsed-time budget. A slow/failing write ends its turn.
                 let count = streams.len();
                 let mut worked = false;
                 for turn in 0..count {
                     let index = (cursor + turn) % count;
                     let stream = &mut streams[index];
-                    if stream.pending.is_none() { stream.pending = stream.receiver.try_recv().ok(); }
-                    if let Some((id, bytes, accepted)) = &mut stream.pending
-                        && stream.retry_at.is_none_or(|until| Instant::now() >= until) {
+                    let turn_started = Instant::now();
+                    let mut appended = 0;
+                    for _ in 0..CAPTURE_TURN_BLOCKS {
+                        if stream.pending.is_none() { stream.pending = stream.receiver.try_recv().ok(); }
+                        let Some((id, bytes, accepted)) = &mut stream.pending else { break; };
+                        if stream.retry_at.is_some_and(|until| Instant::now() < until) { break; }
                         worked = true;
                         status.lock().unwrap().operation = Some(("write", Instant::now()));
-                        match store.append(id, bytes, *accepted) {
+                        match store.append(id, &bytes[..bytes.len().min(CAPTURE_TURN_BYTES - appended)], *accepted) {
                             Ok(count) => {
                                 let mut p = stream.progress.lock().unwrap();
                                 p.pending_bytes -= count;
@@ -648,14 +658,18 @@ impl Worker {
                                 store.publish(&stream.session, &mut p);
                                 stream.retry_at = None;
                                 bytes.drain(..count);
+                                appended += count;
                                 if bytes.is_empty() { stream.pending = None; }
+                                if count == 0 { break; }
                             }
                             Err(error) => {
                                 stream.write_error = Some(format!("History capture blocked: {error}; output retained; repair storage then press y to retry or s to stop"));
                                 stream.progress.lock().unwrap().error.clone_from(&stream.write_error);
                                 stream.retry_at = Some(Instant::now() + Duration::from_millis(100));
+                                break;
                             },
                         }
+                        if appended >= CAPTURE_TURN_BYTES || turn_started.elapsed() >= CAPTURE_TURN_TIME { break; }
                     }
                     store.publish(&stream.session, &mut stream.progress.lock().unwrap());
                 }
@@ -2165,6 +2179,22 @@ impl Store {
             != Some(session)
         {
             return Err("Selected segment identity disagrees with saved record".into());
+        }
+        // Resolve the current workspace location only after validating the
+        // selected segment's membership/identity. This worker-side preflight
+        // keeps unavailable-checkout recovery actionable even when that older
+        // segment has no supported native descriptor. Unknown legacy locations
+        // do not prevent identity lookup; launch still checks its own location.
+        let path: Option<Vec<u8>> = self.db.query_row(
+            "SELECT path FROM workspaces WHERE id=?1",
+            [&workspace],
+            |row| row.get(0),
+        )?;
+        if path
+            .map(|bytes| PathBuf::from(std::ffi::OsString::from_vec(bytes)))
+            .is_some_and(|path| !path.is_dir())
+        {
+            return Err("Checkout unavailable: cannot continue in place; h opens retained history. Restore the checkout before explicitly resuming.".into());
         }
         let agent = match state.agent.as_deref() {
             Some("Claude Code") => crate::events::NativeAgent::Claude,

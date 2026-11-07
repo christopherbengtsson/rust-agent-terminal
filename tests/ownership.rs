@@ -8548,6 +8548,11 @@ fn configured_setup_restart_retains_uncertain_effects_until_explicit_reconciliat
     f.restart("setup-boot-one");
     std::fs::remove_file(fault).unwrap();
     let uncertain = f.phase("Uncertain");
+    // Setup, archive and removal receipts load independently after reconnect.
+    // Wait for admission before testing setup's semantic uncertainty rules.
+    archive_wait16(&mut f.control, |s| {
+        s["removal"]["ready"] == true && s["archive"]["status"] == "Archive operation settled"
+    });
     assert!(
         uncertain["setup"]["armed_launches"]
             .as_array()
@@ -8598,6 +8603,9 @@ fn configured_setup_restart_retains_uncertain_effects_until_explicit_reconciliat
     // A debug proof boot change exercises reboot evidence, not a real reboot.
     f.restart("setup-boot-two");
     f.phase("Uncertain");
+    archive_wait16(&mut f.control, |s| {
+        s["removal"]["ready"] == true && s["archive"]["status"] == "Archive operation settled"
+    });
     f.control.request(
         serde_json::json!({"RecoverSetup":{"attempt":attempt,"retry":true,"informed":true}}),
     );
@@ -8784,6 +8792,9 @@ fn keyboard_retained_search_opens_exact_passage_in_normal_and_small_ptys() {
         dashboard.send(b"keyboardneedle11\r");
         dashboard.wait("exact words");
         dashboard.wait("keyboardneedle11");
+        // Query text and the persistent matching-rule hint can render before
+        // asynchronous results; wait for the actual retained matching row.
+        dashboard.wait("fixture> received: keyboardneedle11");
         dashboard.send(b"\r");
         let screen = dashboard.wait("Committed passage v1");
         assert!(screen.contains("keyboardneedle11"), "{screen}");
@@ -9952,6 +9963,10 @@ fn archive_refuses_restored_uncertain_setup_despite_exited_process_and_cancels_w
     f.restart("setup-boot-one");
     std::fs::remove_file(fault).unwrap();
     let uncertain = f.phase("Uncertain");
+    // Setup's restored phase does not establish archive/removal receipt readiness.
+    archive_wait16(&mut f.control, |s| {
+        s["removal"]["ready"] == true && s["archive"]["status"] == "Archive operation settled"
+    });
     assert_eq!(uncertain["setup"]["records"][0]["cleanup_confirmed"], false);
     let before = archive_git16(&folder, &["rev-parse", "HEAD"]);
     let request = uuid::Uuid::new_v4().to_string();
@@ -10423,9 +10438,11 @@ fn archive_branch_cleanup_crash_keeps_durable_archive_and_preserves_replaced_ref
     f.owner = SetupFixture::owner(&f.fixture, &f.tools);
     f.control = Controller::connect(&f.fixture);
     let recovered = archive_wait16(&mut f.control, |s| {
-        s["archive"]["records"]
-            .as_array()
-            .is_some_and(|rs| rs.iter().any(|r| r["request"] == request))
+        // Archive records can arrive before removal admission is ready.
+        s["removal"]["ready"] == true
+            && s["archive"]["records"]
+                .as_array()
+                .is_some_and(|rs| rs.iter().any(|r| r["request"] == request))
     });
     assert_eq!(recovered["archive"]["pending"], false);
     assert!(
@@ -11181,4 +11198,662 @@ fn folder_removal_excludes_incomplete_archive_branch_mutation_after_restart() {
     assert!(folder.exists());
     assert!(!f.launches.exists());
     f.finish();
+}
+
+// Explicit whole-milestone fixture qualification. This is deliberately ignored
+// by the ordinary suite: it owns six streaming PTYs and must have the machine's
+// runtime measurement lane exclusively, with prebuilt, source-pinned binaries.
+#[test]
+#[ignore = "serial macOS six-stream qualification; RAT_MEASURE19_DIR is required"]
+fn six_stream_coordination_measurement19() {
+    use std::{
+        collections::BTreeMap,
+        os::unix::{ffi::OsStrExt, fs::MetadataExt},
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicBool, Ordering},
+        },
+    };
+    let fixture = Fixture::new();
+    let evidence =
+        PathBuf::from(std::env::var_os("RAT_MEASURE19_DIR").expect("set a new evidence directory"));
+    std::fs::create_dir(&evidence).unwrap();
+    let _failure = FailedMeasurementEvidence {
+        state: fixture.state(),
+        evidence: evidence.clone(),
+    };
+    let log_file = Arc::new(Mutex::new(
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(evidence.join("observations.jsonl"))
+            .unwrap(),
+    ));
+    let log = |value: serde_json::Value| writeln!(log_file.lock().unwrap(), "{value}").unwrap();
+    let git = |repo: &Path, args: &[&str]| {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+    // Two checkouts in each of three independent common directories. The first
+    // project keeps the normal root/other branch pair for visible key navigation.
+    let mut folders = Vec::new();
+    for project in 0..3 {
+        let repo = if project == 0 {
+            fixture.repository.clone()
+        } else {
+            let path = fixture.temp.path().join(format!("project-{project}"));
+            std::fs::create_dir(&path).unwrap();
+            git(&path, &["init", "-b", "main"]);
+            path
+        };
+        git(
+            &repo,
+            &[
+                "-c",
+                "user.name=Measurement",
+                "-c",
+                "user.email=proof@example.invalid",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "six streams",
+            ],
+        );
+        let other = fixture.temp.path().join(format!("project-{project}-other"));
+        git(
+            &repo,
+            &["worktree", "add", "-b", "other19", other.to_str().unwrap()],
+        );
+        std::fs::write(
+            repo.join("comparison.txt"),
+            format!("project {project} root diff\n"),
+        )
+        .unwrap();
+        std::fs::write(
+            other.join("comparison.txt"),
+            format!("project {project} linked diff\n"),
+        )
+        .unwrap();
+        folders.extend([repo, other]);
+    }
+    std::os::unix::fs::DirBuilderExt::mode(&mut std::fs::DirBuilder::new(), 0o700)
+        .create(fixture.state())
+        .unwrap();
+    std::fs::write(fixture.state().join("proof-storage-ledger"), "enabled").unwrap();
+    log(
+        serde_json::json!({"kind":"manifest","source":String::from_utf8_lossy(&Command::new("git").args(["rev-parse","HEAD"]).output().unwrap().stdout).trim(),"dirty":!Command::new("git").args(["diff","HEAD","--quiet"]).status().unwrap().success(),"binary_sha256":String::from_utf8_lossy(&Command::new("shasum").args(["-a","256",env!("CARGO_BIN_EXE_agent-terminal")]).output().unwrap().stdout),"coding_only":true,"native_agents":false,"projects":3,"streams":6,"offered_bytes_per_second_per_stream":65536,"producer_duration_ms":120000,"record_bytes":1024,"style":"cursor overwrite, green SGR, lambda/CJK UTF8, X padding","healthy_controller_seconds":30,"navigation_samples":60,"healthy_attach_samples":18,"healthy_attach_owners":[0,1,2,3,4,5],"healthy_attach_samples_per_owner":3,"attach_scope":"Controller selects a retained running owner before each exact-folder dashboard; UUID-verified prepared-session attachment, selection latency excluded","fault":"session-scoped debug ENOSPC marker, not physical exhaustion","outer_terminal":"portable-pty + continuously consumed vt100 parsed cells 160x40; no pixel latency","instrumentation":"single Controller selects each owner; bounded durable-commit rings retained separately; per-owner snapshots; 1s ps/disk sampling; monotonic input-to-parsed-visible timestamps"}),
+    );
+    for (command, args) in [
+        ("sw_vers", vec![]),
+        ("uname", vec!["-mrs"]),
+        ("rustc", vec!["-Vv"]),
+        ("cargo", vec!["-V"]),
+        (
+            "sysctl",
+            vec!["-n", "hw.model", "hw.memsize", "hw.logicalcpu"],
+        ),
+        ("ps", vec!["-Ao", "pid,ppid,pgid,rss,lstart,comm"]),
+    ] {
+        let output = Command::new(command).args(args).output().unwrap();
+        log(
+            serde_json::json!({"kind":"environment","command":command,"stdout":String::from_utf8_lossy(&output.stdout),"stderr":String::from_utf8_lossy(&output.stderr)}),
+        );
+    }
+    let mut dashboard = fixture.open();
+    dashboard.wait("Discovery complete");
+    dashboard.kill();
+    drop(dashboard);
+    let mut control = Controller::connect(&fixture);
+    let owner_pid = fixture_peer_pid(&control.stream).unwrap();
+    let mut streams = Vec::new();
+    for (index, folder) in folders.iter().enumerate() {
+        control.request(serde_json::json!({"Adopt":folder.as_os_str().as_bytes()}));
+        cleanup_wait15(&mut control, |s| {
+            s["adoption_pending"] == false
+                && s["adopted"] == folder.to_str().unwrap()
+                && s["registry_pending"] == false
+        });
+        let state = control.request(serde_json::json!({"Launch":format!("six-stream-{index}")}));
+        let target = state["control_target"].as_str().unwrap().to_owned();
+        let session = state["session_identity"]["session"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let workspace = state["registry"]["selected"].as_str().unwrap().to_owned();
+        let pid = state["execution"]["pid"].as_u64().unwrap();
+        cleanup_wait15(&mut control, |s| {
+            s["screen"].as_str().is_some_and(|s| s.contains("fixture>"))
+        });
+        log(
+            serde_json::json!({"kind":"stream-identity","index":index,"project":index/2,"folder":folder,"target":target,"session":session,"workspace":workspace,"pid":pid}),
+        );
+        streams.push((target, session, workspace, pid));
+    }
+    assert_eq!(
+        streams
+            .iter()
+            .map(|s| &s.0)
+            .collect::<std::collections::BTreeSet<_>>()
+            .len(),
+        6
+    );
+    assert_eq!(
+        streams
+            .iter()
+            .map(|s| &s.1)
+            .collect::<std::collections::BTreeSet<_>>()
+            .len(),
+        6
+    );
+    assert_eq!(
+        control.request(serde_json::json!("Screen"))["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|s| s["lifecycle"] == "Running")
+            .count(),
+        6
+    );
+    let target_command = |index: usize, command: serde_json::Value| serde_json::json!({"Session":{"target":streams[index].0,"session":streams[index].1,"command":command}});
+    let mut pids = vec![std::process::id().to_string(), owner_pid.to_string()];
+    pids.extend(streams.iter().map(|s| s.3.to_string()));
+    let dashboard_pid = Arc::new(std::sync::atomic::AtomicU32::new(0));
+    let sampler_done = Arc::new(AtomicBool::new(false));
+    struct Sampler19 {
+        done: Arc<AtomicBool>,
+        join: Option<std::thread::JoinHandle<()>>,
+    }
+    impl Drop for Sampler19 {
+        fn drop(&mut self) {
+            self.done.store(true, Ordering::Relaxed);
+            if let Some(join) = self.join.take() {
+                join.join().unwrap();
+            }
+        }
+    }
+    let sampler = Sampler19 {
+        done: sampler_done.clone(),
+        join: Some({
+            let file = log_file.clone();
+            let done = sampler_done.clone();
+            let directory = fixture.state();
+            let pids = pids.join(",");
+            let dashboard_pid = dashboard_pid.clone();
+            std::thread::spawn(move || {
+                while !done.load(Ordering::Relaxed) {
+                    let before = measurement_clock();
+                    let dashboard = dashboard_pid.load(Ordering::Relaxed);
+                    let sampled_pids = if dashboard == 0 {
+                        pids.clone()
+                    } else {
+                        format!("{pids},{dashboard}")
+                    };
+                    let output = Command::new("ps")
+                        .args(["-p", &sampled_pids, "-o", "pid=,ppid=,rss=,etime=,command="])
+                        .output()
+                        .unwrap();
+                    let mut files = Vec::new();
+                    for entry in std::fs::read_dir(&directory).unwrap().flatten() {
+                        if let Ok(metadata) = entry.metadata()
+                            && metadata.is_file()
+                        {
+                            files.push(serde_json::json!({"name":entry.file_name().to_string_lossy(),"bytes":metadata.len(),"allocated_bytes":metadata.blocks()*512}));
+                        }
+                    }
+                    writeln!(file.lock().unwrap(),"{}",serde_json::json!({"kind":"resources","sample_ns":before,"sampler_us":measurement_clock().saturating_sub(before)/1000,"ps":String::from_utf8_lossy(&output.stdout),"files":files})).unwrap();
+                    std::thread::sleep(Duration::from_secs(1));
+                }
+            })
+        }),
+    };
+    let mut stream_after_sequences = Vec::new();
+    for (index, _) in streams.iter().enumerate() {
+        let before = control.request(serde_json::json!({"SelectSession":streams[index].0}));
+        stream_after_sequences.push(
+            before["durable_commits"]
+                .as_array()
+                .unwrap()
+                .last()
+                .map_or(0, |receipt| receipt["sequence"].as_u64().unwrap()),
+        );
+        control.request(target_command(index,serde_json::json!({"Input":format!("pace17 {} 120000 65536\r",1900+index).into_bytes()})));
+    }
+    let started_ns = measurement_clock();
+    let mut commits: Vec<BTreeMap<u64, serde_json::Value>> =
+        (0..6).map(|_| BTreeMap::new()).collect();
+    let mut failures = Vec::new();
+    let mut sample_state = |index: usize, phase: &str, state: &serde_json::Value| {
+        assert_eq!(state["control_target"], streams[index].0);
+        assert_eq!(state["session_identity"]["session"], streams[index].1);
+        if let Some(ring) = state["durable_commits"].as_array() {
+            for receipt in ring {
+                commits[index].insert(receipt["sequence"].as_u64().unwrap(), receipt.clone());
+            }
+        }
+        log(
+            serde_json::json!({"kind":"stream-snapshot","phase":phase,"index":index,"sample_ns":measurement_clock(),"lifecycle":state["lifecycle"],"accepted":state["accepted_bytes"],"written":state["written_bytes"],"durable":state["durable_bytes"],"capture_pending":state["capture_pending_bytes"],"capture_high_water":state["capture_high_water"],"backpressure_count":state["capture_backpressure_count"],"backpressure_us":state["capture_backpressure_micros"],"subscriber_frame_high_water":state["subscriber_frame_high_water"],"storage_error":state["storage_error"],"durable_commits":state["durable_commits"]}),
+        );
+    };
+    // The storage worker must retain fair capture/flush progress while global
+    // retained searches and actual Git comparisons are repeatedly requested.
+    let healthy_start = Instant::now();
+    let mut cycle = 0;
+    while healthy_start.elapsed() < Duration::from_secs(30) {
+        for (index, _) in streams.iter().enumerate() {
+            let state = control.request(serde_json::json!({"SelectSession":streams[index].0}));
+            sample_state(index, "healthy-search-diff", &state);
+            let request = format!("m219-search-{cycle}-{index}");
+            let since = measurement_clock();
+            control.request(serde_json::json!({"Browse":{"request":request,"mode":"History","text":"pace17","after":0,"workspace":null,"passage":null,"cancel":false}}));
+            let result = cleanup_wait15(&mut control, |s| {
+                s["browse"]["request"] == request && s["browse"]["preparing"] == false
+            });
+            log(
+                serde_json::json!({"kind":"search","index":index,"request":request,"us":measurement_clock().saturating_sub(since)/1000,"response":result["browse"]}),
+            );
+            let request = format!("m219-diff-{cycle}-{index}");
+            let since = measurement_clock();
+            control.request(serde_json::json!({"InspectWorking":{"request":request,"workspace":streams[index].2,"selected":null}}));
+            let state = cleanup_wait15(&mut control, |s| s["working_diff"]["request"] == request);
+            assert!(
+                state["working_diff"]["result"]["Ok"]["content"]
+                    .as_str()
+                    .is_some_and(|t| t.contains("diff")),
+                "{state}"
+            );
+            log(
+                serde_json::json!({"kind":"diff","index":index,"request":request,"us":measurement_clock().saturating_sub(since)/1000}),
+            );
+            sample_state(index, "healthy-search-diff", &state);
+        }
+        cycle += 1;
+    }
+    assert!(cycle >= 2, "must exercise repeated search/diff scheduling");
+    for (index, _) in streams.iter().enumerate() {
+        let state = control.request(serde_json::json!({"SelectSession":streams[index].0}));
+        sample_state(index, "healthy-before-ui", &state);
+        assert!(
+            state["durable_bytes"].as_u64().unwrap() > 500000,
+            "stream {index} starved: {state}"
+        );
+        assert!(state["capture_high_water"].as_u64().unwrap() <= 270336);
+    }
+    control.request(serde_json::json!({"SelectSession":streams[0].0}));
+    drop(control);
+    let mut dashboard = LiveDashboard::new(fixture.reopen_after_release("Process: Running"));
+    dashboard_pid.store(
+        dashboard.dashboard.child.process_id().unwrap(),
+        Ordering::Relaxed,
+    );
+    dashboard.send(&[0x1d]);
+    dashboard.wait("Focus: dashboard");
+    dashboard.wait("Branch: main");
+    for sample in 0..60 {
+        let (key, expected) = if sample % 2 == 0 {
+            (b"j", "Branch: other19")
+        } else {
+            (b"k", "Branch: main")
+        };
+        let before = measurement_clock();
+        dashboard.send(key);
+        let visible = dashboard.wait(expected).1;
+        let us = visible.saturating_sub(before) / 1000;
+        log(
+            serde_json::json!({"kind":"navigation","phase":"six-stream-healthy","sample":sample,"injected_ns":before,"visible_ns":visible,"us":us}),
+        );
+        if us >= 100000 {
+            failures.push(format!("healthy navigation {sample}: {us}us"));
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    drop(dashboard);
+    dashboard_pid.store(0, Ordering::Relaxed);
+    let mut control = Controller::connect(&fixture);
+    // Candidate j/k navigation above does not adopt a runtime. Explicitly select
+    // each retained owner before opening its exact checkout dashboard. Selection
+    // and dashboard startup are outside the prepared-session attach measurement.
+    for (index, _) in streams.iter().enumerate() {
+        control.request(serde_json::json!({"SelectSession":streams[index].0}));
+        let selected = cleanup_wait15(&mut control, |state| {
+            state["control_target"] == streams[index].0
+                && state["session_identity"]["session"] == streams[index].1
+                && state["lifecycle"] == "Running"
+        });
+        sample_state(index, "healthy-selected-for-attach", &selected);
+        drop(control);
+        let deadline = Instant::now() + Duration::from_secs(8);
+        let reopened = loop {
+            let mut candidate = Dashboard::open(&folders[index], &fixture.state());
+            let screen = candidate.wait_any(&[
+                "Process: Running",
+                "Another dashboard controls this supervisor",
+            ]);
+            if screen.contains("Process: Running") {
+                break candidate;
+            }
+            candidate.kill();
+            assert!(Instant::now() < deadline, "controller EOF was not released");
+        };
+        let mut dashboard = LiveDashboard::new(reopened);
+        dashboard_pid.store(
+            dashboard.dashboard.child.process_id().unwrap(),
+            Ordering::Relaxed,
+        );
+        dashboard.wait(&streams[index].1);
+        dashboard.send(&[0x1d]);
+        dashboard.wait("Focus: dashboard");
+        for local_sample in 0..3 {
+            let sample = index * 3 + local_sample;
+            assert!(
+                dashboard
+                    .latest
+                    .lock()
+                    .unwrap()
+                    .0
+                    .contains(&streams[index].1),
+                "wrong current managed session before timed attach {sample}"
+            );
+            let before = measurement_clock();
+            dashboard.send(b"\r");
+            dashboard.wait("Focus: session");
+            let nonce = format!("m219-{sample:03}");
+            dashboard.send(format!("ack17 {nonce}\r").as_bytes());
+            let visible = dashboard.observe(&format!("ACK17 {nonce} "), Duration::from_secs(2));
+            let us = visible
+                .as_ref()
+                .map(|screen| screen.1.saturating_sub(before) / 1000);
+            if let Some((screen, _)) = &visible {
+                assert!(
+                    screen.contains(&streams[index].1),
+                    "ACK appeared for wrong managed session: intended {}: {screen}",
+                    streams[index].1
+                );
+            }
+            log(
+                serde_json::json!({"kind":"attach","phase":"six-stream-healthy","sample":sample,"owner_index":index,"expected_target":streams[index].0,"expected_session":streams[index].1,"nonce":nonce,"injected_ns":before,"visible_ns":visible.as_ref().map(|screen|screen.1),"us":us,"screen":visible.as_ref().map(|screen|&screen.0)}),
+            );
+            if us.is_none_or(|us| us >= 1000000) {
+                failures.push(format!("healthy owner {index} attach {sample}: {us:?}us"));
+            }
+            dashboard.send(&[0x1d]);
+            dashboard.wait("Focus: dashboard");
+        }
+        drop(dashboard);
+        dashboard_pid.store(0, Ordering::Relaxed);
+        control = Controller::connect(&fixture);
+        assert_eq!(
+            control.greeting["session_identity"]["session"],
+            streams[index].1
+        );
+        sample_state(index, "healthy-after-attach", &control.greeting);
+    }
+    for (index, _) in streams.iter().enumerate() {
+        let state = control.request(serde_json::json!({"SelectSession":streams[index].0}));
+        sample_state(index, "healthy-after-ui", &state);
+    }
+    let mut healthy_end_sequences = Vec::new();
+    for (index, _) in streams.iter().enumerate() {
+        let state = control.request(serde_json::json!({"SelectSession":streams[index].0}));
+        healthy_end_sequences.push(
+            state["durable_commits"].as_array().unwrap().last().unwrap()["sequence"]
+                .as_u64()
+                .unwrap(),
+        );
+        sample_state(index, "healthy-end", &state);
+    }
+    let fault_start_ns = measurement_clock();
+    std::fs::write(fixture.state().join("proof-storage-session"), &streams[0].1).unwrap();
+    std::fs::write(fixture.state().join("proof-storage-write"), "error").unwrap();
+    control.request(serde_json::json!({"SelectSession":streams[0].0}));
+    let fault = cleanup_wait15(&mut control, |s| {
+        s["storage_error"].is_string() && s["capture_pending_bytes"].as_u64().unwrap_or(0) > 0
+    });
+    sample_state(0, "fault-start", &fault);
+    let mut healthy_baseline = Vec::new();
+    for (index, _) in streams.iter().enumerate().skip(1) {
+        let state = control.request(serde_json::json!({"SelectSession":streams[index].0}));
+        healthy_baseline.push(state["durable_bytes"].as_u64().unwrap());
+    }
+    let fault_since = Instant::now();
+    while fault_since.elapsed() < Duration::from_secs(8) {
+        for (index, _) in streams.iter().enumerate() {
+            let state = control.request(serde_json::json!({"SelectSession":streams[index].0}));
+            sample_state(index, "one-stream-enospc", &state);
+            let request = uuid::Uuid::new_v4().to_string();
+            let since = measurement_clock();
+            control.request(serde_json::json!({"Browse":{"request":request,"mode":"History","text":"pace17","after":0,"workspace":null,"passage":null,"cancel":false}}));
+            let result = cleanup_wait15(&mut control, |s| {
+                s["browse"]["request"] == request && s["browse"]["preparing"] == false
+            });
+            log(
+                serde_json::json!({"kind":"search","phase":"one-stream-enospc","index":index,"request":request,"us":measurement_clock().saturating_sub(since)/1000,"response":result["browse"]}),
+            );
+            let request = uuid::Uuid::new_v4().to_string();
+            let since = measurement_clock();
+            control.request(serde_json::json!({"InspectWorking":{"request":request,"workspace":streams[index].2,"selected":null}}));
+            let state = cleanup_wait15(&mut control, |s| s["working_diff"]["request"] == request);
+            assert!(state["working_diff"]["result"]["Ok"].is_object(), "{state}");
+            log(
+                serde_json::json!({"kind":"diff","phase":"one-stream-enospc","index":index,"request":request,"us":measurement_clock().saturating_sub(since)/1000}),
+            );
+            sample_state(index, "one-stream-enospc", &state);
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+    for (index, _) in streams.iter().enumerate().skip(1) {
+        let state = control.request(serde_json::json!({"SelectSession":streams[index].0}));
+        assert!(
+            state["storage_error"].is_null(),
+            "fault leaked into stream {index}: {state}"
+        );
+        assert!(
+            state["durable_bytes"].as_u64().unwrap() > healthy_baseline[index - 1] + 65536,
+            "healthy stream {index} starved during peer failure: {state}"
+        );
+    }
+    control.request(serde_json::json!({"SelectSession":streams[0].0}));
+    let saturated = cleanup_wait15(&mut control, |s| {
+        s["capture_backpressure_count"].as_u64().unwrap_or(0) > 0
+    });
+    sample_state(0, "fault-saturated", &saturated);
+    drop(control);
+    let mut dashboard = LiveDashboard::new(fixture.reopen_after_release("Process: Running"));
+    dashboard_pid.store(
+        dashboard.dashboard.child.process_id().unwrap(),
+        Ordering::Relaxed,
+    );
+    dashboard.send(&[0x1d]);
+    dashboard.wait("Focus: dashboard");
+    dashboard.wait("Branch: main");
+    dashboard.wait(&streams[0].1);
+    for sample in 0..20 {
+        let (key, expected) = if sample % 2 == 0 {
+            (b"j", "Branch: other19")
+        } else {
+            (b"k", "Branch: main")
+        };
+        let before = measurement_clock();
+        dashboard.send(key);
+        let visible = dashboard.wait(expected).1;
+        let us = visible.saturating_sub(before) / 1000;
+        log(
+            serde_json::json!({"kind":"navigation","phase":"one-stream-enospc","sample":sample,"injected_ns":before,"visible_ns":visible,"us":us}),
+        );
+        if us >= 100000 {
+            failures.push(format!("fault navigation {sample}: {us}us"));
+        }
+    }
+    // Full-storage usable attachment is measured as censored/failing when its
+    // visible ACK cannot arrive. Receipt/focus alone never counts as a pass.
+    let before = measurement_clock();
+    dashboard.send(b"\r");
+    dashboard.wait("Focus: session");
+    dashboard.send(b"ack17 m219-fault\r");
+    let visible = dashboard.observe("ACK17 m219-fault ", Duration::from_secs(2));
+    if let Some((screen, _)) = &visible {
+        assert!(
+            screen.contains(&streams[0].1),
+            "fault ACK belongs to another managed session: {screen}"
+        );
+    }
+    assert!(dashboard.latest.lock().unwrap().0.contains(&streams[0].1));
+    log(
+        serde_json::json!({"kind":"attach","phase":"one-stream-enospc","owner_index":0,"expected_target":streams[0].0,"expected_session":streams[0].1,"injected_ns":before,"visible_ns":visible.as_ref().map(|s|s.1),"censor_ns":measurement_clock(),"usable":visible.is_some(),"screen":dashboard.latest.lock().unwrap().0}),
+    );
+    dashboard.send(&[0x1d]);
+    dashboard.wait("Focus: dashboard");
+    let before = measurement_clock();
+    dashboard.send(b"s");
+    let stopped = dashboard.wait("Process: Stopped").1;
+    log(
+        serde_json::json!({"kind":"stop","index":0,"injected_ns":before,"visible_ns":stopped,"us":stopped.saturating_sub(before)/1000}),
+    );
+    drop(dashboard);
+    dashboard_pid.store(0, Ordering::Relaxed);
+    std::fs::remove_file(fixture.state().join("proof-storage-write")).unwrap();
+    let repair_ns = measurement_clock();
+    let mut control = Controller::connect(&fixture);
+    control.request(target_command(0, serde_json::json!("RetryStorage")));
+    cleanup_wait15(&mut control, |s| {
+        s["capture_pending_bytes"] == 0
+            && s["accepted_bytes"] == s["durable_bytes"]
+            && s["metadata_pending"] == false
+    });
+    for (index, _) in streams.iter().enumerate().skip(1) {
+        control.request(target_command(index, serde_json::json!("Stop")));
+    }
+    for (index, _) in streams.iter().enumerate() {
+        control.request(serde_json::json!({"SelectSession":streams[index].0}));
+        let final_state = cleanup_wait15(&mut control, |s| {
+            s["lifecycle"] == "Stopped"
+                && s["capture_pending_bytes"] == 0
+                && s["accepted_bytes"] == s["durable_bytes"]
+                && s["metadata_pending"] == false
+        });
+        sample_state(index, "final-stopped-durable", &final_state);
+        assert_eq!(final_state["written_bytes"], final_state["durable_bytes"]);
+        assert!(final_state["capture_high_water"].as_u64().unwrap() <= 1318912);
+        assert!(final_state["subscriber_frame_high_water"].as_u64().unwrap() <= 4194304);
+        std::fs::write(
+            evidence.join(format!("final-stream-{index}.json")),
+            serde_json::to_vec_pretty(&final_state).unwrap(),
+        )
+        .unwrap();
+    }
+    log(
+        serde_json::json!({"kind":"windows","all_six_started_ns":started_ns,"fault_start_ns":fault_start_ns,"repair_ns":repair_ns,"finished_ns":measurement_clock()}),
+    );
+    // Every receipt must be present. Check the full healthy interval rather than
+    // a last-value sample. The peer-fault interval is excluded only for stream 0.
+    for (index, ring) in commits.iter().enumerate() {
+        assert!(
+            ring.len() >= 20,
+            "stream {index} has too few real durable completions"
+        );
+        assert_eq!(
+            *ring.first_key_value().unwrap().0,
+            1,
+            "stream {index} lost initial receipt"
+        );
+        let mut previous = None;
+        let mut previous_completed = None;
+        for (&sequence, receipt) in ring {
+            if let Some(last) = previous {
+                assert_eq!(sequence, last + 1, "stream {index} missed a receipt");
+            }
+            previous = Some(sequence);
+            // completed_micros is storage-worker-relative, not CLOCK_MONOTONIC.
+            // Exclude pre-stream idle time; the pre-fault sequence ends stream 0's
+            // healthy window. Full-ring continuity remains checked above.
+            if sequence > stream_after_sequences[index]
+                && (index != 0 || sequence <= healthy_end_sequences[index])
+            {
+                let completed = receipt["completed_micros"].as_u64().unwrap();
+                if let Some(prior) = previous_completed
+                    && completed - prior >= 1000000
+                {
+                    failures.push(format!(
+                        "healthy stream {index} durable gap {}us receipt {sequence}",
+                        completed - prior
+                    ));
+                }
+                previous_completed = Some(completed);
+                let age = receipt["oldest_accepted_micros"].as_u64().unwrap();
+                if age >= 1000000 {
+                    failures.push(format!(
+                        "healthy stream {index} durable age {age}us receipt {sequence}"
+                    ));
+                }
+            }
+        }
+        log(
+            serde_json::json!({"kind":"all-commits","index":index,"stream_after_sequence":stream_after_sequences[index],"healthy_end_sequence":healthy_end_sequences[index],"commits":ring.values().collect::<Vec<_>>()}),
+        );
+    }
+    let shutdown = measurement_shutdown(&mut control);
+    log(serde_json::json!({"kind":"shutdown","state":shutdown}));
+    drop(control);
+    measurement_wait_endpoint_exit(&fixture);
+    drop(sampler);
+    for entry in std::fs::read_dir(fixture.state()).unwrap().flatten() {
+        if entry.file_type().unwrap().is_file() {
+            std::fs::copy(entry.path(), evidence.join(entry.file_name())).unwrap();
+        }
+    }
+    let index_db = rusqlite::Connection::open_with_flags(
+        evidence.join("history.sqlite3"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap();
+    for (index, (_, session, _, _)) in streams.iter().enumerate() {
+        let (frontier, ordinal, sealed, durable): (u64, u64, bool, u64) = index_db.query_row(
+            "SELECT p.frontier,p.ordinal,p.sealed,s.durable FROM history_projection p JOIN sessions s ON s.id=p.session WHERE p.session=?1",
+            [session], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        ).unwrap();
+        assert!(
+            frontier > 0 && frontier <= durable && ordinal > 0,
+            "stream {index} has no valid committed index progress"
+        );
+        log(
+            serde_json::json!({"kind":"index-frontier","index":index,"session":session,"committed_frontier":frontier,"passages":ordinal,"projection_sealed":sealed,"durable_raw_prefix":durable,"caught_up":frontier == durable,"fully_sealed":frontier == durable && sealed,"scope":"quiescent copied SQLite after confirmed owner shutdown; raw durability is independent of derivative indexing"}),
+        );
+        let mut chunks: Vec<_> = std::fs::read_dir(&evidence)
+            .unwrap()
+            .flatten()
+            .filter(|entry| {
+                entry.file_name().to_string_lossy().starts_with(session)
+                    && entry.path().extension().is_some_and(|e| e == "transcript")
+            })
+            .collect();
+        chunks.sort_by_key(|entry| entry.file_name());
+        let bytes: Vec<u8> = chunks
+            .iter()
+            .flat_map(|entry| std::fs::read(entry.path()).unwrap())
+            .collect();
+        let state: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(evidence.join(format!("final-stream-{index}.json"))).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(bytes.len() as u64, state["durable_bytes"].as_u64().unwrap());
+        // Shared multi-process producer ledgers are diagnostic only. This gate
+        // binds each quiescent retained raw extent to its reported durable prefix.
+        log(
+            serde_json::json!({"kind":"retained-raw","index":index,"durable_raw_bytes":bytes.len()}),
+        );
+    }
+    log(serde_json::json!({"kind":"result","failures":failures,"search_diff_cycles":cycle}));
+    assert!(
+        failures.is_empty(),
+        "six-stream measurement gate failed: {failures:?}; retained evidence {}",
+        evidence.display()
+    );
 }

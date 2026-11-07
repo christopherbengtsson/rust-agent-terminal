@@ -1,0 +1,38 @@
+{
+  "scope": "main native interval + separate stricteditor supplement CLOSED, COLD",
+  "source": "a56eee5b25196f236969b5f2051e3d85707f3e0d",
+  "product_sha256": "89382b1a23124461fbec2bd0944e4b012cfb8d7f056990119a6a02a777569154",
+  "main_tools": {
+    "Claude Code": "2.1.318",
+    "Codex CLI": "0.167.0"
+  },
+  "native_source_unchanged": true,
+  "observed_running_at_sixcheckpoint": 6,
+  "final_native_processes": 0,
+  "final_supervisors": 0,
+  "retained_sessions": 15,
+  "physical_sleep_wake": "OPEN not performed",
+  "physical_reboot": "OPEN not performed; explicit user permission required later",
+  "ticket19_resolved": false,
+  "conservative_sameboot_record": {
+    "workspace": "1d20b2f9-f547-48ec-bb75-f448d5915132",
+    "managed": "ebe8ec5a-f329-4ff3-8eb6-a19a849db98b",
+    "native": "369c0ea0-d7d4-4a5d-902c-ebadf61381ea",
+    "lifecycle": "Interrupted",
+    "reserved": true,
+    "live_owned_native_process": false
+  },
+  "proofdraft": "MAIN-NATIVE-PROOF.md",
+  "later_plan_not_executed": "PRE-REBOOT-PLAN.md",
+  "stricteditor": "strict-editor-supplement.json",
+  "cold_audit": "final-cold-process-audit.json",
+  "checkpoint_old_verifier": "final-cold-checkpoint.json",
+  "reviewed_verifier_first_attempt": "final-reviewed-cold-capture.json",
+  "failures_retained": true,
+  "recorded_ns": 1794023107258366000,
+  "reviewed_final_verifier_sha256": "47cec00b410c74fc3745a4a8c645170a8c7c0e66dfe167382348eacf32a1db01",
+  "reviewed_final_capture": "final-reviewed-v2-cold-capture.json",
+  "reviewed_final_capture_exit": 0,
+  "reviewed_final_sameboot_negative": "final-reviewed-v2-sameboot-negative.json",
+  "reviewed_final_sameboot_negative_exit": 1
+}

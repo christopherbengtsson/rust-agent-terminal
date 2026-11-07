@@ -1002,8 +1002,12 @@ fn draw_browser(frame: &mut Frame, area: Rect, browser: &crate::browser::Browser
     .areas(area);
     frame.render_widget(
         Paragraph::new(format!(
-            "{:?}: {}{}",
-            browser.mode,
+            "{}{}{}",
+            if browser.mode == crate::persistence::search::Mode::History {
+                "History: exact words (all, case-insensitive)\n".into()
+            } else {
+                format!("{:?}: ", browser.mode)
+            },
             crate::persistence::search::visible(&browser.text),
             if browser.editing { "_" } else { "" }
         )),
@@ -1508,6 +1512,49 @@ mod tests {
             assert!(text.contains("Claude Code"), "{text}");
             assert!(text.contains("original-id"), "{text}");
             assert!(text.contains("v resumes selected"), "{text}");
+        }
+    }
+
+    #[test]
+    fn retained_history_search_keeps_exact_word_rules_and_native_resume_visible() {
+        use crate::persistence::search::{Mode, Response, Row};
+        for editing in [true, false] {
+            let mut app = App::new("/proof".into());
+            let mut browser = crate::browser::Browser::new(Mode::History, None);
+            browser.text = "keyboardneedle11".into();
+            browser.editing = editing;
+            browser.selected = Some("passage".into());
+            browser.response = Some(Response {
+                rows: vec![Row {
+                    key: "passage".into(),
+                    workspace: "workspace".into(),
+                    session: Some("original-segment".into()),
+                    label: "original tool/native identity retained".into(),
+                    snippet: "keyboardneedle11".into(),
+                    passage: None,
+                }],
+                ..Default::default()
+            });
+            app.browser = Some(browser);
+            for (cols, rows) in [(160, 40), (60, 18)] {
+                let mut terminal = Terminal::new(TestBackend::new(cols, rows)).unwrap();
+                terminal
+                    .draw(|frame| Ui::default().draw(frame, &app))
+                    .unwrap();
+                let text: String = terminal
+                    .backend()
+                    .buffer()
+                    .content
+                    .iter()
+                    .map(|cell| cell.symbol())
+                    .collect();
+                assert!(text.contains("History:"), "{text}");
+                assert!(text.contains("exact words"), "{text}");
+                assert!(text.contains("keyboardneedle11"), "{text}");
+                if !editing {
+                    assert!(text.contains("v resumes selected"), "{text}");
+                }
+            }
         }
     }
 

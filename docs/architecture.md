@@ -212,14 +212,19 @@ defer remote transport, provider abstractions, containers and extra crates until
 remote execution is explicitly scoped and its deployment/recovery trade-offs can
 be decided with evidence.
 
-## Milestone 2 migration boundaries (planned)
+## Milestone 2 migration boundaries
 
 Milestone 1 began with one global runtime/current adoption and singleton capture
 accounting. Tickets 03, 05 and 06 now provide execution-owned asynchronous Git
 identity, retained workspace/session records, targeted coding controls and fair
 bounded per-session capture/durability accounting behind one writer. Each live
 stream has its own queue, transcript handle, accepted/written/durable counters,
-backpressure and error. Rotating streams does not force a commit. Final flush
+backpressure and error. Each rotating capture turn drains at most 64 blocks or
+64 KiB, stopping after a completed write reaches a 2 ms budget; a failed write
+ends that stream's turn. This amortizes derivative-index checkpoint commits
+without enlarging capture queues. A blocking write can exceed the elapsed budget;
+control remains supervisor-owned outside this worker. Rotating streams does not
+force a commit. Final flush
 waits only for its owned EOF's accepted prefix; another producer neither permits
 nor delays that completion. Retained search now shares these finite turns with capture. Schema 7 stores
 versioned full projection checkpoints and ordinal passages alongside an exact-word
@@ -330,8 +335,9 @@ for Milestones 3–5 without implementing their features prematurely:
   command must not be replayed automatically because it can have external effects.
   This does not add review automation or general onboarding to Milestone 2.
 
-These are requirements for future Milestone 2 implementation, not claims that
-the existing singleton supervisor or editor/diff flows already implement them.
+The implementation sections below describe the completed Milestone 2 feature
+boundaries. These design constraints do not establish the combined native,
+resource or recovery acceptance gates; ticket 19 records that qualification.
 
 ## Native-session interaction baseline (planned)
 
@@ -1532,3 +1538,33 @@ there is no universal external-write atomicity or physical power-loss guarantee.
 Git filters/LFS retain ordinary Git semantics for external resources. See
 [ticket 18 evidence](proofs/m2-18-removal.md). Full native/combined-workload,
 sleep/wake and physical reboot qualification remains ticket 19.
+
+
+## Integrated coding qualification corrections (Milestone 2 ticket 19)
+
+The capture writer takes a bounded turn for each stream before the existing
+512-byte derivative-index step: at most 64 blocks/64 KiB, ending after a
+completed write reaches 2 ms. A write can itself block beyond that budget. This
+avoids paying an index checkpoint for every small native PTY append while
+retaining rotation, queue bounds, control priority, committed-prefix durability,
+index transaction atomicity and FULL/fullfsync. The source-pinned qualification
+records fair raw capture under six streams; derivative indexing remains partial
+under that workload, so durable raw history is not an immediate full-search
+completion guarantee.
+
+An explicit launch/resume action on a terminal historical segment gets a fresh
+request even when its old launch outcome is absent. Pending/uncertain execution
+and retrying an unobserved new intent retain their existing request identity.
+Historical native lookup verifies selected membership and identity, and reports
+a known missing current workspace before native-descriptor rejection; unknown
+legacy locations still allow identity-only lookup. Neither path changes the
+saved native conversation UUID.
+
+The [integrated qualification](proofs/m2-19-qualification.md) preserves the failed
+first aggregate, regression evidence and clean corrected aggregate, separate
+fixture/native boundaries, real archive/removal/local recovery, and exact
+version limits. Native crash restoration can retain a conservative same-boot
+Interrupted reservation after its processes are gone; the proof preserves it
+rather than clearing ownership from saved PIDs. Actual sleep/wake and physical
+reboot remain open, as do final integration review/checks. C6 and full milestone
+completion are not claimed.
