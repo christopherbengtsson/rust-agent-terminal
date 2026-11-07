@@ -606,17 +606,16 @@ impl AgentSession {
         {
             self.history.seal_pending = true;
         }
-        if let Some((request, false)) = &self.launch.cancelling {
-            if storage
+        if let Some((request, false)) = &self.launch.cancelling
+            && storage
                 .commands
                 .try_send(crate::persistence::Command::CancelResume {
                     target: self.state.control_target.clone(),
                     request: request.clone(),
                 })
                 .is_ok()
-            {
-                self.launch.cancelling.as_mut().unwrap().1 = true;
-            }
+        {
+            self.launch.cancelling.as_mut().unwrap().1 = true;
         }
         self.state.stopped = self.shutdown
             && self.launch.cancelling.is_none()
@@ -1573,7 +1572,14 @@ impl AgentSession {
             || self.launch.creating.is_some()
             || self.launch.gate_receipt.is_some()
             || self.launch.outcome_reply;
-        self.state.clone()
+        let mut observation = self.state.clone();
+        if let Some(request) = &self.launch.resolving {
+            // Transport recovery follows the frozen new request while saved
+            // historical metadata still belongs to the previous segment.
+            observation.launch_request = request.clone();
+            observation.launch_result = None;
+        }
+        observation
     }
     pub(super) fn resolved_resume(&self, request: &str) -> bool {
         self.launch
@@ -1619,6 +1625,11 @@ impl AgentSession {
     }
     pub(super) fn pending_launch_request(&self, request: &str) -> bool {
         self.launch.resolving.as_deref() == Some(request)
+            || self
+                .launch
+                .cancelling
+                .as_ref()
+                .is_some_and(|(id, _)| id == request)
             || (self.state.launch_request == request
                 && (self.launch.pending_launch.is_some()
                     || self.launch.creating.is_some()

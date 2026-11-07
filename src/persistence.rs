@@ -1888,6 +1888,7 @@ impl Store {
                 params![request, workspace, session],
             )?;
         }
+        self.fault("resume")?;
         let row: Option<(String, String)> = self.db.query_row(
             "SELECT s.state,s.identity FROM sessions s JOIN workspace_sessions m ON m.session=s.id JOIN workspace_tasks t ON t.workspace=m.workspace WHERE s.id=?1 AND (m.workspace=?2 OR m.workspace=(SELECT workspace FROM workspace_tasks WHERE task=?2)) AND t.task=?3",
             params![session,workspace,task], |row| Ok((row.get(0)?,row.get(1)?))).optional()?;
@@ -2101,10 +2102,9 @@ mod concurrent_tests {
         loop {
             if let Completion::Committed(operation) =
                 worker.events.recv_timeout(Duration::from_secs(3)).unwrap()
+                && operation.purpose == Purpose::Seal
             {
-                if operation.purpose == Purpose::Seal {
-                    break;
-                }
+                break;
             }
         }
         worker

@@ -481,26 +481,25 @@ impl Sessions {
             else {
                 unreachable!()
             };
-            if let Some(index) = self.entries.iter().position(|(id, _)| id == &target) {
-                if let Some(command) = self.entries[index]
+            if let Some(index) = self.entries.iter().position(|(id, _)| id == &target)
+                && let Some(command) = self.entries[index]
                     .1
                     .resolve_resume(&target, request, result)
-                {
-                    let session = self.entries[index]
-                        .1
-                        .observation()
-                        .session_identity
-                        .map(|id| id.session);
-                    self.handle(
-                        Request::Session {
-                            target,
-                            session,
-                            command: Box::new(command),
-                        },
-                        storage,
-                        adopting,
-                    );
-                }
+            {
+                let session = self.entries[index]
+                    .1
+                    .observation()
+                    .session_identity
+                    .map(|id| id.session);
+                self.handle(
+                    Request::Session {
+                        target,
+                        session,
+                        command: Box::new(command),
+                    },
+                    storage,
+                    adopting,
+                );
             }
         }
         for (_, owner) in &mut self.entries {
@@ -797,19 +796,20 @@ impl Sessions {
                 .handle_recorded(request, result, storage, adopting);
             return;
         }
-        if let Request::Resume(id) = &request {
-            if !self.entries[index].1.resolved_resume(id) {
-                let source = self.entries[index].1.observation().session_identity;
-                let Some(source) = source else {
-                    self.entries[index].1.report_error("Native resume unavailable: no retained managed conversation identity; h reads history, c/x explicitly starts a new conversation".into());
-                    return;
-                };
-                request = Request::ResumeSelected {
-                    request: id.clone(),
-                    workspace: self.entries[index].1.task().to_owned(),
-                    session: source.session,
-                };
-            }
+        if let Request::Resume(id) = &request
+            && !self.entries[index].1.resolved_resume(id)
+            && !self.entries[index].1.reserved()
+        {
+            let source = self.entries[index].1.observation().session_identity;
+            let Some(source) = source else {
+                self.entries[index].1.report_error("Native resume unavailable: no retained managed conversation identity; h reads history, c/x explicitly starts a new conversation".into());
+                return;
+            };
+            request = Request::ResumeSelected {
+                request: id.clone(),
+                workspace: self.entries[index].1.task().to_owned(),
+                session: source.session,
+            };
         }
         if matches!(
             request,

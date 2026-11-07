@@ -290,7 +290,9 @@ an edited query; arrow keys select results; Enter opens the selected workspace�
 conversations, exact session, or matching passage. Tab changes search mode,
 `n` requests the next bounded result page, Ctrl-R refreshes, and Esc returns.
 Reading does not select another coding runtime, launch an agent, or change native
-Resume’s target. Native conversation selection is a separate later feature.
+Resume’s target. On a selected conversation row, `v` explicitly resumes that row’s
+original tool and native conversation. The row shows workspace, managed segment,
+and native identity before the action. Enter only reads history.
 
 History search matches all case-insensitive words (Unicode letters/digits; punctuation
 separates words), up to eight words/256 query bytes. Metadata Find matches a
@@ -392,8 +394,10 @@ retrying the same request does not start another agent. See the
 
 ### Explicit native conversation recovery
 
-In dashboard focus, `v` resumes the latest managed native conversation using its
-saved tool and conversation ID: Claude `--resume <id>` or Codex `resume <id>
+In dashboard focus, `v` resumes the latest managed native conversation. To choose
+an older one, press `B`, select its conversation row, and press `v`. Both actions
+resolve the saved segment through the storage worker and use its original tool
+and native conversation ID: Claude `--resume <id>` or Codex `resume <id>
 --no-daemon`. It supplies no coding prompt. Native folder/hook trust prompts stay
 in the native pane. `c` and `x` explicitly start new conversations; unavailable
 resume explains the reason and never silently starts a replacement. Live sessions
@@ -403,11 +407,13 @@ resume or a new launch. Opening the dashboard never starts coding.
 History (`h`) remains available when no native ID was captured or the checkout
 is missing. A missing checkout prevents continuing in place; restore its path
 before resuming. Native records remain owned by the original tool, which can
-reject an unavailable ID through its captured native UI. This proof-level path
-covers the most recent managed conversation. Retained-history search is independent
-of native resume; arbitrary native resume selection remains a separate feature. See [both original-conversation proofs](docs/proofs/16-native-recovery.md)
-for exact versions, marker recall, supervisor restart and separate injected
-reboot-style checks; no physical reboot is claimed.
+reject an unavailable ID through its captured native UI. A running process does
+not prove native recovery succeeded. Readable history and native resume metadata
+remain independent, including after explicit transcript deletion. Selected recovery
+uses a new managed segment in the retained workspace and leaves Git’s current
+HEAD, index and working files in place. See [selected recovery evidence](docs/proofs/m2-12-selected-native-resume.md)
+and the earlier [latest-conversation proof](docs/proofs/16-native-recovery.md).
+No physical reboot is claimed.
 
 ## Development measurement proof
 
