@@ -300,7 +300,7 @@ C6, ticket 19 and milestone acceptance remain open.**
 ## Physical reboot and ticket completion
 
 The user-reported, kernel-verified [actual reboot](m2-19-reboot.md) closes the
-remaining physical gate. All 18 owner-only restore checks passed before any
+remaining physical gate. All 17 owner-only restore checks passed before any
 manual native action. Explicit recovery/resume then recalled both original
 conversation markers, preserving the original native IDs and adding exactly
 two requested managed segments. Existing reconciliation released the restored
