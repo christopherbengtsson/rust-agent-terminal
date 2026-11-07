@@ -44,6 +44,10 @@ pub struct EditorContext {
 }
 
 pub struct App {
+    pub archive_open: Option<String>,
+    pub archive_request: Option<String>,
+    pub archive_submitted: bool,
+    pub show_archived: bool,
     pub setup_input: Option<(String, String)>,
     pub browser: Option<crate::browser::Browser>,
     pub create_form: Option<CreateForm>,
@@ -88,6 +92,7 @@ pub struct App {
 impl App {
     pub fn new(repository: PathBuf) -> Self {
         Self {
+            archive_open:None,archive_request:None,archive_submitted:false,show_archived:false,
             setup_input: None,
             browser: None,
             create_form: None,
@@ -429,6 +434,26 @@ impl App {
                 return None;
             }
             return Some(self.session_effect(Request::Key(key)));
+        }
+        if let Some(workspace)=self.archive_open.clone() {
+            match key.code {
+                KeyCode::Esc=>{self.archive_open=None;},
+                KeyCode::Char('q')=>{self.shutdown_pending=true;return Some(self.session_effect(Request::Shutdown))},
+                KeyCode::Char('d')=>{self.detached=true;return Some(Effect::Detach)},
+                KeyCode::Char('s')|KeyCode::Char('z')=>return Some(Effect::Session(Request::CancelArchive)),
+                KeyCode::Enter=>{
+                    if self.session.registry.archived.contains(&workspace){self.archive_open=None;return Some(Effect::Session(Request::Unarchive(workspace)))}
+                    self.archive_submitted=true;
+                    return Some(Effect::Session(Request::Archive{workspace,request:self.archive_request.clone().unwrap()}));
+                }
+                _=>{}
+            }return None;
+        }
+        if key.code==KeyCode::Char('K')&&!key.modifiers.intersects(KeyModifiers::CONTROL|KeyModifiers::ALT|KeyModifiers::SUPER) {
+            if let Some(workspace)=self.workspace_selected.as_ref().or(self.session.registry.selected.as_ref()).cloned(){
+                self.archive_request=Some(self.session.archive.records.iter().rev().find(|r|r.workspace==workspace&&!matches!(r.phase,crate::archive::Phase::Archived)).map(|r|r.request.clone()).unwrap_or_else(||uuid::Uuid::new_v4().to_string()));
+                self.archive_open=Some(workspace);self.archive_submitted=false;
+            }else{self.error=Some("Adopt a workspace before archiving".into());}return None;
         }
         if let Some((_, command)) = &mut self.setup_input {
             match key.code {
@@ -1073,12 +1098,13 @@ impl App {
             return None;
         }
         if self.workspaces_open && key.modifiers.is_empty() {
-            let workspaces = &self.session.registry.workspaces;
+            let workspaces = self.session.registry.workspaces.iter().filter(|w|self.show_archived||!self.session.registry.archived.contains(&w.id)).collect::<Vec<_>>();
             let index = workspaces
                 .iter()
                 .position(|workspace| Some(&workspace.id) == self.workspace_selected.as_ref())
                 .unwrap_or(0);
             match key.code {
+                KeyCode::Char('z')=>{self.show_archived=!self.show_archived;self.workspace_selected=self.session.registry.workspaces.iter().find(|w|self.show_archived||!self.session.registry.archived.contains(&w.id)).map(|w|w.id.clone());},
                 KeyCode::Esc => {
                     self.workspaces_open = false;
                 }
@@ -1464,8 +1490,10 @@ impl App {
             "Workspace name: Enter saves · Ctrl-U clears · Esc cancels · no folder or conversation changes"
         } else if self.project_input.is_some() {
             "Add project: existing local path · Enter register without launch · Esc cancel"
+        } else if self.archive_open.is_some(){
+            "Enter Stop/save/archive or Unarchive · z cancel archive · Esc dismiss · q quit · d detach"
         } else if self.workspaces_open {
-            "q quit · h latest history · N create · U setup · w/Esc back · j/k select · [/] project · Enter open · a adopt · R rename · A add · E edit LIVE · f diff · d detach"
+            "K archive/return · z show archived · q quit · h latest history · N create · U setup · w/Esc back · j/k select · [/] project · Enter open · a adopt · R rename · A add · E edit LIVE · f diff · d detach"
         } else if self.attached {
             "Native input · Ctrl-C interrupt · Ctrl-] / Ctrl-5 dashboard (keeps session running)"
         } else if self.cleanup_open {
@@ -1475,7 +1503,7 @@ impl App {
         } else if self.session.lifecycle == crate::session::Lifecycle::Interrupted {
             "u reconcile · v resume · g cleanup · h history · d detach · q quit/stop · j/k select · r refresh"
         } else {
-            "q quit/stop s stop h history Enter attach x new Codex v resume / find S text B chats N create O receipt U setup E LIVE f diff w workspaces d detach"
+            "q quit/stop s stop h history Enter attach x new Codex v resume K archive / find S text B chats N create O receipt U setup E LIVE f diff w workspaces d detach"
         }
     }
 

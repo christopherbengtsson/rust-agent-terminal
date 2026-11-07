@@ -123,7 +123,17 @@ impl Ui {
             session,
         );
         let viewport = Self::session_viewport(frame.area());
-        if let Some(browser) = &app.browser {
+        if let Some(workspace)=&app.archive_open {
+            let archived=app.session.registry.archived.contains(workspace);
+            let name=app.session.registry.workspaces.iter().find(|w|&w.id==workspace).map_or("Workspace",|w|w.name.as_str());
+            let record=app.session.archive.records.iter().rev().find(|r|&r.workspace==workspace);
+            let mut text=format!("{}\n{}\n\n",visible(name),if archived{"Archived · Enter restores visibility without starting coding"}else if app.archive_submitted{"Stop/save/archive requested · waiting for attributed receipts"}else{"Enter: Stop, save and archive"});
+            text.push_str("Saves tracked + new nonignored files in a local Archive checkpoint, not pushed. Ignored files stay in the folder outside checkpoint coverage. Chats and the workspace folder are retained. Original staged tree is protected separately.\n\n");
+            if let Some(r)=record {text.push_str(&format!("{:?}: {}\nRequest {}\n",r.phase,visible(&r.message),r.request));for path in &r.excluded{text.push_str(&format!("Excluded: {}\n",visible(&String::from_utf8_lossy(path))));}}
+            if let Some(e)=&app.session.archive.error{text.push_str(&format!("\n{}\n",visible(e)));}
+            text.push_str("\nEnter confirms/retries same request · z cancels archive\nEsc dismisses (operation continues) · q quit/stop · d detach");
+            frame.render_widget(Paragraph::new(text).wrap(Wrap{trim:false}),viewport);
+        } else if let Some(browser) = &app.browser {
             draw_browser(frame, viewport, browser);
         } else if let Some(view) = &app.diff {
             draw_working_diff(frame, viewport, view);
@@ -133,6 +143,7 @@ impl Ui {
                 .registry
                 .workspaces
                 .iter()
+                .filter(|w|app.show_archived||!app.session.registry.archived.contains(&w.id))
                 .map(|workspace| {
                     let project = workspace
                         .project
@@ -161,7 +172,7 @@ impl Ui {
                         .iter()
                         .filter(|entry| entry.task == workspace.task)
                         .max_by_key(|entry| entry.reserved);
-                    let context = if let Some(setup) = app
+                    let context = if app.session.registry.archived.contains(&workspace.id){"Archived · K return".into()}else if let Some(setup) = app
                         .session
                         .setup
                         .records
@@ -202,6 +213,7 @@ impl Ui {
                 .registry
                 .workspaces
                 .iter()
+                .filter(|w|app.show_archived||!app.session.registry.archived.contains(&w.id))
                 .position(|workspace| Some(&workspace.id) == app.workspace_selected.as_ref());
             let mut selection = ListState::default().with_selected(selected);
             let title = if let Some(path) = &app.project_input {
@@ -209,7 +221,7 @@ impl Ui {
             } else if app.session.registry_pending {
                 " Registering project… ".into()
             } else {
-                " Projects / retained workspaces · A add · j/k select · Enter open · a adopt · R rename "
+                " Projects / retained workspaces · A add · j/k select · Enter open · K archive/return · z archived "
                     .into()
             };
             frame.render_stateful_widget(
@@ -762,6 +774,8 @@ impl Ui {
             && (frame.area().width < 80 || frame.area().height < 22)
         {
             "w Working/Whole · e inspect ALL · o LIVE · j/k file\nb base · r refresh · f/Esc back · s stop · q quit"
+        } else if app.archive_open.is_some() {
+            "Enter confirm/retry · z cancel · Esc dismiss\nq quit/stop · d detach"
         } else if app.first_prompt.is_some() || app.rename_workspace.is_some() {
             app.keyboard_help()
         } else if !app.attached
@@ -774,8 +788,8 @@ Esc cancel · registration never starts an agent"
             && app.workspaces_open
             && (frame.area().width < 80 || frame.area().height < 22)
         {
-            "N create  j/k select  [/] project  a adopt  E LIVE  R rename
-A add · U setup · h history · w/Esc back · d detach · q quit"
+            "K archive/return · z show archived · j/k select
+A add · N create · w/Esc back · d detach · q quit"
         } else if app.cleanup_open
             && !app.attached
             && (frame.area().width < 80 || frame.area().height < 22)

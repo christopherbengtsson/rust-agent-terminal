@@ -56,6 +56,9 @@ pub enum NativeAgent {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Request {
+    Archive {workspace:String,request:String},
+    CancelArchive,
+    Unarchive(String),
     Browse(crate::persistence::search::Query),
     EditorSource {
         request: String,
@@ -172,6 +175,10 @@ pub struct LaunchResult {
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Observation {
+    #[serde(default)]
+    pub archive: crate::archive::View,
+    #[serde(default)]
+    pub archive_protocol:u32,
     #[serde(default)]
     pub setup_protocol: u32,
     #[serde(default)]

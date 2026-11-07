@@ -284,6 +284,9 @@ impl Snapshot {
     }
 }
 pub enum Command {
+    ArchiveLoad,
+    ArchiveSave(uuid::Uuid, Box<crate::archive::Record>),
+    Unarchive(uuid::Uuid, String),
     SetupLoad,
     SetupSave(uuid::Uuid, Box<crate::setup::Record>),
     ConfigureSetup(uuid::Uuid, String, Option<String>),
@@ -319,6 +322,8 @@ pub enum Command {
 }
 #[derive(Clone)]
 pub enum Completion {
+    Archives(std::result::Result<Vec<crate::archive::Record>, String>),
+    ArchiveSaved(uuid::Uuid, std::result::Result<crate::registry::Registry,String>),
     Setups(std::result::Result<Vec<crate::setup::Record>, String>),
     SetupSaved(uuid::Uuid, std::result::Result<(), String>),
     Browse(search::Response),
@@ -477,11 +482,14 @@ impl Worker {
                             continue;
                         }
                     }
-                    let kind = match &command { Command::Browse(..) => "browse", Command::ObservedBranches(..) => "registry", Command::SetupLoad | Command::SetupSave(..) | Command::ConfigureSetup(..) | Command::ComparisonBase(..) | Command::CreationLoad | Command::CreationSave(..) => "registry", Command::SelectWorkspace(..) => "selection", Command::Capture(..) => unreachable!(), Command::Rename(..) | Command::Register(..) => "registry", Command::Save(..) | Command::Prepare(..) | Command::Authorize(..) => "metadata", Command::History(..) | Command::HistorySession(..) | Command::HistoryTarget { .. } => "history", Command::Cleanup(..) | Command::Delete(..) | Command::Seal(..) => "cleanup", Command::Retry => "retry", Command::Flush(..) => "flush" };
+                    let kind = match &command { Command::ArchiveLoad | Command::ArchiveSave(..) | Command::Unarchive(..) => "registry", Command::Browse(..) => "browse", Command::ObservedBranches(..) => "registry", Command::SetupLoad | Command::SetupSave(..) | Command::ConfigureSetup(..) | Command::ComparisonBase(..) | Command::CreationLoad | Command::CreationSave(..) => "registry", Command::SelectWorkspace(..) => "selection", Command::Capture(..) => unreachable!(), Command::Rename(..) | Command::Register(..) => "registry", Command::Save(..) | Command::Prepare(..) | Command::Authorize(..) => "metadata", Command::History(..) | Command::HistorySession(..) | Command::HistoryTarget { .. } => "history", Command::Cleanup(..) | Command::Delete(..) | Command::Seal(..) => "cleanup", Command::Retry => "retry", Command::Flush(..) => "flush" };
                     status.lock().unwrap().operation = Some((kind, Instant::now()));
                     let operation = match &command { Command::Prepare(snapshot) | Command::Authorize(snapshot) | Command::Save(snapshot) => Some(snapshot.operation.clone()), Command::Flush(operation) | Command::Seal(operation) => Some(operation.clone()), _ => None };
                     let result = match command {
                         Command::SetupLoad => Ok(Completion::Setups(store.setups().map_err(|e|e.to_string()))),
+                        Command::ArchiveLoad => Ok(Completion::Archives(store.archives().map_err(|e|e.to_string()))),
+                        Command::ArchiveSave(id,record) => Ok(Completion::ArchiveSaved(id,store.save_archive(&record).map_err(|e|e.to_string()))),
+                        Command::Unarchive(id,workspace) => Ok(Completion::Registered(id,store.unarchive(&workspace).map_err(|e|e.to_string()))),
                         Command::SetupSave(id, record) => Ok(Completion::SetupSaved(id, store.save_setup(&record).map_err(|e|e.to_string()))),
                         Command::ConfigureSetup(id, project, command) => Ok(Completion::Registered(id, store.configure_setup(&project, &command).map_err(|e|e.to_string()))),
                         Command::Browse(query) => Ok(Completion::Browse(store.start_browse(query))),
@@ -727,7 +735,7 @@ impl Store {
             "PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL; PRAGMA fullfsync=ON;",
         )?;
         let version: u32 = db.pragma_query_value(None, "user_version", |r| r.get(0))?;
-        if version > 8 {
+        if version > 10 {
             return Err("History schema is newer than this executable".into());
         }
         if version == 0 {
@@ -819,6 +827,13 @@ impl Store {
             tx.commit()?;
         }
         db.execute_batch("CREATE TABLE IF NOT EXISTS workspace_setup_policies(request TEXT PRIMARY KEY, command TEXT);")?;
+        if version < 10 {
+            let tx=db.transaction()?;
+            tx.execute_batch("CREATE TABLE IF NOT EXISTS workspace_archives(request TEXT PRIMARY KEY,workspace TEXT NOT NULL,record TEXT NOT NULL);")?;
+            // Schema9 is owned by selected-native-resume. Do not advance over its
+            // migration until the integration commit lands.
+            tx.commit()?;
+        }
         let mut store = Self {
             search_job: None,
             index_cursor: 0,
@@ -1384,6 +1399,34 @@ impl Store {
             .and_then(|value| value.trim().parse().ok());
         #[cfg(not(debug_assertions))]
         None
+    }
+    fn archives(&self)->Result<Vec<crate::archive::Record>> {
+        let rows=self.db.prepare("SELECT record FROM workspace_archives ORDER BY rowid")?.query_map([],|r|r.get::<_,String>(0))?.collect::<std::result::Result<Vec<_>,_>>()?;
+        rows.into_iter().map(|r|Ok(serde_json::from_str(&r)?)).collect()
+    }
+    fn unarchive(&mut self,workspace:&str)->Result<crate::registry::Registry>{
+        self.fault("registry")?;
+        self.db.execute("INSERT INTO workspace_history_facts VALUES(?1,0) ON CONFLICT(workspace) DO UPDATE SET archived=0",[workspace])?;
+        crate::registry::snapshot(&self.db,None)
+    }
+    fn save_archive(&mut self,record:&crate::archive::Record)->Result<crate::registry::Registry>{
+        self.fault("registry")?;
+        if serde_json::to_vec(record)?.len()>32768{return Err("Archive metadata exceeds 32 KiB; files retained and workspace unarchived".into())}
+        let tx=self.db.transaction()?;
+        let previous:Option<String>=tx.query_row("SELECT record FROM workspace_archives WHERE request=?1",[&record.request],|r|r.get(0)).optional()?;
+        if let Some(previous)=previous {
+            let old:crate::archive::Record=serde_json::from_str(&previous)?;
+            if old.workspace!=record.workspace||old.checkout!=record.checkout||old.reference!=record.reference{return Err("Archive identity changed".into())}
+        }else if tx.query_row("SELECT count(*) FROM workspace_archives",[],|r|r.get::<_,u64>(0))?>=64{return Err("Archive receipt capacity reached; retained code preserved".into())}
+        let known:Option<String>=tx.query_row("SELECT checkout FROM workspaces WHERE id=?1",[&record.workspace],|r|r.get(0))?;
+        if known.as_deref().map(serde_json::from_str::<crate::git::CheckoutIdentity>).transpose()?.as_ref()!=Some(&record.checkout){return Err("Archive checkout conflicts with workspace registry".into())}
+        tx.execute("INSERT INTO workspace_archives VALUES(?1,?2,?3) ON CONFLICT(request) DO UPDATE SET record=excluded.record",rusqlite::params![record.request,record.workspace,serde_json::to_string(record)?])?;
+        if record.phase==crate::archive::Phase::Archived {
+            if record.saved.is_none(){return Err("Missing protected archive commit".into())}
+            tx.execute("INSERT INTO workspace_history_facts VALUES(?1,1) ON CONFLICT(workspace) DO UPDATE SET archived=1",[&record.workspace])?;
+        }
+        tx.commit()?;
+        crate::registry::snapshot(&self.db,None)
     }
     fn creations(&self) -> Result<Vec<crate::creation::Record>> {
         let json = self
