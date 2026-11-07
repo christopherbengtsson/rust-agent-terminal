@@ -9215,7 +9215,7 @@ for line in sys.stdin:
     let mut control = Controller::connect(&fixture);
     assert_eq!(control.greeting["launch_request"], "cancelled-choice");
     assert_eq!(control.greeting["metadata_pending"], true);
-    control.request(serde_json::json!({"QueryLaunch":"cancelled-choice"}));
+    control.request_now(serde_json::json!({"QueryLaunch":"cancelled-choice"}));
     let stopped = control.request(serde_json::json!("Stop"));
     assert_eq!(stopped["session_identity"], state["session_identity"]);
     std::fs::remove_file(pause).unwrap();

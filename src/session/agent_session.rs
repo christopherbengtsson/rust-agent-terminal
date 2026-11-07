@@ -839,6 +839,9 @@ impl AgentSession {
             }
             return;
         }
+        if self.launch.resolving.is_some() && matches!(request, Request::QueryLaunch(_)) {
+            return;
+        }
         if self.launch.resolving.is_some()
             && matches!(
                 request,
