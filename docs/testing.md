@@ -87,3 +87,13 @@ the ordinary suite as dependencies are removed. Add real-editor checks to a
 dedicated serialized macOS job when practical. Keep resource measurements in an
 isolated qualification lane. Retire an old check only after documenting which
 replacement covers its assertions and which coverage, if any, is being lost.
+
+## Native agent test costs
+
+Before real-provider qualification, read [agent cost controls](agents/cost-controls.md).
+The milestone workflow driver selects the shared test launch profile and checks
+the supervisor and live sessions before sending prompts. A supervisor started by
+an older driver must be safely stopped before beginning a fresh run. Use the
+current binary built with `cargo build --locked --features native-agent-qualification`;
+ordinary production builds ignore the test environment switch. Historical proof
+archives retain their original settings.

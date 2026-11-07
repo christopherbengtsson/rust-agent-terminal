@@ -5,6 +5,10 @@ edition = "2024"
 publish = false
 description = "A terminal dashboard for Git worktrees and coding-agent sessions"
 
+[features]
+default = []
+native-agent-qualification = []
+
 [dependencies]
 crossterm = { version = "0.29", features = ["serde"] }
 libc = "0.2"

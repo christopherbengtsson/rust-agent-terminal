@@ -1,0 +1,10 @@
+{
+  "id": "cheap-v1",
+  "codex_args": ["--model", "gpt-5.1-codex-mini", "-c", "model_reasoning_effort=\"low\""],
+  "claude_args": ["--model", "claude-haiku-4-5-20251001"],
+  "claude_env": {
+    "MAX_THINKING_TOKENS": "0",
+    "CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING": "1"
+  },
+  "claude_smoke_args": ["--tools", "", "--max-turns", "1", "--max-budget-usd", "0.05"]
+}

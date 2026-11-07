@@ -25,6 +25,8 @@ cargo test --locked --all-targets
   session integration. Report which checks ran and any unverified behavior.
 - Keep architecture and user-facing instructions aligned with working behavior.
   Linux CI does not establish native macOS agent compatibility.
+- Before launching real-provider development, test, qualification, or skill-check
+  sessions, read [agent cost controls](docs/agents/cost-controls.md).
 - Publishing a GitHub review requires an explicit user submission action after
   previewing the exact revision, outcome, and selected comments. Preparation,
   editing, navigation, or an agent's decision must never publish a review.

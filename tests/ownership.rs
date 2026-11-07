@@ -948,6 +948,137 @@ struct Controller {
     reader: std::io::BufReader<std::os::unix::net::UnixStream>,
     greeting: serde_json::Value,
 }
+
+#[test]
+fn native_test_profile_reaches_real_child_argv_and_environment_before_prompt() {
+    use std::os::unix::fs::PermissionsExt;
+    for enabled in [false, true] {
+        for agent in ["Claude", "Codex"] {
+            let fixture = Fixture::new();
+            let tools = fixture.temp.path().join("native-tools");
+            std::fs::create_dir(&tools).unwrap();
+            let capture = fixture.temp.path().join("native-argv");
+            let environment = fixture.temp.path().join("native-env");
+            let executable = tools.join(agent.to_lowercase());
+            std::fs::write(&executable, concat!(
+                "#!/bin/sh\n",
+                "printf '%s\\0' \"$@\" > \"$RAT_TEST_ARGV\"\n",
+                "printf '%s:%s' \"${MAX_THINKING_TOKENS:-unset}\" \"${CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING:-unset}\" > \"$RAT_TEST_ENV\"\n",
+                "printf 'COST_FIXTURE_READY\\n'\n",
+                "while IFS= read -r line; do :; done\n",
+            )).unwrap();
+            std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
+            let path = std::env::join_paths(
+                std::iter::once(tools)
+                    .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+            )
+            .unwrap();
+            let mut command = Command::new(env!("CARGO_BIN_EXE_agent-terminal"));
+            command
+                .args(["--supervisor"])
+                .arg(fixture.state())
+                .env("PATH", path)
+                .env("RAT_TEST_ARGV", &capture)
+                .env("RAT_TEST_ENV", &environment)
+                .env_remove("RAT_AGENT_TEST_PROFILE")
+                .env_remove("MAX_THINKING_TOKENS")
+                .env_remove("CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING");
+            if enabled {
+                command.env("RAT_AGENT_TEST_PROFILE", "cheap-v1");
+            }
+            let mut supervisor = command.spawn().unwrap();
+            let deadline = Instant::now() + Duration::from_secs(8);
+            while !fixture.state().join("supervisor.sock").exists() {
+                assert!(Instant::now() < deadline, "supervisor did not start");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            let mut dashboard = fixture.open();
+            dashboard.wait("Discovery complete");
+            dashboard.send(b"a");
+            dashboard.wait("Adopted");
+            dashboard.kill();
+            let mut control = Controller::connect(&fixture);
+            let request = control.greeting["launch_request"].clone();
+            control.request(serde_json::json!({"LaunchNative": {
+                "request": request, "agent": agent, "prompt": "FIRST_COST_TEST_PROMPT"
+            }}));
+            let deadline = Instant::now() + Duration::from_secs(8);
+            let state = loop {
+                let state = control.request(serde_json::json!("Screen"));
+                if state["screen"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .contains("COST_FIXTURE_READY")
+                {
+                    break state;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "native fixture did not start: {state}"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            };
+            let argv = std::fs::read(&capture).unwrap();
+            let argv = argv
+                .split(|b| *b == 0)
+                .filter(|a| !a.is_empty())
+                .map(|a| String::from_utf8(a.to_vec()).unwrap())
+                .collect::<Vec<_>>();
+            assert_eq!(argv.last().unwrap(), "FIRST_COST_TEST_PROMPT");
+            if enabled && cfg!(feature = "native-agent-qualification") {
+                let index = argv.iter().position(|arg| arg == "--model").unwrap();
+                assert!(index < argv.len() - 2);
+                assert_eq!(
+                    argv[index + 1],
+                    if agent == "Claude" {
+                        "claude-haiku-4-5-20251001"
+                    } else {
+                        "gpt-5.1-codex-mini"
+                    }
+                );
+                assert_eq!(state["native_test_launch_profile"], "cheap-v1");
+                assert_eq!(state["native_test_session_profile"], "cheap-v1");
+                assert!(
+                    state["sessions"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|s| s["native_test_session_profile"] == "cheap-v1")
+                );
+                if agent == "Claude" {
+                    assert_eq!(std::fs::read_to_string(&environment).unwrap(), "0:1");
+                } else {
+                    assert!(argv.contains(&"model_reasoning_effort=\"low\"".to_owned()));
+                }
+            } else {
+                assert!(!argv.iter().any(|arg| arg == "--model"));
+                assert!(state.get("native_test_launch_profile").is_none());
+                assert!(state.get("native_test_session_profile").is_none());
+                assert!(
+                    state["sessions"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .all(|session| session.get("native_test_session_profile").is_none())
+                );
+                assert_eq!(
+                    std::fs::read_to_string(&environment).unwrap(),
+                    "unset:unset"
+                );
+            }
+            control.request(serde_json::json!("Shutdown"));
+            drop(control);
+            let deadline = Instant::now() + Duration::from_secs(8);
+            while supervisor.try_wait().unwrap().is_none() {
+                assert!(
+                    Instant::now() < deadline,
+                    "supervisor shutdown did not settle"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+    }
+}
 impl Controller {
     fn connect(fixture: &Fixture) -> Self {
         use std::io::BufRead;

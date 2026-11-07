@@ -206,6 +206,10 @@ pub struct LaunchResult {
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Observation {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_test_launch_profile: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_test_session_profile: Option<String>,
     #[serde(default)]
     pub removal: crate::removal::View,
     #[serde(default)]
@@ -388,6 +392,8 @@ impl ProcessExit {
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct SessionSummary {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_test_session_profile: Option<String>,
     #[serde(default)]
     pub status: crate::native_status::Status,
     #[serde(default)]

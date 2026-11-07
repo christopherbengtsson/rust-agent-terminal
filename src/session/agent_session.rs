@@ -84,6 +84,7 @@ struct Launch {
     result_failed: bool,
 }
 struct Execution {
+    test_cost_profile: Option<String>,
     child: Option<crate::lifecycle::Child>,
     writer: Option<SyncSender<Vec<u8>>>,
     write_errors: SyncSender<String>,
@@ -150,6 +151,7 @@ impl AgentSession {
             history_query: None,
             launch: Launch::default(),
             execution: Execution {
+                test_cost_profile: None,
                 write_errors,
                 input_errors,
                 child: None,
@@ -1158,6 +1160,11 @@ impl AgentSession {
                         }
 
                     }
+                    self.execution.test_cost_profile = None;
+                    if (claude || codex) && let Some(profile) = crate::agent_test_profile::active() {
+                        crate::agent_test_profile::configure(&mut command, claude);
+                        self.execution.test_cost_profile = Some(profile);
+                    }
                     if let Some(prompt) = initial.as_ref().and_then(|(_, prompt)| prompt.as_ref()) && !prompt.is_empty() { command.arg("--"); command.arg(prompt); }
                     #[cfg(debug_assertions)]
                     if !claude && !codex { command.env("RAT_PROOF_STORAGE_DIR", directory); }
@@ -1600,6 +1607,8 @@ impl AgentSession {
             || self.launch.gate_receipt.is_some()
             || self.launch.outcome_reply;
         let mut observation = self.state.clone();
+        // This is live launch evidence, never authority restored from metadata.
+        observation.native_test_session_profile = self.execution.test_cost_profile.clone();
         if let Some(request) = &self.launch.resolving {
             // Transport recovery follows the frozen new request while saved
             // historical metadata still belongs to the previous segment.
@@ -1757,6 +1766,15 @@ impl Drop for AgentSession {
 #[cfg(test)]
 mod launch_replay_tests {
     use super::*;
+
+    #[test]
+    fn restored_metadata_cannot_attest_to_live_test_launch_settings() {
+        let directory = tempfile::tempdir().unwrap();
+        let (worker, mut restored) = crate::persistence::Worker::start(directory.path()).unwrap();
+        restored.state.native_test_session_profile = Some("cheap-v1".into());
+        let mut owner = AgentSession::restore(directory.path(), restored, &worker).unwrap();
+        assert!(owner.observation().native_test_session_profile.is_none());
+    }
 
     #[test]
     fn another_owners_cached_result_cannot_replace_a_provisional_launch() {

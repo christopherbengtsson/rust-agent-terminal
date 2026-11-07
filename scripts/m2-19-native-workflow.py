@@ -17,6 +17,20 @@ import time
 DRIVER = Path(__file__).with_name("m2-19-native.py")
 
 
+def require_cost_safe_phase(phase, observation, profile_id):
+    if phase not in {"create", "controls"}:
+        return
+    if observation.get("native_test_launch_profile") != profile_id:
+        raise RuntimeError(
+            "Native " + phase + " phase blocked before input: supervisor lacks the "
+            "required test launch profile. Stop the old supervisor safely and start "
+            "a fresh qualification run with this driver. See docs/agents/cost-controls.md."
+        )
+    for session in observation.get("sessions", []):
+        if session.get("lifecycle") == "Running" and session.get("native_test_session_profile") != profile_id:
+            raise RuntimeError("Native phase blocked before input: an existing running session lacks verified test launch settings")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("phase", choices=["register", "create", "controls", "editors", "archive"])
@@ -26,6 +40,10 @@ def main():
     parser.add_argument("--workspace", default="amber-claude")
     parser.add_argument("--parser", type=Path)
     args = parser.parse_args()
+    settings = json.loads(Path(__file__).with_name("agent-test-profile.json").read_text())
+    profile_id = settings["id"]
+    # New supervisors inherit this; existing supervisors must prove their own mode.
+    os.environ["RAT_AGENT_TEST_PROFILE"] = profile_id
     args.binary = args.binary or args.source / "target/debug/agent-terminal"
     projects = json.loads((args.root / "projects.json").read_text())
     repo = Path(projects[0]["path"])
@@ -47,6 +65,7 @@ def main():
         return json.loads((evidence / (label + ".json")).read_text())
 
     def drive(label, steps, **options):
+        require_cost_safe_phase(args.phase, observe() if args.phase in {"create", "controls"} else {}, profile_id)
         label = str(time.time_ns()) + "-" + label
         plan = {"geometry": [40, 160], "steps": steps, **options}
         path = plans / (label + ".json")

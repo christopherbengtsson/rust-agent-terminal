@@ -522,6 +522,7 @@ impl Sessions {
         for (target, owner) in &mut self.entries {
             let state = owner.observation();
             summaries.push(crate::events::SessionSummary {
+                native_test_session_profile: state.native_test_session_profile.clone(),
                 status: state.status.clone(),
                 reserved: owner.reserved()
                     || state.checkout_identity.as_ref().is_some_and(|c| {
@@ -537,6 +538,7 @@ impl Sessions {
             });
         }
         let mut state = self.entries[self.selected].1.observation();
+        state.native_test_launch_profile = crate::agent_test_profile::active();
         state.history_revision = self.history_revision;
         state.browse_protocol = 1;
         state.resume_protocol = 1;

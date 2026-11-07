@@ -1,3 +1,4 @@
+mod agent_test_profile;
 mod app;
 mod archive;
 mod archive_branch;
