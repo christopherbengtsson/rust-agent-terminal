@@ -3,6 +3,10 @@
 The [product specification](../PRODUCT.md) defines the first release. These are
 engineering checkpoints within that release, not a reduction of its requirements.
 
+Use the [testing and opt-in qualification policy](testing.md) when planning each
+milestone's validation. Select required supplemental checks for affected features
+and record anything not rerun; ignored tests do not count as passing evidence.
+
 The [dashboard image](images/conductor-dashboard-v3.jpg) is the UI target throughout
 implementation. Shape each usable UI slice toward its composition and visual
 direction, showing real functionality and honest empty/unavailable states as

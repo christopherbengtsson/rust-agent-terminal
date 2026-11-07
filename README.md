@@ -252,6 +252,8 @@ cargo test --locked --all-targets
 
 CI runs these checks on pull requests on macOS and Linux. Tests create isolated
 temporary repositories and do not require agent accounts or GitHub access.
+See [testing and opt-in qualification](docs/testing.md) for the eight ignored
+tests, their prerequisites, and the checks future milestones must select.
 
 Claude Code launch uses `claude` from the supervisor's inherited PATH and the
 existing native login. Install Claude Code and run `claude auth login` in your
