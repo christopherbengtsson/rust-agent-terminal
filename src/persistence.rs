@@ -499,7 +499,7 @@ impl Worker {
                         Command::SetupSave(id, record) => Ok(Completion::SetupSaved(id, store.save_setup(&record).map_err(|e|e.to_string()))),
                         Command::ConfigureSetup(id, project, command) => Ok(Completion::Registered(id, store.configure_setup(&project, &command).map_err(|e|e.to_string()))),
                         Command::CancelResume { target, request } => {
-                            let result=store.db.execute("UPDATE resume_selections SET cancelled=1 WHERE request=?1",[&request]).map(|_|()).map_err(|error|error.to_string());
+                            let result=store.db.execute("INSERT INTO resume_selections(request,workspace,session,cancelled) VALUES(?1,'','',1) ON CONFLICT(request) DO UPDATE SET cancelled=1",[&request]).map(|_|()).map_err(|error|error.to_string());
                             Ok(Completion::ResumeCancelled(target,request,result))
                         }
                         Command::ResumeIdentity { target, request, workspace, session, task } => { let result = store.resume_identity(&request, &workspace, &session, &task).map_err(|e| e.to_string()); Ok(Completion::ResumeIdentity(target, request, result)) },
