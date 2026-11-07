@@ -365,6 +365,7 @@ impl App {
             self.launch_request = observation.launch_request.clone();
         }
         if observation.lifecycle == crate::session::Lifecycle::Running
+            && observation.error.is_none()
             && observation.identity.is_some()
             && (observation.identity != self.session.identity
                 || self.session.lifecycle != crate::session::Lifecycle::Running)
@@ -1716,6 +1717,19 @@ mod tests {
             if workspace == "original-workspace" && session == "original-segment")
         );
         assert!(!app.attached);
+        app.observe_session(Observation {
+            resume_protocol: 1,
+            control_target: "occupied-owner".into(),
+            identity: Some("running conversation".into()),
+            lifecycle: crate::session::Lifecycle::Running,
+            error: Some("Worktree occupied; attach or explicitly Stop".into()),
+            ..Default::default()
+        });
+        assert_eq!(app.selected_target, "occupied-owner");
+        assert!(
+            !app.attached,
+            "occupied resume offers attachment instead of taking native focus"
+        );
     }
     #[test]
     fn retained_session_selection_survives_reordering_and_never_opens_deleted_neighbour() {

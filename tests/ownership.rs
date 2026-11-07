@@ -9097,6 +9097,8 @@ for line in sys.stdin:
     };
     let head = git(&["rev-parse", "HEAD"]);
     let dirty = git(&["status", "--porcelain=v1"]);
+    let staged = git(&["diff", "--cached"]);
+    let working = git(&["diff"]);
     let mut originals = Vec::new();
     for (n, tool) in ["LaunchClaude", "LaunchCodex", "LaunchClaude"]
         .into_iter()
@@ -9243,6 +9245,12 @@ for line in sys.stdin:
     assert_eq!(retained["history"]["text"], original_history);
     assert_eq!(git(&["rev-parse", "HEAD"]), head);
     assert_eq!(git(&["status", "--porcelain=v1"]), dirty);
+    assert_eq!(git(&["diff", "--cached"]), staged);
+    assert_eq!(git(&["diff"]), working);
+    assert_eq!(
+        std::fs::read(fixture.repository.join("untracked")).unwrap(),
+        b"unsaved"
+    );
     // Missing native records and unsupported resume versions are native failures,
     // retained in the attempted new segment; neither starts another conversation.
     std::fs::write(tools.join("claude"),format!("#!{}\nimport sys\nprint('native conversation unavailable / unsupported resume version',flush=True)\nsys.exit(7)\n",python.trim())).unwrap();
