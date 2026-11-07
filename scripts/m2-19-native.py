@@ -105,8 +105,13 @@ def drive(args):
     env = dict(os.environ)
     if "editor" in plan:
         env["RAT_EDITOR_JSON"] = json.dumps(plan["editor"])
+    def claim_terminal():
+        os.setsid()
+        fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
+        os.tcsetpgrp(slave, os.getpgrp())
+
     child = subprocess.Popen(argv, stdin=slave, stdout=slave, stderr=slave,
-                             start_new_session=True, env=env)
+                             preexec_fn=claim_terminal, env=env)
     raw = bytearray()
     steps = []
     label = args.label or str(uuid.uuid4())
