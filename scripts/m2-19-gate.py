@@ -17,11 +17,11 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def command(args, log):
+def command(args, log, env=None):
     started = time.time()
     log.write(("\n$ " + " ".join(args) + "\n").encode())
     log.flush()
-    result = subprocess.run(args, cwd=ROOT, stdout=log, stderr=subprocess.STDOUT)
+    result = subprocess.run(args, cwd=ROOT, stdout=log, stderr=subprocess.STDOUT, env=env)
     log.flush()
     return {"argv": args, "exit": result.returncode, "started": started,
             "finished": time.time()}
@@ -90,8 +90,15 @@ def main():
         result = subprocess.run(argv, capture_output=True, text=True)
         versions[name] = {"exit": result.returncode, "stdout": result.stdout, "stderr": result.stderr}
     (evidence / "versions.json").write_text(json.dumps(versions, indent=2))
+    retained_evidence = {
+        "RAT_RESOURCE_EVIDENCE": str(evidence / "sustained-capture.jsonl"),
+        "RAT_SEARCH_EVIDENCE": str(evidence / "search-captures"),
+        "RAT_REMOVAL_EVIDENCE": str(evidence / "removal-captures"),
+    }
+    runtime_env = dict(os.environ, **retained_evidence)
     with (evidence / (before["source"][:12] + "-all-targets-serial-nocapture.log")).open("wb") as log:
-        result = command(["cargo", "+stable", "test", "--locked", "--all-targets", "--", "--test-threads=1", "--nocapture"], log)
+        result = command(["cargo", "+stable", "test", "--locked", "--all-targets", "--", "--test-threads=1", "--nocapture"], log, runtime_env)
+    result["evidence_environment"] = retained_evidence
     after = boundary(inventory)
     (evidence / "after.json").write_text(json.dumps(after, indent=2))
     result["boundary_stable"] = before == after

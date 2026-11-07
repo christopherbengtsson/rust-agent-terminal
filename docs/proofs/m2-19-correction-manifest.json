@@ -1,0 +1,62 @@
+{
+  "archive": "m2-19-correction-evidence.tar.gz",
+  "archive_sha256": "560377c1c7f412bd5704023577e663c7ce029a8fa97ac76429fd64615403934d",
+  "artifacts": {
+    "active_capture_flushes_while_retained_search_replaces_and_cancels_queries.log": {
+      "bytes": 321,
+      "sha256": "f8a7ed5e9d44738c1ab850d357948d3818b7f8e65eaa6001b42b00e57e58395b"
+    },
+    "archive_branch_cleanup_crash_keeps_durable_archive_and_preserves_replaced_ref_on_retry.log": {
+      "bytes": 247,
+      "sha256": "2e7e4a71c433e1e914212df7c6be3a967dcf07e05eb8c3467bef2ab2c04bc92d"
+    },
+    "archive_refuses_restored_uncertain_setup_despite_exited_process_and_cancels_without_mutation.log": {
+      "bytes": 253,
+      "sha256": "5a981e5eb695649896c701b152cef03554bc8d81d78ade892458121d7eb6841d"
+    },
+    "concurrent_workspaces_keep_controls_capture_faults_and_final_flush_scoped.log": {
+      "bytes": 200,
+      "sha256": "e864a08ef28d644c7ab8596e4d143617600c2e6612f3961f7b317be63c4e842a"
+    },
+    "configured_setup_restart_retains_uncertain_effects_until_explicit_reconciliation_and_retry.log": {
+      "bytes": 251,
+      "sha256": "e4e491c7f96d673ddbeae56b5cdfbbb575bf03820108cd6fe9cb6a394c081f70"
+    },
+    "hashes-after.json": {
+      "bytes": 4233,
+      "sha256": "c4e53fd730c046a521fdafa8d0c299d6c71307bc85474af25276d428640603d5"
+    },
+    "keyboard_retained_search_opens_exact_passage_in_normal_and_small_ptys.log": {
+      "bytes": 196,
+      "sha256": "0160f7c999c103b6e88623007816571d6c6d02866130b665be38840f78cc1355"
+    },
+    "manifest.json": {
+      "bytes": 5076,
+      "sha256": "c837b0daaab8d3a33ef72cddfc3909328e775d42502ddc33d722c378833d7710"
+    },
+    "persistence-corrections.log": {
+      "bytes": 2178,
+      "sha256": "400c7424507446eb4fbc635159cd525d5f21d62d49353f3247f0af792b98d909"
+    },
+    "results.json": {
+      "bytes": 2557,
+      "sha256": "a5cf5088e63ecda477441e9f7d4ced927c4b3e572eb6d9e0ca046cd0cd1bf773"
+    },
+    "source.patch": {
+      "bytes": 5371,
+      "sha256": "b8ae54131ebbf74d86ad52ed2bea5d774304216ccd6f81bc4b5ac2114445ec1e"
+    },
+    "stopped_history_survives_restart_and_missing_checkout_without_launching.log": {
+      "bytes": 198,
+      "sha256": "2dd1f6b0cdae11d4089857b2723779c0e28739b7933892cd0bfb49a316d57395"
+    },
+    "storage_delayed_writes_and_sync_keep_control_and_defer_saved_boundary.log": {
+      "bytes": 196,
+      "sha256": "adfcc85f5123aaded210c517338db0d6dd20dc5a2c542b657c792b82967ff9ec"
+    },
+    "storage_saturation_keeps_navigation_retry_stop_and_exact_retained_bytes.log": {
+      "bytes": 42468,
+      "sha256": "4294685754e8539bf1bc08daaf8a460be80a807d8535e49d6cb67fc3f77ccf57"
+    }
+  }
+}

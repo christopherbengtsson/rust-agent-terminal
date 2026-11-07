@@ -219,7 +219,12 @@ accounting. Tickets 03, 05 and 06 now provide execution-owned asynchronous Git
 identity, retained workspace/session records, targeted coding controls and fair
 bounded per-session capture/durability accounting behind one writer. Each live
 stream has its own queue, transcript handle, accepted/written/durable counters,
-backpressure and error. Rotating streams does not force a commit. Final flush
+backpressure and error. Each rotating capture turn drains at most 64 blocks or
+64 KiB, stopping after a completed write reaches a 2 ms budget; a failed write
+ends that stream's turn. This amortizes derivative-index checkpoint commits
+without enlarging capture queues. A blocking write can exceed the elapsed budget;
+control remains supervisor-owned outside this worker. Rotating streams does not
+force a commit. Final flush
 waits only for its owned EOF's accepted prefix; another producer neither permits
 nor delays that completion. Retained search now shares these finite turns with capture. Schema 7 stores
 versioned full projection checkpoints and ordinal passages alongside an exact-word
