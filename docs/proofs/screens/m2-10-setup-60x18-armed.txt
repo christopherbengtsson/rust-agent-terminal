@@ -1,0 +1,18 @@
+┌ Creation receipt · original operation ───────────────────┐
+│Setup Failed · Setup exit status: 3; owned execution      │
+│cleaned                                                   │
+│Continue will start Claude (Create and start still armed) │
+│T Retry · Y Continue without setup · I reconcile/informed │
+│Retry (may repeat external effects)                       │
+│                                                          │
+│Bounded combined output tail; 0 discarded bytes (not      │
+│conversation history):                                    │
+│configuration failed                                      │
+│Project: checkout with spaces                             │
+│Phase: Created                                            │
+└──────────────────────────────────────────────────────────┘
+┌ Workspace creation ──────────────────────────────────────┐
+│Setup Failed: Setup exit status: 3; owned execution.      │
+└──────────────────────────────────────────────────────────┘
+q quit s stop h history S text / find B chats v resume      
+N create O receipt U setup w spaces f diff E LIVE d detach  
