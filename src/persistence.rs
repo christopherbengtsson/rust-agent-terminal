@@ -339,7 +339,10 @@ pub enum Command {
 #[derive(Clone)]
 pub enum Completion {
     Archives(std::result::Result<Vec<crate::archive::Record>, String>),
-    ArchiveSaved(uuid::Uuid, std::result::Result<crate::registry::Registry,String>),
+    ArchiveSaved(
+        uuid::Uuid,
+        std::result::Result<crate::registry::Registry, String>,
+    ),
     ResumeIdentity(String, String, std::result::Result<ResumeIdentity, String>),
     ResumeCancelled(String, String, std::result::Result<(), String>),
     Setups(std::result::Result<Vec<crate::setup::Record>, String>),
@@ -856,9 +859,9 @@ impl Store {
         }
         db.execute_batch("CREATE TABLE IF NOT EXISTS workspace_setup_policies(request TEXT PRIMARY KEY, command TEXT);")?;
         if version < 10 {
-            let tx=db.transaction()?;
+            let tx = db.transaction()?;
             tx.execute_batch("CREATE TABLE IF NOT EXISTS workspace_archives(request TEXT PRIMARY KEY,workspace TEXT NOT NULL,record TEXT NOT NULL);")?;
-            tx.pragma_update(None,"user_version",10)?;
+            tx.pragma_update(None, "user_version", 10)?;
             tx.commit()?;
         }
         let mut store = Self {
@@ -1427,33 +1430,107 @@ impl Store {
         #[cfg(not(debug_assertions))]
         None
     }
-    fn archives(&self)->Result<Vec<crate::archive::Record>> {
-        let rows=self.db.prepare("SELECT record FROM workspace_archives ORDER BY rowid")?.query_map([],|r|r.get::<_,String>(0))?.collect::<std::result::Result<Vec<_>,_>>()?;
-        rows.into_iter().map(|r|Ok(serde_json::from_str(&r)?)).collect()
+    fn archives(&self) -> Result<Vec<crate::archive::Record>> {
+        let rows = self
+            .db
+            .prepare("SELECT record FROM workspace_archives ORDER BY rowid")?
+            .query_map([], |r| r.get::<_, String>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        rows.into_iter()
+            .map(|r| Ok(serde_json::from_str(&r)?))
+            .collect()
     }
-    fn unarchive(&mut self,workspace:&str)->Result<crate::registry::Registry>{
+    fn unarchive(&mut self, workspace: &str) -> Result<crate::registry::Registry> {
         self.fault("registry")?;
+        uuid::Uuid::parse_str(workspace)?;
+        let _: String =
+            self.db
+                .query_row("SELECT id FROM workspaces WHERE id=?1", [workspace], |r| {
+                    r.get(0)
+                })?;
         self.db.execute("INSERT INTO workspace_history_facts VALUES(?1,0) ON CONFLICT(workspace) DO UPDATE SET archived=0",[workspace])?;
-        crate::registry::snapshot(&self.db,None)
+        let selected: Option<String> = self
+            .db
+            .query_row("SELECT task FROM app WHERE id=1", [], |r| r.get(0))
+            .optional()?;
+        crate::registry::snapshot(&self.db, selected.as_deref())
     }
-    fn save_archive(&mut self,record:&crate::archive::Record)->Result<crate::registry::Registry>{
+    fn save_archive(
+        &mut self,
+        record: &crate::archive::Record,
+    ) -> Result<crate::registry::Registry> {
+        self.fault(match record.phase {
+            crate::archive::Phase::Waiting => "archive-intent",
+            crate::archive::Phase::Prepared => "archive-prepared",
+            crate::archive::Phase::Archived => "archive-result",
+            _ => "archive-phase",
+        })?;
         self.fault("registry")?;
-        if serde_json::to_vec(record)?.len()>32768{return Err("Archive metadata exceeds 32 KiB; files retained and workspace unarchived".into())}
-        let tx=self.db.transaction()?;
-        let previous:Option<String>=tx.query_row("SELECT record FROM workspace_archives WHERE request=?1",[&record.request],|r|r.get(0)).optional()?;
-        if let Some(previous)=previous {
-            let old:crate::archive::Record=serde_json::from_str(&previous)?;
-            if old.workspace!=record.workspace||old.checkout!=record.checkout||old.reference!=record.reference{return Err("Archive identity changed".into())}
-        }else if tx.query_row("SELECT count(*) FROM workspace_archives",[],|r|r.get::<_,u64>(0))?>=64{return Err("Archive receipt capacity reached; retained code preserved".into())}
-        let known:Option<String>=tx.query_row("SELECT checkout FROM workspaces WHERE id=?1",[&record.workspace],|r|r.get(0))?;
-        if known.as_deref().map(serde_json::from_str::<crate::git::CheckoutIdentity>).transpose()?.as_ref()!=Some(&record.checkout){return Err("Archive checkout conflicts with workspace registry".into())}
+        if serde_json::to_vec(record)?.len() > 32768 {
+            return Err(
+                "Archive metadata exceeds 32 KiB; files retained and workspace unarchived".into(),
+            );
+        }
+        let tx = self.db.transaction()?;
+        let previous: Option<String> = tx
+            .query_row(
+                "SELECT record FROM workspace_archives WHERE request=?1",
+                [&record.request],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if let Some(previous) = previous {
+            let old: crate::archive::Record = serde_json::from_str(&previous)?;
+            if old.workspace != record.workspace
+                || old.checkout != record.checkout
+                || old.reference != record.reference
+            {
+                return Err("Archive identity changed".into());
+            }
+            if old.tree.is_some()
+                && (old.tree != record.tree
+                    || old.before != record.before
+                    || old.branch != record.branch
+                    || old.index_tree != record.index_tree
+                    || old.index_hash != record.index_hash)
+            {
+                return Err(
+                    "Archive prepared snapshot changed; use a new request for new work".into(),
+                );
+            }
+        } else if tx.query_row("SELECT count(*) FROM workspace_archives", [], |r| {
+            r.get::<_, u64>(0)
+        })? >= 64
+        {
+            return Err("Archive receipt capacity reached; retained code preserved".into());
+        }
+        let known: Option<String> = tx.query_row(
+            "SELECT checkout FROM workspaces WHERE id=?1",
+            [&record.workspace],
+            |r| r.get(0),
+        )?;
+        if known
+            .as_deref()
+            .map(serde_json::from_str::<crate::git::CheckoutIdentity>)
+            .transpose()?
+            .as_ref()
+            != Some(&record.checkout)
+        {
+            return Err("Archive checkout conflicts with workspace registry".into());
+        }
         tx.execute("INSERT INTO workspace_archives VALUES(?1,?2,?3) ON CONFLICT(request) DO UPDATE SET record=excluded.record",rusqlite::params![record.request,record.workspace,serde_json::to_string(record)?])?;
-        if record.phase==crate::archive::Phase::Archived {
-            if record.saved.is_none(){return Err("Missing protected archive commit".into())}
+        if record.phase == crate::archive::Phase::Archived {
+            if record.saved.is_none() {
+                return Err("Missing protected archive commit".into());
+            }
             tx.execute("INSERT INTO workspace_history_facts VALUES(?1,1) ON CONFLICT(workspace) DO UPDATE SET archived=1",[&record.workspace])?;
         }
         tx.commit()?;
-        crate::registry::snapshot(&self.db,None)
+        let selected: Option<String> = self
+            .db
+            .query_row("SELECT task FROM app WHERE id=1", [], |r| r.get(0))
+            .optional()?;
+        crate::registry::snapshot(&self.db, selected.as_deref())
     }
     fn creations(&self) -> Result<Vec<crate::creation::Record>> {
         let json = self

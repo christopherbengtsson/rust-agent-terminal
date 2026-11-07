@@ -45,6 +45,7 @@ pub struct EditorContext {
 
 pub struct App {
     pub archive_open: Option<String>,
+    pub archive_scroll: u16,
     pub archive_request: Option<String>,
     pub archive_submitted: bool,
     pub show_archived: bool,
@@ -92,7 +93,11 @@ pub struct App {
 impl App {
     pub fn new(repository: PathBuf) -> Self {
         Self {
-            archive_open:None,archive_request:None,archive_submitted:false,show_archived:false,
+            archive_open: None,
+            archive_scroll: 0,
+            archive_request: None,
+            archive_submitted: false,
+            show_archived: false,
             setup_input: None,
             browser: None,
             create_form: None,
@@ -436,25 +441,49 @@ impl App {
             }
             return Some(self.session_effect(Request::Key(key)));
         }
-        if let Some(workspace)=self.archive_open.clone() {
+        if let Some(workspace) = self.archive_open.clone() {
             match key.code {
-                KeyCode::Esc=>{self.archive_open=None;},
-                KeyCode::Char('q')=>{self.shutdown_pending=true;return Some(self.session_effect(Request::Shutdown))},
-                KeyCode::Char('d')=>{self.detached=true;return Some(Effect::Detach)},
-                KeyCode::Char('s')|KeyCode::Char('z')=>return Some(Effect::Session(Request::CancelArchive)),
-                KeyCode::Enter=>{
-                    if self.session.registry.archived.contains(&workspace){self.archive_open=None;return Some(Effect::Session(Request::Unarchive(workspace)))}
-                    self.archive_submitted=true;
-                    return Some(Effect::Session(Request::Archive{workspace,request:self.archive_request.clone().unwrap()}));
+                KeyCode::Esc => {
+                    self.archive_open = None;
                 }
-                _=>{}
-            }return None;
-        }
-        if key.code==KeyCode::Char('K')&&!key.modifiers.intersects(KeyModifiers::CONTROL|KeyModifiers::ALT|KeyModifiers::SUPER) {
-            if let Some(workspace)=self.workspace_selected.as_ref().or(self.session.registry.selected.as_ref()).cloned(){
-                self.archive_request=Some(self.session.archive.records.iter().rev().find(|r|r.workspace==workspace&&!matches!(r.phase,crate::archive::Phase::Archived)).map(|r|r.request.clone()).unwrap_or_else(||uuid::Uuid::new_v4().to_string()));
-                self.archive_open=Some(workspace);self.archive_submitted=false;
-            }else{self.error=Some("Adopt a workspace before archiving".into());}return None;
+                KeyCode::Char('j') | KeyCode::Down => {
+                    self.archive_scroll = self.archive_scroll.saturating_add(1)
+                }
+                KeyCode::Char('k') | KeyCode::Up => {
+                    self.archive_scroll = self.archive_scroll.saturating_sub(1)
+                }
+                KeyCode::Char('q') => {
+                    self.shutdown_pending = true;
+                    return Some(self.session_effect(Request::Shutdown));
+                }
+                KeyCode::Char('d') => {
+                    self.detached = true;
+                    return Some(Effect::Detach);
+                }
+                KeyCode::Char('s') | KeyCode::Char('z') => {
+                    return Some(Effect::Session(Request::CancelArchive {
+                        workspace,
+                        request: self.archive_request.clone().unwrap(),
+                    }));
+                }
+                KeyCode::Char('n') if !self.session.archive.pending => {
+                    self.archive_request = Some(uuid::Uuid::new_v4().to_string());
+                    self.archive_submitted = false;
+                }
+                KeyCode::Enter => {
+                    if self.session.registry.archived.contains(&workspace) {
+                        self.archive_open = None;
+                        return Some(Effect::Session(Request::Unarchive(workspace)));
+                    }
+                    self.archive_submitted = true;
+                    return Some(Effect::Session(Request::Archive {
+                        workspace,
+                        request: self.archive_request.clone().unwrap(),
+                    }));
+                }
+                _ => {}
+            }
+            return None;
         }
         if let Some((_, command)) = &mut self.setup_input {
             match key.code {
@@ -1087,6 +1116,38 @@ impl App {
                 return None;
             }
         }
+        if key.code == KeyCode::Char('K')
+            && !key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER)
+        {
+            if let Some(workspace) = self
+                .workspace_selected
+                .as_ref()
+                .or(self.session.registry.selected.as_ref())
+                .cloned()
+            {
+                self.archive_request = Some(
+                    self.session
+                        .archive
+                        .records
+                        .iter()
+                        .rev()
+                        .find(|r| {
+                            r.workspace == workspace
+                                && !matches!(r.phase, crate::archive::Phase::Archived)
+                        })
+                        .map(|r| r.request.clone())
+                        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+                );
+                self.archive_open = Some(workspace);
+                self.archive_submitted = false;
+                self.archive_scroll = 0;
+            } else {
+                self.error = Some("Adopt a workspace before archiving".into());
+            }
+            return None;
+        }
         if key.code == KeyCode::Char('A')
             && !key
                 .modifiers
@@ -1110,13 +1171,30 @@ impl App {
             return None;
         }
         if self.workspaces_open && key.modifiers.is_empty() {
-            let workspaces = self.session.registry.workspaces.iter().filter(|w|self.show_archived||!self.session.registry.archived.contains(&w.id)).collect::<Vec<_>>();
+            let workspaces = self
+                .session
+                .registry
+                .workspaces
+                .iter()
+                .filter(|w| self.show_archived || !self.session.registry.archived.contains(&w.id))
+                .collect::<Vec<_>>();
             let index = workspaces
                 .iter()
                 .position(|workspace| Some(&workspace.id) == self.workspace_selected.as_ref())
                 .unwrap_or(0);
             match key.code {
-                KeyCode::Char('z')=>{self.show_archived=!self.show_archived;self.workspace_selected=self.session.registry.workspaces.iter().find(|w|self.show_archived||!self.session.registry.archived.contains(&w.id)).map(|w|w.id.clone());},
+                KeyCode::Char('z') => {
+                    self.show_archived = !self.show_archived;
+                    self.workspace_selected = self
+                        .session
+                        .registry
+                        .workspaces
+                        .iter()
+                        .find(|w| {
+                            self.show_archived || !self.session.registry.archived.contains(&w.id)
+                        })
+                        .map(|w| w.id.clone());
+                }
                 KeyCode::Esc => {
                     self.workspaces_open = false;
                 }
@@ -1502,7 +1580,7 @@ impl App {
             "Workspace name: Enter saves · Ctrl-U clears · Esc cancels · no folder or conversation changes"
         } else if self.project_input.is_some() {
             "Add project: existing local path · Enter register without launch · Esc cancel"
-        } else if self.archive_open.is_some(){
+        } else if self.archive_open.is_some() {
             "Enter Stop/save/archive or Unarchive · z cancel archive · Esc dismiss · q quit · d detach"
         } else if self.workspaces_open {
             "K archive/return · z show archived · q quit · h latest history · N create · U setup · w/Esc back · j/k select · [/] project · Enter open · a adopt · R rename · A add · E edit LIVE · f diff · d detach"

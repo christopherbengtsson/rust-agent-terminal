@@ -311,7 +311,10 @@ pub(crate) fn snapshot(db: &Connection, selected_task: Option<&str>) -> Result<R
             ))
         })?
         .collect::<std::result::Result<_, _>>()?;
-    let archived=db.prepare("SELECT workspace FROM workspace_history_facts WHERE archived=1")?.query_map([],|row|row.get(0))?.collect::<std::result::Result<_,_>>()?;
+    let archived = db
+        .prepare("SELECT workspace FROM workspace_history_facts WHERE archived=1")?
+        .query_map([], |row| row.get(0))?
+        .collect::<std::result::Result<_, _>>()?;
     Ok(Registry {
         archived,
         comparison_bases,
