@@ -1,0 +1,40 @@
+┌ Reviews ───────────────────────────────────────────┐┌ Session · Focus: dashboard · Process: Idle · semantic status: unknown ─────────────────────────────────┐
+│Unavailable · milestone 1                           ││Remove workspace folder · setup fixture prompt                                                          │
+└────────────────────────────────────────────────────┘│Preview: Preview only; folder retained. Confirm the exact HEAD and recovery reference.                  │
+┌ Agent terminal · Worktrees ────────────────────────┐│Folder /private/tmp/.tmpg8pddf/workspace-9a6500a9                                                       │
+│Repository:                                         ││HEAD b4a2e0b929bcf359c8bd7cd63f75cb713a2a3016                                                           │
+└────────────────────────────────────────────────────┘│Branch refs/heads/workspace/9a6500a9                                                                    │
+┌ Project / worktrees (2) ───────────────────────────┐│Recovery ref refs/rat/removal/aaeed6b2-122a-40ef-99bc-ccf89fbf12d6/0afcad53-badd-4777-b290-d1264857b68f │
+│> └ main  /private/tmp/.tmpg8pddf/checkout with spac││Saved code, branches, archive refs and chats stay. In-place resume needs a checkout.                    │
+│  └ workspace/9a6500a9  /private/tmp/.tmpg8pddf/work││Current HEAD has no confirmed remote backup; saved code is retained locally only. Folder removal does   │
+│    └ adopted · c/x start · C/X prompt · R rename   ││not push                                                                                                │
+│                                                    ││[ ] Space: I acknowledge code is saved only locally, NOT pushed                                         │
+│                                                    ││y: Confirm removal of this exact HEAD/folder; repeat safety checks before Git removal                   │
+│                                                    ││Request 0afcad53-badd-4777-b290-d1264857b68f                                                            │
+│                                                    ││n new preview · r retry storage · Esc dismiss · j/k scroll · q quit/stop · d detach                     │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+└────────────────────────────────────────────────────┘│                                                                                                        │
+┌ Selection ─────────────────────────────────────────┐│                                                                                                        │
+│Path: /private/tmp/.tmpg8pddf/checkout with spaces  ││                                                                                                        │
+│Branch: main  HEAD:                                 ││                                                                                                        │
+│c7217e81227d5f1f10c943da8ef58a1c281289fa            ││                                                                                                        │
+│                                                    ││                                                                                                        │
+└────────────────────────────────────────────────────┘└────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌ Status · semantic status: unknown ·  ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│Adopted: /private/tmp/.tmpg8pddf/workspace-9a6500a9 · ready: c Claude / x Codex / l fixture                                                                   │
+│History: metadata committed · durable bytes 0                                                                                                                 │
+│Evidence: unavailable ·                                                                                                                                       │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+y remove · Space local ack · g reconcile · n preview                                                                                                            
