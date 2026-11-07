@@ -8548,6 +8548,11 @@ fn configured_setup_restart_retains_uncertain_effects_until_explicit_reconciliat
     f.restart("setup-boot-one");
     std::fs::remove_file(fault).unwrap();
     let uncertain = f.phase("Uncertain");
+    // Setup, archive and removal receipts load independently after reconnect.
+    // Wait for admission before testing setup's semantic uncertainty rules.
+    archive_wait16(&mut f.control, |s| {
+        s["removal"]["ready"] == true && s["archive"]["status"] == "Archive operation settled"
+    });
     assert!(
         uncertain["setup"]["armed_launches"]
             .as_array()
@@ -8598,6 +8603,9 @@ fn configured_setup_restart_retains_uncertain_effects_until_explicit_reconciliat
     // A debug proof boot change exercises reboot evidence, not a real reboot.
     f.restart("setup-boot-two");
     f.phase("Uncertain");
+    archive_wait16(&mut f.control, |s| {
+        s["removal"]["ready"] == true && s["archive"]["status"] == "Archive operation settled"
+    });
     f.control.request(
         serde_json::json!({"RecoverSetup":{"attempt":attempt,"retry":true,"informed":true}}),
     );
@@ -9952,6 +9960,10 @@ fn archive_refuses_restored_uncertain_setup_despite_exited_process_and_cancels_w
     f.restart("setup-boot-one");
     std::fs::remove_file(fault).unwrap();
     let uncertain = f.phase("Uncertain");
+    // Setup's restored phase does not establish archive/removal receipt readiness.
+    archive_wait16(&mut f.control, |s| {
+        s["removal"]["ready"] == true && s["archive"]["status"] == "Archive operation settled"
+    });
     assert_eq!(uncertain["setup"]["records"][0]["cleanup_confirmed"], false);
     let before = archive_git16(&folder, &["rev-parse", "HEAD"]);
     let request = uuid::Uuid::new_v4().to_string();
@@ -10423,9 +10435,11 @@ fn archive_branch_cleanup_crash_keeps_durable_archive_and_preserves_replaced_ref
     f.owner = SetupFixture::owner(&f.fixture, &f.tools);
     f.control = Controller::connect(&f.fixture);
     let recovered = archive_wait16(&mut f.control, |s| {
-        s["archive"]["records"]
-            .as_array()
-            .is_some_and(|rs| rs.iter().any(|r| r["request"] == request))
+        // Archive records can arrive before removal admission is ready.
+        s["removal"]["ready"] == true
+            && s["archive"]["records"]
+                .as_array()
+                .is_some_and(|rs| rs.iter().any(|r| r["request"] == request))
     });
     assert_eq!(recovered["archive"]["pending"], false);
     assert!(
