@@ -167,3 +167,24 @@ automatic expiration. Actual disk-full hardware, physical reboot, real Claude/
 Codex folder-removal/native-resume interactions, combined workloads and the full
 all-target runtime suite remain ticket 19. Scripted native-shaped children and
 injected boot identities above do not relabel older native proof as new evidence.
+
+## Integration merge checks
+
+Ticket 18 merged without conflicts at
+`bc05590615bee5cf6529d1c905be89eec547cc64`, with the exact same tree as completed
+branch tip `fbfbd878091d87051305243b0c9db665f64cb429`. Tickets 17 and 18 were
+resolved and integration was an ancestor of that tip before the merge. The
+original source and Controller/PTY evidence above therefore remain unchanged;
+the archive readiness fixture failure and corrected single-case result remain
+part of this record.
+
+On the merge tree, locked build, format, warnings-denied all-target Clippy and
+diff checks passed. Focused binary checks passed: 12 real-Git removal tests,
+2 App removal confirmation tests, 18 UI tests, and 14 persistence concurrent
+tests with 2 intentional native-corpus ignores. An initial
+`persistence::tests` filter matched zero tests and is not counted; the corrected
+`persistence::concurrent_tests` filter produced the writer/history results.
+No unfiltered binary, full runtime, Controller/PTY or native suite was rerun
+during integration. Combined runtime/native/resource/reboot qualification remains
+ticket 19. The fully merged, clean ticket 18 worktree was removed using ordinary
+`git worktree remove`; its branch was retained.
