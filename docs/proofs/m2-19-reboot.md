@@ -17,7 +17,7 @@ It used reviewed source `59fed09` and the product hash below.
 boot identities and every check. Initial read-only verification found all durable
 state intact and no unexpected checkout process, but correctly left four public
 checks unverified while the owner was absent. A separately explicit owner-only
-bootstrap then passed **all 18 checks** with no failed or unverified checks:
+bootstrap then passed **all 17 checks** with no failed or unverified checks:
 zero automatic native coding/new segments, original IDs/membership/selected
 Violet context restored, and code/index/witnesses/recovery refs/committed prefixes
 unchanged. The native recalls below occurred only after this zero-start proof.

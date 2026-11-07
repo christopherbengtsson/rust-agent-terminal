@@ -64,7 +64,7 @@ implementation or new validation evidence is claimed by this ticket.
 2026-11-07 actual reboot completion:
 
 - The user performed the separately arranged real reboot. Kernel boot UUID and
-  boottime changed; all 18 owner-only restore checks passed before native coding.
+  boottime changed; all 17 owner-only restore checks passed before native coding.
 - Both original Codex167 and Claude318 conversations then recalled their markers
   after explicit recovery/resume, with original native IDs and fresh managed
   segments. Existing explicit recovery released reservations without launching
