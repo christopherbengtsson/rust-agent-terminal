@@ -1,0 +1,40 @@
+┌ Reviews ───────────────────────────────────────────┐┌ Session · Focus: dashboard · Process: Idle · semantic status: unknown ─────────────────────────────────┐
+│Unavailable · milestone 1                           ││                                                                                                        │
+└────────────────────────────────────────────────────┘│                                                                                                        │
+┌ Agent terminal · Worktrees ────────────────────────┐│                                                                                                        │
+│Repository: /private/tmp/.tmpZdaF2N/checkout with   ││                                                                                                        │
+└────────────────────────────────────────────────────┘│                                                                                                        │
+┌ Project / worktrees (0) ───────────────────────────┐│                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+└────────────────────────────────────────────────────┘│                                                                                                        │
+┌ Selection ─────────────────────────────────────────┐│                                                                                                        │
+│No worktree selected.                               ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+│                                                    ││                                                                                                        │
+└────────────────────────────────────────────────────┘└────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌ Workspace creation ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│Setup Failed: Setup exit status: 3; owned execution cleaned · Continue keeps coding STOPPED · T Retry · Y Continue · I informed reconcile/retry · Z cancel    │
+│History: metadata committed · durable bytes 0                                                                                                                 │
+│Evidence: unavailable ·                                                                                                                                       │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+q quit/stop s stop h history Enter attach x new Codex v resume / find S text B chats N create O receipt U setup E LIVE f diff w workspaces d detach             

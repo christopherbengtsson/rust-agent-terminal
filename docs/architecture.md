@@ -1165,9 +1165,15 @@ and must never be written back into `record.intent.start`. Completed workspaces
 enter the existing session collection without selecting that owner. A requested launch freezes that owner's target/session identity, so
 late completion cannot steal navigation or launch in the currently selected
 workspace. Receipts project the originating owner's pending or durable native
-result. Failed native start keeps the registered workspace, branch, folder and
-history; retry remains an explicit Start. Optional configured setup is ticket 10,
-not an inactive control in this creation form. See the
+result. Receipt projection is keyed by the creation's original native request,
+not the owner's current conversation. A later conversation cannot replace its
+outcome, original session UUID or final process presentation. Startup collects
+bounded typed historical receipt metadata from the existing SQLite scan before
+older stopped rows are omitted from runtime ownership; this read-only projection
+adds no AgentSession, execution reservation or selection change. Failed native
+start keeps the registered workspace, branch, folder and history; retry remains
+an explicit Start. Configured setup now owns the intermediate
+execution/continuation boundary described below. See the
 [scoped evidence and native limits](proofs/m2-09-workspace-creation.md).
 ### Whole workspace inspection (Milestone 2 ticket 14)
 
@@ -1242,3 +1248,72 @@ The App remains intact through handoff, retaining project/workspace/session,
 focus and diff/history context. The independent supervisor continues capturing
 agents. Inspection is labelled snapshot; source/workspace editing is labelled
 LIVE and shared with the agent. GUI editors require their configured wait option.
+
+
+### Configured project setup (Milestone 2 ticket 10)
+
+Schema 8 follows schema 7 and adds optional project setup configuration, frozen
+creation setup policies and independent setup attempt receipts. Only the existing
+persistence worker writes them. A new creation intent atomically freezes the
+optional project shell command with its original creation facts. Missing legacy
+policies are not retroactively guessed. If creation completed before its first
+setup receipt committed, restore saves a known-not-started failure receipt and
+requires explicit Retry or Continue. It does not run code. Existing setup receipts
+retain their original attempt UUID, command, creation/task/canonical checkout,
+boot/start identity, phases, bounded tail and cleanup facts. Native conversation
+membership and original native launch outcomes remain independent.
+
+`setup::Coordinator` commits Prepared before worker spawn and exact attributed
+Authorized before releasing the authenticated local gate. The worker installs the
+std child immediately, sets up nonblocking pipes, creates a fresh session/process
+group and live descendant Scope, then verifies original gated identity before
+release. Gate EOF is the exec receipt; a fast command may already have exited, so
+post-EOF leader survival is not required. Running and terminal facts pass through
+the same sole writer. Success may grant native launch only after its matching
+terminal commit, confirmed execution cleanup and still-live transient launch
+permission. The original `LaunchHandoff.record.intent` is never masked or mutated
+to encode that permission. Failure blocks bare Launch/Resume until explicit retry
+or skip. Retry creates a fresh attempt, retaining all prior outcomes and the
+frozen command; a changed project setting cannot rewrite it.
+
+Setup has one concrete execution worker, not an AgentSession or generic job
+engine. It runs unrestricted local coding-workspace setup through `/bin/sh -c`;
+this grants no future restricted reviewer capability. One setup is admitted at a
+time. New configured setup also counts against the 32 unsettled execution/capture
+admission limit. Canonical common/git directory reservations include pending
+writer acknowledgements, cleanup/output tails, known failures awaiting choice
+and uncertain restoration, with only the latest attempt for each creation
+participating. Path aliases cannot bypass native admission. Shared-workspace
+mutations must cancel pending launch permission and account for these setup
+receipts as well as native owners; an empty/stopped native owner proves no setup
+cleanup. No archive/removal action is introduced here.
+
+Targeted Stop cancels the matching setup plus its pending launch permission even
+when its coding owner is still empty. A frozen empty-owner Stop may follow only
+that same creation's original native handoff if a native UUID appeared before
+command delivery; later independent conversations remain protected. Global Stop
+and quit cancel owned setup and wait for durable result/capture/cleanup. Detach or
+controller loss preserves supervisor-owned setup. No restarted supervisor signals
+restored PIDs. Released execution without confirmed cleanup uses the existing
+conservative read-only reconciliation; absent leader is insufficient to exclude
+escaped descendants on the same boot. Unresolved survivors prevent quit's stopped
+acknowledgement. A durable terminal `cleanup_confirmed` fact separately permits an
+explicit informed retry/skip when only command outcome is uncertain. Reconciliation
+never clears historical `Execution.released` facts or restores launch permission.
+
+The command limit is 4096 bytes; there are at most 32 retained attempt receipts,
+each at most 64 KiB serialized. Two nonblocking reads of at most 4096 bytes per
+pipe per poll bound capture work. A coalesced 8192-byte combined raw tail plus
+explicit discarded count bounds progress without producer backpressure or fake
+conversation history; terminal controls are inert. Live tail changes are transient
+until a phase receipt commits, independently of native history flush guarantees.
+Gate connection/exec receipts
+have five-second deadlines. Arbitrarily slow setup has no inferred completion or
+short total timeout; cancellation is polled at 10 ms intervals. Existing lifecycle
+Scope closure/TERM/KILL verification runs away from routing and retains child
+ownership on unconfirmed cleanup. Final pipe drain has a 250 ms bound; incomplete
+capture yields uncertainty rather than success. Storage failure retains the exact
+phase for retry without replaying external effects. A lost worker becomes a
+conservative uncertain receipt. Full process-tree sampling/reboot/native limits
+remain those of the existing ownership foundation; see the
+[scoped setup evidence](proofs/m2-10-project-setup.md).

@@ -14,6 +14,8 @@ pub struct Registry {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Project {
+    #[serde(default)]
+    pub setup_command: Option<String>,
     pub id: String,
     pub name: String,
     pub common_dir: Vec<u8>,
@@ -207,12 +209,13 @@ pub(crate) fn record(
 
 pub(crate) fn snapshot(db: &Connection, selected_task: Option<&str>) -> Result<Registry> {
     let projects = db
-        .prepare("SELECT id,name,common_dir FROM projects ORDER BY rowid")?
+        .prepare("SELECT id,name,common_dir,(SELECT command FROM project_setup WHERE project=projects.id) FROM projects ORDER BY rowid")?
         .query_map([], |row| {
             Ok(Project {
                 id: row.get(0)?,
                 name: row.get(1)?,
                 common_dir: row.get(2)?,
+                setup_command: row.get(3)?,
             })
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -246,11 +249,24 @@ pub(crate) fn snapshot(db: &Connection, selected_task: Option<&str>) -> Result<R
                 |row| row.get(0),
             )
             .optional()?;
+        let setup: Option<Option<String>> = db
+            .query_row(
+                "SELECT command FROM workspace_setup_policies WHERE request=?1",
+                [&task],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let setup = setup.map(|command| {
+            command
+                .map(crate::setup::Policy::Command)
+                .unwrap_or(crate::setup::Policy::Disabled)
+        });
         let creation = creation
             .map(|json| serde_json::from_str::<crate::creation::Record>(&json))
             .transpose()?
             .and_then(|r| {
                 Some(crate::creation::Facts {
+                    setup,
                     request: r.intent.request,
                     original_base_ref: r.base_ref?,
                     original_base_commit: r.commit?,

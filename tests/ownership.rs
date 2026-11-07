@@ -7958,6 +7958,796 @@ fn dashboard_create_and_start_targets_new_checkout_and_retains_failed_launch_wit
 }
 
 #[test]
+fn configured_setup_runs_once_in_created_workspace_without_starting_coding() {
+    use std::os::unix::ffi::OsStrExt;
+    let fixture = Fixture::new();
+    assert!(
+        Command::new("git")
+            .arg("-C")
+            .arg(&fixture.repository)
+            .args([
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=fixture@example.invalid",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "base"
+            ])
+            .status()
+            .unwrap()
+            .success()
+    );
+    let _owner = RegistryOwner(
+        Command::new(env!("CARGO_BIN_EXE_agent-terminal"))
+            .arg("--supervisor")
+            .arg(fixture.state())
+            .spawn()
+            .unwrap(),
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !fixture.state().join("supervisor.sock").exists() {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let mut control = Controller::connect(&fixture);
+    control.request(serde_json::json!({"Register":fixture.repository.as_os_str().as_bytes()}));
+    let project = loop {
+        let state = control.request(serde_json::json!("Screen"));
+        if let Some(project) = state["registry"]["projects"]
+            .as_array()
+            .and_then(|p| p.first())
+        {
+            break project["id"].as_str().unwrap().to_owned();
+        }
+        assert!(Instant::now() < deadline, "{state}");
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    control.request(serde_json::json!({"ConfigureSetup":{"project":project,"command":"pwd > setup-cwd; printf x >> setup-count; printf 'setup complete'"}}));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let state = control.request(serde_json::json!("Screen"));
+        if state["registry"]["projects"][0]["setup_command"].is_string() {
+            break;
+        }
+        assert!(Instant::now() < deadline, "{state}");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let request = uuid::Uuid::new_v4().to_string();
+    let folder = fixture.temp.path().join("setup workspace");
+    control.request(serde_json::json!({"CreateWorkspace":{"request":request,"project":project,"base":"main","branch":"workspace/setup","path":folder.as_os_str().as_bytes(),"agent":"Codex","start":false,"prompt":null}}));
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let settled = loop {
+        let state = control.request(serde_json::json!("Screen"));
+        if state["setup"]["records"][0]["phase"] == "Succeeded"
+            && state["setup"]["pending"] == false
+        {
+            break state;
+        }
+        assert!(Instant::now() < deadline, "{state}");
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    assert_eq!(
+        std::fs::read_to_string(folder.join("setup-count")).unwrap(),
+        "x"
+    );
+    assert_eq!(
+        std::fs::read_to_string(folder.join("setup-cwd"))
+            .unwrap()
+            .trim(),
+        folder.to_str().unwrap()
+    );
+    assert_eq!(settled["setup"]["records"][0]["output"], "setup complete");
+    assert!(settled["execution"].is_null());
+    control.request(serde_json::json!("Shutdown"));
+}
+
+struct SetupFixture {
+    fixture: Fixture,
+    owner: RegistryOwner,
+    control: Controller,
+    project: String,
+    launches: PathBuf,
+    tools: PathBuf,
+}
+impl SetupFixture {
+    fn new(command: &str) -> Self {
+        use std::os::unix::{ffi::OsStrExt, fs::PermissionsExt};
+        let fixture = Fixture::new();
+        assert!(
+            Command::new("git")
+                .arg("-C")
+                .arg(&fixture.repository)
+                .args([
+                    "-c",
+                    "user.name=Fixture",
+                    "-c",
+                    "user.email=fixture@example.invalid",
+                    "commit",
+                    "--allow-empty",
+                    "-m",
+                    "base"
+                ])
+                .status()
+                .unwrap()
+                .success()
+        );
+        let tools = fixture.temp.path().join("tools");
+        std::fs::create_dir(&tools).unwrap();
+        let launches = fixture.temp.path().join("native-launches");
+        let wrapper = tools.join("claude");
+        std::fs::write(
+            &wrapper,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$PWD\" >> '{}'\nexec '{}' --scripted-child\n",
+                launches.display(),
+                env!("CARGO_BIN_EXE_agent-terminal")
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let owner = Self::owner(&fixture, &tools);
+        let mut control = Controller::connect(&fixture);
+        control.request(serde_json::json!({"Register":fixture.repository.as_os_str().as_bytes()}));
+        let state = setup_wait(&mut control, &|s| {
+            s["registry_pending"] == false
+                && s["registry"]["projects"]
+                    .as_array()
+                    .is_some_and(|p| !p.is_empty())
+        });
+        let project = state["registry"]["projects"][0]["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        control
+            .request(serde_json::json!({"ConfigureSetup":{"project":project,"command":command}}));
+        setup_wait(&mut control, &|s| {
+            s["registry_pending"] == false
+                && s["registry"]["projects"][0]["setup_command"] == command
+        });
+        Self {
+            fixture,
+            owner,
+            control,
+            project,
+            launches,
+            tools,
+        }
+    }
+    fn owner(fixture: &Fixture, tools: &Path) -> RegistryOwner {
+        Self::owner_boot(fixture, tools, "setup-boot-one")
+    }
+    fn owner_boot(fixture: &Fixture, tools: &Path, boot: &str) -> RegistryOwner {
+        let path = std::env::join_paths([tools, Path::new("/usr/bin"), Path::new("/bin")]).unwrap();
+        let owner = RegistryOwner(
+            Command::new(env!("CARGO_BIN_EXE_agent-terminal"))
+                .arg("--supervisor")
+                .arg(fixture.state())
+                .env("PATH", path)
+                .env("RAT_PROOF_BOOT_ID", boot)
+                .spawn()
+                .unwrap(),
+        );
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !fixture.state().join("supervisor.sock").exists() {
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        owner
+    }
+    fn restart(&mut self, boot: &str) {
+        self.owner.0.kill().unwrap();
+        self.owner.0.wait().unwrap();
+        let _ = self.control.stream.shutdown(std::net::Shutdown::Both);
+        let _ = std::fs::remove_file(self.fixture.state().join("supervisor.sock"));
+        self.owner = Self::owner_boot(&self.fixture, &self.tools, boot);
+        self.control = Controller::connect(&self.fixture);
+    }
+    fn create(&mut self, start: bool) -> (String, PathBuf) {
+        use std::os::unix::ffi::OsStrExt;
+        let request = uuid::Uuid::new_v4().to_string();
+        let folder = self
+            .fixture
+            .temp
+            .path()
+            .join(format!("workspace-{}", &request[..8]));
+        self.control.request(serde_json::json!({"CreateWorkspace":{"request":request,"project":self.project,"base":"main","branch":format!("workspace/{}",&request[..8]),"path":folder.as_os_str().as_bytes(),"agent":"Claude","start":start,"prompt":"setup fixture prompt"}}));
+        (request, folder)
+    }
+    fn phase(&mut self, phase: &str) -> serde_json::Value {
+        setup_wait(&mut self.control, &|s| {
+            s["setup"]["pending"] == false
+                && s["setup"]["records"]
+                    .as_array()
+                    .and_then(|r| r.last())
+                    .is_some_and(|r| r["phase"] == phase)
+        })
+    }
+    fn finish(mut self) {
+        self.control.request_now(serde_json::json!("Shutdown"));
+        setup_wait(&mut self.control, &|s| s["stopped"] == true);
+        self.owner.0.wait().unwrap();
+    }
+}
+fn setup_wait(
+    control: &mut Controller,
+    predicate: &dyn Fn(&serde_json::Value) -> bool,
+) -> serde_json::Value {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let state = control.request_now(serde_json::json!("Screen"));
+        if predicate(&state) {
+            return state;
+        }
+        assert!(Instant::now() < deadline, "{state}");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[test]
+fn configured_setup_failure_retry_preserves_original_start_and_native_result() {
+    let mut f = SetupFixture::new(
+        "printf x >> attempts; if [ ! -f ready ]; then touch ready; printf 'first setup failed' >&2; exit 7; fi; printf 'second setup succeeded'",
+    );
+    let (request, folder) = f.create(true);
+    let failed = f.phase("Failed");
+    assert!(!f.launches.exists());
+    assert!(
+        failed["setup"]["records"][0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("7"),
+        "{failed}"
+    );
+    assert_eq!(failed["setup"]["armed_launches"][0], request);
+    let target = failed["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["task"] == request)
+        .unwrap()["target"]
+        .clone();
+    use std::os::unix::ffi::OsStrExt;
+    let alias = f.fixture.temp.path().join("setup-alias");
+    std::os::unix::fs::symlink(&folder, &alias).unwrap();
+    f.control
+        .request(serde_json::json!({"Adopt":alias.as_os_str().as_bytes()}));
+    setup_wait(&mut f.control, &|s| {
+        s["adoption_pending"] == false && s["control_target"] == target
+    });
+    // Explicit Start cannot bypass failed setup, even through another path alias.
+    let refused=f.control.request(serde_json::json!({"Session":{"target":target,"session":null,"command":{"LaunchClaude":"bypass-setup"}}}));
+    assert!(!f.launches.exists(), "{refused}");
+    f.control.request(serde_json::json!({"ConfigureSetup":{"project":f.project,"command":"printf changed > wrong-command"}}));
+    setup_wait(&mut f.control, &|s| {
+        s["registry_pending"] == false
+            && s["registry"]["projects"][0]["setup_command"] == "printf changed > wrong-command"
+    });
+    let attempt = failed["setup"]["records"][0]["attempt"].clone();
+    f.control.request(
+        serde_json::json!({"RecoverSetup":{"attempt":attempt,"retry":true,"informed":false}}),
+    );
+    let success = f.phase("Succeeded");
+    setup_wait(&mut f.control, &|s| {
+        s["creation"]["launches"].as_array().is_some_and(|r| {
+            r.iter().any(|r| {
+                r["request"] == request
+                    && r["result"]["identity"].is_string()
+                    && r["result"]["error"].is_null()
+            })
+        })
+    });
+    let marker = f.launches.clone();
+    setup_wait(&mut f.control, &|_| marker.exists());
+    assert_eq!(
+        std::fs::read_to_string(folder.join("attempts")).unwrap(),
+        "xx"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&f.launches)
+            .unwrap()
+            .lines()
+            .collect::<Vec<_>>(),
+        vec![folder.to_str().unwrap()]
+    );
+    assert_eq!(
+        success["setup"]["records"][0]["creation"]["intent"]["start"],
+        true
+    );
+    assert_ne!(success["setup"]["records"][1]["attempt"], attempt);
+    assert_eq!(success["setup"]["records"][0]["phase"], "Failed");
+    assert!(
+        !folder.join("wrong-command").exists(),
+        "retry freezes original command despite later project edits"
+    );
+    f.finish();
+}
+
+#[test]
+fn configured_setup_continue_states_launch_effect_and_stop_disarms_it() {
+    let mut f = SetupFixture::new("printf x >> attempts; printf 'cannot configure' >&2; exit 9");
+    let (first, first_folder) = f.create(true);
+    let failed = f.phase("Failed");
+    let attempt = failed["setup"]["records"][0]["attempt"].clone();
+    assert!(
+        failed["setup"]["armed_launches"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|id| id == &first)
+    );
+    f.control.request(
+        serde_json::json!({"RecoverSetup":{"attempt":attempt,"retry":false,"informed":false}}),
+    );
+    f.phase("Skipped");
+    let marker = f.launches.clone();
+    setup_wait(&mut f.control, &|_| marker.exists());
+    assert_eq!(
+        std::fs::read_to_string(&f.launches)
+            .unwrap()
+            .lines()
+            .count(),
+        1
+    );
+    assert_eq!(
+        std::fs::read_to_string(first_folder.join("attempts")).unwrap(),
+        "x"
+    );
+    let (second, second_folder) = f.create(true);
+    let failed = f.phase("Failed");
+    let entry = failed["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["task"] == second)
+        .unwrap();
+    f.control.request(serde_json::json!({"Session":{"target":entry["target"],"session":entry["session"],"command":"Stop"}}));
+    let stopped = setup_wait(&mut f.control, &|s| {
+        !s["setup"]["armed_launches"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|id| id == &second)
+    });
+    let attempt = stopped["setup"]["records"]
+        .as_array()
+        .unwrap()
+        .last()
+        .unwrap()["attempt"]
+        .clone();
+    f.control.request(
+        serde_json::json!({"RecoverSetup":{"attempt":attempt,"retry":false,"informed":false}}),
+    );
+    f.phase("Skipped");
+    assert_eq!(
+        std::fs::read_to_string(&f.launches)
+            .unwrap()
+            .lines()
+            .count(),
+        1
+    );
+    assert_eq!(
+        std::fs::read_to_string(second_folder.join("attempts")).unwrap(),
+        "x"
+    );
+    let state = f.control.request(serde_json::json!("Screen"));
+    let first_owner = state["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["task"] == first)
+        .unwrap();
+    assert_eq!(
+        first_owner["lifecycle"], "Running",
+        "unrelated native session survives targeted setup Stop"
+    );
+    f.finish();
+}
+
+#[test]
+fn configured_setup_stop_cancels_slow_flood_and_pending_native_launch() {
+    let mut f = SetupFixture::new(
+        "echo $$ > setup-pid; printf started > setup-started; while :; do printf 'stdout flood 0123456789'; printf 'stderr flood 0123456789' >&2; done",
+    );
+    let (request, folder) = f.create(true);
+    let started = folder.join("setup-started");
+    let running = setup_wait(&mut f.control, &|s| {
+        started.exists() && s["setup"]["records"][0]["discarded"].as_u64().unwrap_or(0) > 8192
+    });
+    assert!(
+        running["setup"]["records"][0]["output"]
+            .as_str()
+            .unwrap()
+            .len()
+            <= 8192
+    );
+    let entry = running["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["task"] == request)
+        .unwrap();
+    assert_eq!(entry["reserved"], true);
+    let start = Instant::now();
+    f.control.request(serde_json::json!({"Session":{"target":entry["target"],"session":entry["session"],"command":"Stop"}}));
+    let cancelled = f.phase("Cancelled");
+    assert!(start.elapsed() < Duration::from_secs(4));
+    assert!(
+        cancelled["setup"]["armed_launches"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(!f.launches.exists());
+    let pid: i32 = std::fs::read_to_string(folder.join("setup-pid"))
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    assert_ne!(
+        unsafe { libc::kill(pid, 0) },
+        0,
+        "setup leader must be reaped"
+    );
+    f.finish();
+}
+
+#[test]
+fn configured_setup_stop_remains_responsive_at_each_stalled_receipt() {
+    for (boundary, phase, executes) in [
+        ("setup-prepare", "Prepared", false),
+        ("setup-authorize", "Authorized", false),
+        ("setup-running", "Running", true),
+        ("setup-result", "Succeeded", true),
+    ] {
+        let command = if boundary == "setup-result" {
+            "echo $$ > setup-pid; printf x >> attempts"
+        } else {
+            "echo $$ > setup-pid; printf x >> attempts; sleep 30"
+        };
+        let mut f = SetupFixture::new(command);
+        let fault = f.fixture.state().join(format!("proof-storage-{boundary}"));
+        std::fs::write(&fault, "stall").unwrap();
+        let (request, folder) = f.create(true);
+        let state = setup_wait(&mut f.control, &|s| {
+            s["setup"]["records"][0]["phase"] == phase && s["setup"]["pending"] == true
+        });
+        assert_eq!(folder.join("attempts").exists(), executes, "{boundary}");
+        let entry = state["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["task"] == request)
+            .unwrap();
+        let start = Instant::now();
+        f.control.request_now(serde_json::json!({"Session":{"target":entry["target"],"session":entry["session"],"command":"Stop"}}));
+        let stopped = setup_wait(&mut f.control, &|s| {
+            s["setup"]["armed_launches"].as_array().unwrap().is_empty()
+        });
+        assert!(
+            start.elapsed() < Duration::from_secs(1),
+            "Stop routing stalled at {boundary}: {stopped}"
+        );
+        if executes && boundary != "setup-result" {
+            let pid: i32 = std::fs::read_to_string(folder.join("setup-pid"))
+                .unwrap()
+                .trim()
+                .parse()
+                .unwrap();
+            let deadline = Instant::now() + Duration::from_secs(4);
+            while unsafe { libc::kill(pid, 0) } == 0 {
+                assert!(
+                    Instant::now() < deadline,
+                    "owned setup still alive during {boundary} storage stall"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+        assert!(!f.launches.exists());
+        std::fs::remove_file(fault).unwrap();
+        f.phase(if boundary == "setup-result" {
+            "Succeeded"
+        } else {
+            "Cancelled"
+        });
+        assert!(
+            !f.launches.exists(),
+            "late {boundary} acknowledgement cannot authorize coding"
+        );
+        if executes {
+            assert_eq!(
+                std::fs::read_to_string(folder.join("attempts")).unwrap(),
+                "x"
+            );
+        }
+        f.finish();
+    }
+}
+
+#[test]
+fn configured_setup_result_storage_repair_and_reconnect_never_replay_command() {
+    let mut f = SetupFixture::new("printf x >> attempts; printf 'effect committed'");
+    let fault = f.fixture.state().join("proof-storage-setup-result");
+    std::fs::write(&fault, "error").unwrap();
+    let (request, folder) = f.create(true);
+    let failed = setup_wait(&mut f.control, &|s| {
+        s["setup"]["error"]
+            .as_str()
+            .is_some_and(|e| e.contains("not saved"))
+    });
+    let attempt = failed["setup"]["records"][0]["attempt"].clone();
+    assert_eq!(
+        std::fs::read_to_string(folder.join("attempts")).unwrap(),
+        "x"
+    );
+    assert!(!f.launches.exists());
+    drop(f.control);
+    f.control = Controller::connect(&f.fixture);
+    let reconnect = f.control.request(serde_json::json!("Screen"));
+    assert_eq!(reconnect["setup"]["records"][0]["attempt"], attempt);
+    std::fs::remove_file(fault).unwrap();
+    f.control.request(serde_json::json!("RetryStorage"));
+    f.phase("Succeeded");
+    let marker = f.launches.clone();
+    setup_wait(&mut f.control, &|_| marker.exists());
+    let state = setup_wait(&mut f.control, &|s| {
+        s["creation"]["launches"].as_array().is_some_and(|rs| {
+            rs.iter()
+                .any(|r| r["request"] == request && !r["result"].is_null())
+        })
+    });
+    assert_eq!(state["setup"]["records"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        std::fs::read_to_string(folder.join("attempts")).unwrap(),
+        "x"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&f.launches)
+            .unwrap()
+            .lines()
+            .count(),
+        1
+    );
+    f.finish();
+}
+
+#[test]
+fn configured_setup_restart_retains_uncertain_effects_until_explicit_reconciliation_and_retry() {
+    let mut f = SetupFixture::new("echo $$ > setup-pid; printf x >> attempts");
+    let fault = f.fixture.state().join("proof-storage-setup-result");
+    std::fs::write(&fault, "stall").unwrap();
+    let (_, folder) = f.create(true);
+    let completed = setup_wait(&mut f.control, &|s| {
+        s["setup"]["records"][0]["phase"] == "Succeeded" && s["setup"]["pending"] == true
+    });
+    let attempt = completed["setup"]["records"][0]["attempt"].clone();
+    let pid: i32 = std::fs::read_to_string(folder.join("setup-pid"))
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    assert_ne!(
+        unsafe { libc::kill(pid, 0) },
+        0,
+        "known command was cleaned before receipt loss"
+    );
+    // Kill while the storage worker was still stalled. Its saved Running receipt
+    // alone cannot establish the command result on the replacement supervisor.
+    f.restart("setup-boot-one");
+    std::fs::remove_file(fault).unwrap();
+    let uncertain = f.phase("Uncertain");
+    assert!(
+        uncertain["setup"]["armed_launches"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(!f.launches.exists());
+    assert_eq!(
+        std::fs::read_to_string(folder.join("attempts")).unwrap(),
+        "x"
+    );
+    f.control.request(
+        serde_json::json!({"RecoverSetup":{"attempt":attempt,"retry":true,"informed":false}}),
+    );
+    let refused = f.control.request(serde_json::json!("Screen"));
+    assert!(
+        refused["setup"]["error"]
+            .as_str()
+            .unwrap()
+            .contains("uncertain")
+    );
+    f.control.request(
+        serde_json::json!({"RecoverSetup":{"attempt":attempt,"retry":true,"informed":true}}),
+    );
+    let blocked = f.phase("Uncertain");
+    assert!(
+        blocked["setup"]["records"][0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("descendants"),
+        "{blocked}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(folder.join("attempts")).unwrap(),
+        "x"
+    );
+    let quit = f.control.request_now(serde_json::json!("Shutdown"));
+    assert_eq!(
+        quit["stopped"], false,
+        "uncertain restored setup survivors cannot be acknowledged as stopped"
+    );
+    let unconfirmed = setup_wait(&mut f.control, &|s| {
+        s["setup"]["error"]
+            .as_str()
+            .is_some_and(|e| e.contains("Stop unconfirmed"))
+    });
+    assert_eq!(unconfirmed["stopped"], false);
+    // A debug proof boot change exercises reboot evidence, not a real reboot.
+    f.restart("setup-boot-two");
+    f.phase("Uncertain");
+    f.control.request(
+        serde_json::json!({"RecoverSetup":{"attempt":attempt,"retry":true,"informed":true}}),
+    );
+    f.phase("Failed");
+    assert_eq!(
+        std::fs::read_to_string(folder.join("attempts")).unwrap(),
+        "x",
+        "reconciliation is read-only"
+    );
+    f.control.request(
+        serde_json::json!({"RecoverSetup":{"attempt":attempt,"retry":true,"informed":true}}),
+    );
+    let retried = f.phase("Succeeded");
+    assert_eq!(retried["setup"]["records"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        std::fs::read_to_string(folder.join("attempts")).unwrap(),
+        "xx"
+    );
+    assert!(
+        !f.launches.exists(),
+        "restore/informed retry never rearms original Create and start"
+    );
+    f.finish();
+}
+
+#[test]
+fn configured_setup_dashboard_labels_continue_launch_effect_at_normal_and_small_sizes() {
+    for (cols, rows) in [(160, 40), (60, 18)] {
+        for armed in [true, false] {
+            let mut f = SetupFixture::new("printf 'configuration failed' >&2; exit 3");
+            let (request, _) = f.create(true);
+            let failed = f.phase("Failed");
+            if !armed {
+                let entry = failed["sessions"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|s| s["task"] == request)
+                    .unwrap();
+                f.control.request(serde_json::json!({"Session":{"target":entry["target"],"session":entry["session"],"command":"Stop"}}));
+                setup_wait(&mut f.control, &|s| {
+                    s["setup"]["armed_launches"].as_array().unwrap().is_empty()
+                });
+            }
+            drop(f.control);
+            let deadline = Instant::now() + Duration::from_secs(6);
+            let mut dashboard = loop {
+                let mut d = Dashboard::open_geometry(
+                    &f.fixture.repository,
+                    &f.fixture.state(),
+                    None,
+                    None,
+                    rows,
+                    cols,
+                );
+                let screen =
+                    d.wait_any(&["Setup Failed", "Another dashboard controls this supervisor"]);
+                if screen.contains("Setup Failed") {
+                    break d;
+                }
+                d.kill();
+                assert!(Instant::now() < deadline, "controller release failed");
+            };
+            dashboard.send(b"O");
+            let screen = dashboard.wait(if armed {
+                "Continue will start"
+            } else {
+                "Continue keeps coding"
+            });
+            assert!(screen.contains("Setup Failed"), "{cols}x{rows}: {screen}");
+            assert!(
+                screen.contains("Retry") && screen.contains("Continue"),
+                "{screen}"
+            );
+            if let Some(directory) = std::env::var_os("RAT_SETUP_EVIDENCE") {
+                std::fs::create_dir_all(&directory).unwrap();
+                std::fs::write(
+                    Path::new(&directory).join(format!(
+                        "m2-10-setup-{cols}x{rows}-{}.txt",
+                        if armed { "armed" } else { "stopped" }
+                    )),
+                    &screen,
+                )
+                .unwrap();
+            }
+            dashboard.send(b"Y");
+            dashboard.wait("Setup Skipped");
+            if armed {
+                let deadline = Instant::now() + Duration::from_secs(5);
+                while !f.launches.exists() {
+                    assert!(Instant::now() < deadline);
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+            }
+            dashboard.send(b"q");
+            let deadline = Instant::now() + Duration::from_secs(8);
+            while dashboard.child.try_wait().unwrap().is_none() {
+                while dashboard.output.try_recv().is_ok() {}
+                assert!(Instant::now() < deadline, "dashboard quit did not settle");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            f.owner.0.wait().unwrap();
+            if armed {
+                assert!(f.launches.exists());
+            } else {
+                assert!(!f.launches.exists());
+            }
+        }
+    }
+}
+
+#[test]
+fn configured_setup_flood_keeps_unrelated_session_capture_and_input_owned() {
+    use std::os::unix::ffi::OsStrExt;
+    let mut f = SetupFixture::new(
+        "printf setup-started; while :; do printf 'setup-output-0123456789'; done",
+    );
+    f.control
+        .request(serde_json::json!({"Adopt":f.fixture.repository.as_os_str().as_bytes()}));
+    setup_wait(&mut f.control, &|s| {
+        s["adoption_pending"] == false && s["adopted"].is_string()
+    });
+    let original = f
+        .control
+        .request(serde_json::json!({"Launch":"setup-unrelated-session"}));
+    assert!(original["launch_result"]["error"].is_null(), "{original}");
+    let target = original["control_target"].clone();
+    let session = original["session_identity"]["session"].clone();
+    f.control.request(serde_json::json!({"Session":{"target":target,"session":session,"command":{"Input":b"stream\r".to_vec()}}}));
+    let (request, _) = f.create(true);
+    let running = setup_wait(&mut f.control, &|s| {
+        s["setup"]["records"][0]["discarded"].as_u64().unwrap_or(0) > 8192
+    });
+    assert_eq!(
+        running["control_target"], target,
+        "setup cannot steal navigation"
+    );
+    let entry = running["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["task"] == request)
+        .unwrap();
+    f.control.request(serde_json::json!({"Session":{"target":entry["target"],"session":entry["session"],"command":"Stop"}}));
+    f.phase("Cancelled");
+    f.control.request(serde_json::json!({"Session":{"target":target,"session":session,"command":{"Input":b"setup-control-survived\r".to_vec()}}}));
+    let captured = setup_wait(&mut f.control, &|s| {
+        s["screen"]
+            .as_str()
+            .is_some_and(|text| text.contains("received: setup-control-survived"))
+    });
+    assert_eq!(captured["lifecycle"], "Running");
+    assert!(captured["output_bytes"].as_u64().unwrap() > 1000);
+    assert!(
+        !f.launches.exists(),
+        "cancelled setup never launches its native wrapper"
+    );
+    f.finish();
+}
+
+#[test]
 fn keyboard_retained_search_opens_exact_passage_in_normal_and_small_ptys() {
     for (cols, rows) in [(160, 40), (60, 18)] {
         let fixture = Fixture::new();
@@ -8102,4 +8892,245 @@ fn active_capture_flushes_while_retained_search_replaces_and_cancels_queries() {
         started.elapsed().as_millis()
     );
     control.request(serde_json::json!("Shutdown"));
+}
+
+#[test]
+fn configured_setup_empty_owner_stop_follows_original_handoff_but_never_later_conversation() {
+    let mut f = SetupFixture::new("exit 1");
+    let (request, _) = f.create(true);
+    let failed = f.phase("Failed");
+    let target = failed["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["task"] == request)
+        .unwrap()["target"]
+        .clone();
+    let attempt = failed["setup"]["records"][0]["attempt"].clone();
+    f.control.request(
+        serde_json::json!({"RecoverSetup":{"attempt":attempt,"retry":false,"informed":false}}),
+    );
+    f.phase("Skipped");
+    let marker = f.launches.clone();
+    setup_wait(&mut f.control, &|_| marker.exists());
+    setup_wait(&mut f.control, &|s| {
+        s["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["target"] == target && s["lifecycle"] == "Running")
+    });
+    let live = f.control.request_now(serde_json::json!("Screen"));
+    let live_id = live["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["target"] == target)
+        .unwrap()["session"]
+        .clone();
+    f.control.request(serde_json::json!({"Session":{"target":target,"session":live_id,"command":{"QueryLaunch":"unrelated-unknown-launch"}}}));
+    let retained = f.control.request(serde_json::json!("Screen"));
+    let receipt = retained["creation"]["launches"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["request"] == request)
+        .unwrap();
+    assert_eq!(receipt["result"]["request"], request);
+    assert!(
+        receipt["result"]["error"].is_null(),
+        "unrelated query cannot replace original native launch result"
+    );
+    // This is the identity captured when setup's coding owner was still empty.
+    f.control
+        .request(serde_json::json!({"Session":{"target":target,"session":null,"command":"Stop"}}));
+    let stopped =
+        setup_wait(&mut f.control, &|s| {
+            s["sessions"].as_array().unwrap().iter().any(|s| {
+                s["target"] == target && s["lifecycle"] == "Stopped" && s["reserved"] == false
+            })
+        });
+    let original = stopped["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["target"] == target)
+        .unwrap()["session"]
+        .clone();
+    f.control.request(serde_json::json!({"Session":{"target":target,"session":original,"command":{"LaunchClaude":"setup-later-independent-chat"}}}));
+    let later = setup_wait(&mut f.control, &|s| {
+        s["sessions"].as_array().unwrap().iter().any(|s| {
+            s["target"] == target && s["lifecycle"] == "Running" && s["session"] != original
+        })
+    });
+    let later_id = later["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["target"] == target)
+        .unwrap()["session"]
+        .clone();
+    f.control
+        .request(serde_json::json!({"Session":{"target":target,"session":null,"command":"Stop"}}));
+    f.control.request(serde_json::json!({"Session":{"target":target,"session":later_id,"command":{"QueryLaunch":request}}}));
+    let state = f.control.request(serde_json::json!("Screen"));
+    let owner = state["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["target"] == target)
+        .unwrap();
+    assert_eq!(owner["session"], later_id);
+    assert_eq!(
+        owner["lifecycle"], "Running",
+        "stale setup Stop cannot signal later conversation"
+    );
+    let receipt = state["creation"]["launches"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["request"] == request)
+        .unwrap();
+    assert_eq!(receipt["result"]["request"], request);
+    assert_eq!(
+        receipt["session"], original,
+        "original native binding must remain stable after later conversation"
+    );
+    assert_eq!(
+        receipt["lifecycle"], "Stopped",
+        "later Running cannot replace original stopped process"
+    );
+    f.control.request(
+        serde_json::json!({"Session":{"target":target,"session":later_id,"command":"Stop"}}),
+    );
+    setup_wait(&mut f.control, &|s| {
+        s["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["target"] == target && s["lifecycle"] == "Stopped" && s["reserved"] == false)
+    });
+    f.restart("setup-boot-one");
+    let restored = setup_wait(&mut f.control, &|s| {
+        s["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|s| s["reserved"] == false)
+            && s["creation"]["launches"].as_array().is_some_and(|rs| {
+                rs.iter().any(|r| {
+                    r["request"] == request
+                        && r["result"]["request"] == request
+                        && r["pending"] == false
+                })
+            })
+    });
+    let receipt = restored["creation"]["launches"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["request"] == request)
+        .unwrap();
+    assert_eq!(receipt["session"], original);
+    assert_eq!(
+        receipt["lifecycle"], "Stopped",
+        "typed historical final state survives restart without borrowing later lifecycle"
+    );
+    assert!(
+        !restored["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["session"] == original),
+        "historical receipt must not allocate an old runtime owner"
+    );
+    let selected = restored["control_target"].clone();
+    let observation = f.control.request(serde_json::json!("Screen"));
+    assert_eq!(
+        observation["control_target"], selected,
+        "receipt projection never changes selection"
+    );
+    assert!(
+        observation["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|s| s["reserved"] == false),
+        "read-only receipts create no execution/capture reservation"
+    );
+    f.finish();
+}
+
+#[test]
+fn configured_setup_creation_to_first_receipt_crash_retains_explicit_setup_choice() {
+    let mut f = SetupFixture::new("printf x >> attempts");
+    let fault = f.fixture.state().join("proof-storage-setup-prepare");
+    std::fs::write(&fault, "error").unwrap();
+    let (request, folder) = f.create(true);
+    let first = setup_wait(&mut f.control, &|s| {
+        s["setup"]["error"]
+            .as_str()
+            .is_some_and(|e| e.contains("not saved"))
+    });
+    assert!(!folder.join("attempts").exists());
+    assert!(!f.launches.exists());
+    let original = first["creation"]["records"][0]["intent"].clone();
+    f.control.request(serde_json::json!({"ConfigureSetup":{"project":f.project,"command":"printf changed > wrong-command"}}));
+    setup_wait(&mut f.control, &|s| {
+        s["registry_pending"] == false
+            && s["registry"]["projects"][0]["setup_command"] == "printf changed > wrong-command"
+    });
+    let duplicate = f
+        .control
+        .request(serde_json::json!({"CreateWorkspace":original}));
+    assert!(
+        duplicate["creation"]["error"].is_null(),
+        "same-request replay compares original client intent, not a changed private setup policy: {duplicate}"
+    );
+    assert_eq!(duplicate["creation"]["records"][0]["intent"], original);
+    std::fs::remove_file(fault).unwrap();
+    f.restart("setup-boot-one");
+    let restored = f.phase("Failed");
+    assert!(
+        restored["setup"]["records"][0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("never started")
+    );
+    assert!(
+        restored["setup"]["armed_launches"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    f.control
+        .request(serde_json::json!({"Adopt":folder.as_os_str().as_encoded_bytes()}));
+    let adopted = setup_wait(&mut f.control, &|s| {
+        s["adoption_pending"] == false && s["adopted"].is_string()
+    });
+    f.control.request(serde_json::json!({"Session":{"target":adopted["control_target"],"session":null,"command":{"LaunchClaude":"crash-gap-bypass"}}}));
+    assert!(!f.launches.exists());
+    assert!(!folder.join("attempts").exists());
+    let attempt = restored["setup"]["records"][0]["attempt"].clone();
+    f.control.request(
+        serde_json::json!({"RecoverSetup":{"attempt":attempt,"retry":true,"informed":false}}),
+    );
+    let done = f.phase("Succeeded");
+    assert_eq!(
+        done["setup"]["records"][0]["creation"]["intent"]["request"],
+        request
+    );
+    assert_eq!(
+        std::fs::read_to_string(folder.join("attempts")).unwrap(),
+        "x"
+    );
+    assert!(
+        !folder.join("wrong-command").exists(),
+        "restored setup obligation keeps original project policy"
+    );
+    assert!(
+        !f.launches.exists(),
+        "explicit setup retry after restore never implies Start"
+    );
+    f.finish();
 }
