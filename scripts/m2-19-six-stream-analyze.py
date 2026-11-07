@@ -24,10 +24,11 @@ for kind in ['navigation', 'attach', 'search', 'diff', 'stop']:
 summary['streams'] = []
 for index in range(6):
     final = json.loads((root / f'final-stream-{index}.json').read_text())
-    commits = next(row['commits'] for row in rows if row['kind'] == 'all-commits' and row['index'] == index)
+    commit_row = next(row for row in rows if row['kind'] == 'all-commits' and row['index'] == index)
+    commits = commit_row['commits']
     snapshots = [row for row in rows if row['kind'] == 'stream-snapshot' and row['index'] == index]
     pre_fault = max(snapshot['durable_commits'][-1]['sequence'] for snapshot in snapshots if snapshot['phase'] == 'healthy-end')
-    healthy = [commit for commit in commits if index != 0 or commit['sequence'] <= pre_fault]
+    healthy = [commit for commit in commits if commit['sequence'] > commit_row['stream_after_sequence'] and (index != 0 or commit['sequence'] <= pre_fault)]
     summary['streams'].append({'index': index, 'identity': next(row for row in rows if row['kind'] == 'stream-identity' and row['index'] == index), 'accepted': final['accepted_bytes'], 'written': final['written_bytes'], 'durable': final['durable_bytes'], 'pending': final['capture_pending_bytes'], 'capture_high_water': final['capture_high_water'], 'backpressure_count': final['capture_backpressure_count'], 'subscriber_frame_high_water': final['subscriber_frame_high_water'], 'commits': len(commits), 'max_healthy_accepted_age_us': max(commit['oldest_accepted_micros'] for commit in healthy), 'max_healthy_completion_gap_us': max(b['completed_micros'] - a['completed_micros'] for a, b in zip(healthy, healthy[1:])), 'retained_raw': next(row for row in rows if row['kind'] == 'retained-raw' and row['index'] == index)})
 rss = collections.defaultdict(list)
 disks = []

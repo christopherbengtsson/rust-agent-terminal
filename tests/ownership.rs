@@ -11398,7 +11398,16 @@ fn six_stream_coordination_measurement19() {
             })
         }),
     };
+    let mut stream_after_sequences = Vec::new();
     for (index, _) in streams.iter().enumerate() {
+        let before = control.request(serde_json::json!({"SelectSession":streams[index].0}));
+        stream_after_sequences.push(
+            before["durable_commits"]
+                .as_array()
+                .unwrap()
+                .last()
+                .map_or(0, |receipt| receipt["sequence"].as_u64().unwrap()),
+        );
         control.request(target_command(index,serde_json::json!({"Input":format!("pace17 {} 120000 65536\r",1900+index).into_bytes()})));
     }
     let started_ns = measurement_clock();
@@ -11677,8 +11686,11 @@ fn six_stream_coordination_measurement19() {
             }
             previous = Some(sequence);
             // completed_micros is storage-worker-relative, not CLOCK_MONOTONIC.
-            // The exact pre-fault receipt sequence is the boundary for stream 0.
-            if index != 0 || sequence <= healthy_end_sequences[index] {
+            // Exclude pre-stream idle time; the pre-fault sequence ends stream 0's
+            // healthy window. Full-ring continuity remains checked above.
+            if sequence > stream_after_sequences[index]
+                && (index != 0 || sequence <= healthy_end_sequences[index])
+            {
                 let completed = receipt["completed_micros"].as_u64().unwrap();
                 if let Some(prior) = previous_completed
                     && completed - prior >= 1000000
@@ -11698,7 +11710,7 @@ fn six_stream_coordination_measurement19() {
             }
         }
         log(
-            serde_json::json!({"kind":"all-commits","index":index,"commits":ring.values().collect::<Vec<_>>()}),
+            serde_json::json!({"kind":"all-commits","index":index,"stream_after_sequence":stream_after_sequences[index],"healthy_end_sequence":healthy_end_sequences[index],"commits":ring.values().collect::<Vec<_>>()}),
         );
     }
     let shutdown = measurement_shutdown(&mut control);
