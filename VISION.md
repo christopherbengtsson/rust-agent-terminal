@@ -20,6 +20,11 @@ The UI target brings reviews and a project tree beside a prominent active sessio
 
 > UI target. Preserve the overall composition and visual direction, adapting to terminal size and supported behavior. Raise feasibility problems and material deviations explicitly. Branding, exact keybindings, and example content remain illustrative; confirmed product behavior governs conflicts in the image.
 
+[PR inbox concept](docs/images/conductor-dashboard-v4-PR.jpg): supplementary
+exploration of own-PR attention, incoming reviews, feedback, and checks. It does
+not replace the dashboard target above or make its exact layout and controls
+release requirements; confirmed product behavior governs this concept too.
+
 ## Reviews ready for your judgment
 
 When someone requests your review on GitHub, a background agent reads the PR description, examines the diff, and considers the CI results. It prepares a local review draft and notifies you when it is ready, so you can keep working while the preparation happens.

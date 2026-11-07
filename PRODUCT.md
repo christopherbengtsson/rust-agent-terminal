@@ -8,6 +8,12 @@ The product is unnamed. Conductor is a reference application, not the product na
 
 The image shows multiple agents within a worktree and a simplified session transcript/input area. The first release still permits only one active coding session per worktree and preserves each agent's native CLI interaction. These differences must be visible in implementation reviews; the image does not override those confirmed behaviors.
 
+The [PR inbox concept](docs/images/conductor-dashboard-v4-PR.jpg) is a supplementary
+visual reference for the giving-review and own-PR workflows in Milestones 3–4.
+It explores information grouping and PR detail presentation; its exact layout,
+tabs, controls, and example states are illustrative rather than additional
+release requirements.
+
 The requirements below are confirmed product decisions. Deferred capabilities and unresolved details are listed separately at the end. This document defines intended behavior, not functionality already implemented in the repository.
 
 ## Target user, problems, and success

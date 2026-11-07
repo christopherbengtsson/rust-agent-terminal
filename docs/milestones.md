@@ -118,6 +118,10 @@ new prerequisite milestone or a reopening of the completed Milestone 1 proof.
 
 ## Milestone 3 — GitHub review preparation and human submission
 
+Use the [PR inbox concept](images/conductor-dashboard-v4-PR.jpg) as supplementary
+visual guidance for the Reviews inbox and PR detail presentation. Exact styling
+is left to a dedicated UI design session; the concept adds no release requirements.
+
 A separate milestone in the same first release, following the session proof:
 
 - Discover personal requests via existing GitHub CLI authentication. Prepare one
@@ -136,6 +140,10 @@ A separate milestone in the same first release, following the session proof:
   interruption, and uncertain-publication checks.
 
 ## Milestone 4 — own-PR continuation
+
+Use the [PR inbox concept](images/conductor-dashboard-v4-PR.jpg) as supplementary
+visual guidance for My PRs, incoming feedback, and checks, with the same UI design
+boundary as Milestone 3.
 
 Link task PRs, show incoming feedback, explicitly send selected feedback to the
 coding agent, and provide explicit merge and per-PR auto-merge actions.
