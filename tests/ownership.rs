@@ -3919,6 +3919,52 @@ impl Drop for FailedMeasurementEvidence {
     }
 }
 
+#[cfg(target_os = "macos")]
+fn measurement_process_identity(pid: i32) -> std::io::Result<(u64, u64, Vec<u8>)> {
+    let start = || {
+        let mut info = unsafe { std::mem::zeroed::<libc::proc_bsdinfo>() };
+        let size = std::mem::size_of_val(&info) as i32;
+        if unsafe {
+            libc::proc_pidinfo(
+                pid,
+                libc::PROC_PIDTBSDINFO,
+                0,
+                (&mut info as *mut libc::proc_bsdinfo).cast(),
+                size,
+            )
+        } != size
+        {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok((info.pbi_start_tvsec, info.pbi_start_tvusec))
+    };
+    let before = start()?;
+    let mut executable = vec![0; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
+    if unsafe { libc::proc_pidpath(pid, executable.as_mut_ptr().cast(), executable.len() as u32) }
+        <= 0
+    {
+        return Err(std::io::Error::last_os_error());
+    }
+    executable.truncate(
+        executable
+            .iter()
+            .position(|b| *b == 0)
+            .unwrap_or(executable.len()),
+    );
+    if start()? != before {
+        return Err(std::io::Error::other(
+            "Measurement peer identity changed during inspection",
+        ));
+    }
+    Ok((before.0, before.1, executable))
+}
+#[cfg(not(target_os = "macos"))]
+fn measurement_process_identity(_: i32) -> std::io::Result<(u64, u64, Vec<u8>)> {
+    Err(std::io::Error::other(
+        "This explicit measurement requires macOS process identity",
+    ))
+}
+
 fn measurement_shutdown(control: &mut Controller) -> serde_json::Value {
     let mut state = control.request(serde_json::json!("Shutdown"));
     let until = Instant::now() + Duration::from_secs(10);
@@ -11460,6 +11506,17 @@ fn six_stream_coordination_measurement19() {
     drop(dashboard);
     let mut control = Controller::connect(&fixture);
     let owner_pid = fixture_peer_pid(&control.stream).unwrap();
+    let owner_identity = measurement_process_identity(owner_pid).unwrap();
+    assert_eq!(
+        owner_identity.2,
+        std::fs::canonicalize(env!("CARGO_BIN_EXE_agent-terminal"))
+            .unwrap()
+            .as_os_str()
+            .as_bytes()
+    );
+    log(
+        serde_json::json!({"kind":"owner-identity","authenticated_peer_pid":owner_pid,"start_seconds":owner_identity.0,"start_microseconds":owner_identity.1,"executable":owner_identity.2}),
+    );
     let mut streams = Vec::new();
     for (index, folder) in folders.iter().enumerate() {
         control.request(serde_json::json!({"Adopt":folder.as_os_str().as_bytes()}));
@@ -11950,11 +12007,91 @@ fn six_stream_coordination_measurement19() {
     drop(control);
     measurement_wait_endpoint_exit(&fixture);
     drop(sampler);
+    // Socket unlink precedes process teardown. Query only this run's freshly
+    // authenticated peer; never copy a database while its writer can survive.
+    let exit_deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        match measurement_process_identity(owner_pid) {
+            Ok(actual) => assert_eq!(
+                actual, owner_identity,
+                "peer PID was reused before exit verification"
+            ),
+            Err(error) if error.raw_os_error() == Some(libc::ESRCH) => break,
+            Err(error) => panic!("Cannot establish authenticated peer exit: {error}"),
+        }
+        assert!(
+            Instant::now() < exit_deadline,
+            "authenticated owner has not exited"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    log(
+        serde_json::json!({"kind":"owner-exit","authenticated_peer_pid":owner_pid,"identity":owner_identity,"query":"Darwin process identity returned ESRCH; no signal sent"}),
+    );
     for entry in std::fs::read_dir(fixture.state()).unwrap().flatten() {
         if entry.file_type().unwrap().is_file() {
             std::fs::copy(entry.path(), evidence.join(entry.file_name())).unwrap();
         }
     }
+    // Retain the exact cold DB/sidecars before SQLite performs any rollback.
+    // Only the separate analysis copy is writable; no journal is manually deleted.
+    let raw_sqlite = evidence.join("sqlite-before-recovery");
+    std::fs::create_dir(&raw_sqlite).unwrap();
+    let sha = |path: &Path| {
+        let output = Command::new("shasum")
+            .args(["-a", "256"])
+            .arg(path)
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .split_whitespace()
+            .next()
+            .unwrap()
+            .to_owned()
+    };
+    let mut cold_files = Vec::new();
+    for entry in std::fs::read_dir(fixture.state()).unwrap().flatten() {
+        if entry
+            .file_name()
+            .to_string_lossy()
+            .starts_with("history.sqlite3")
+        {
+            let bytes = std::fs::read(entry.path()).unwrap();
+            assert_eq!(
+                bytes,
+                std::fs::read(evidence.join(entry.file_name())).unwrap(),
+                "cold SQLite copy changed"
+            );
+            std::fs::write(raw_sqlite.join(entry.file_name()), &bytes).unwrap();
+            assert_eq!(
+                bytes,
+                std::fs::read(entry.path()).unwrap(),
+                "exited owner's SQLite files changed"
+            );
+            let source_sha = sha(&entry.path());
+            let copy_sha = sha(&evidence.join(entry.file_name()));
+            let raw_sha = sha(&raw_sqlite.join(entry.file_name()));
+            assert_eq!(source_sha, copy_sha);
+            assert_eq!(source_sha, raw_sha);
+            cold_files.push(serde_json::json!({"name":entry.file_name().to_string_lossy(),"bytes":bytes.len(),"source_and_copy_equal":true,"source_sha256":source_sha,"analysis_copy_sha256":copy_sha,"untouched_raw_sha256":raw_sha}));
+        }
+    }
+    let journal_before = std::fs::read(raw_sqlite.join("history.sqlite3-journal")).ok();
+    let recovery = rusqlite::Connection::open_with_flags(
+        evidence.join("history.sqlite3"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE,
+    )
+    .unwrap();
+    let integrity: String = recovery
+        .query_row("PRAGMA integrity_check", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(integrity, "ok");
+    drop(recovery);
+    log(
+        serde_json::json!({"kind":"sqlite-analysis-copy","cold_files":cold_files,"raw_preserved":"sqlite-before-recovery","recovery":"SQLite rollback allowed only on separate analysis copy","integrity_check":integrity,"journal_after_verified_exit":journal_before.as_ref().map(|bytes| serde_json::json!({"bytes":bytes.len(),"first_eight_bytes":bytes.iter().take(8).copied().collect::<Vec<_>>()})),"analysis_journal_after_recovery":evidence.join("history.sqlite3-journal").exists()}),
+    );
     let index_db = rusqlite::Connection::open_with_flags(
         evidence.join("history.sqlite3"),
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
@@ -11970,7 +12107,7 @@ fn six_stream_coordination_measurement19() {
             "stream {index} has no valid committed index progress"
         );
         log(
-            serde_json::json!({"kind":"index-frontier","index":index,"session":session,"committed_frontier":frontier,"passages":ordinal,"projection_sealed":sealed,"durable_raw_prefix":durable,"caught_up":frontier == durable,"fully_sealed":frontier == durable && sealed,"scope":"quiescent copied SQLite after confirmed owner shutdown; raw durability is independent of derivative indexing"}),
+            serde_json::json!({"kind":"index-frontier","index":index,"session":session,"committed_frontier":frontier,"passages":ordinal,"projection_sealed":sealed,"durable_raw_prefix":durable,"caught_up":frontier == durable,"fully_sealed":frontier == durable && sealed,"scope":"cold SQLite after authenticated peer identity exited; raw DB/sidecars preserved; analysis copy integrity checked after SQLite recovery; raw durability is independent of derivative indexing"}),
         );
         let mut chunks: Vec<_> = std::fs::read_dir(&evidence)
             .unwrap()
